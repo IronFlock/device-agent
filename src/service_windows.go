@@ -3,6 +3,7 @@
 package main
 
 import (
+	"context"
 	"os"
 	"reagent/config"
 	"reagent/lifecycle"
@@ -17,11 +18,6 @@ import (
 )
 
 const serviceName = "reagent"
-
-// healthyUptime is how long the (possibly just-updated) agent must stay up
-// before the update passes probation — the analog of the Linux manager's
-// 4x15s liveness window.
-const healthyUptime = 2 * time.Minute
 
 // runningAsService reports whether the SCM started this process.
 func runningAsService() bool {
@@ -99,8 +95,21 @@ func (s *agentService) Execute(args []string, requests <-chan svc.ChangeRequest,
 		elog.Info(1, "reagent service started (v"+release.GetVersion()+")")
 	}
 
-	healthyTimer := time.AfterFunc(healthyUptime, updateManager.MarkHealthy)
-	defer healthyTimer.Stop()
+	// Probation and the judgement of a rolled-back version hang on the
+	// connection to IronFlock (selfupdate.Watch).
+	ready := lifecycle.Ready()
+	rollback := updateManager.Watch(context.Background(), selfupdate.WatchConfig{
+		Version: release.GetVersion(),
+		Ready: func() bool {
+			select {
+			case <-ready:
+				return true
+			default:
+				return false
+			}
+		},
+		Connected: lifecycle.Connected,
+	})
 
 	var agent *Agent
 	shutdownAgent := func() {
@@ -112,6 +121,10 @@ func (s *agentService) Execute(args []string, requests <-chan svc.ChangeRequest,
 
 	for {
 		select {
+		case reason := <-rollback:
+			shutdownAgent()
+			exitForRestart(elog, reason)
+
 		case startedAgent := <-agentChan:
 			agent = startedAgent
 

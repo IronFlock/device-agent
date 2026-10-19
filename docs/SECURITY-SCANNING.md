@@ -20,7 +20,7 @@ Out of scope (deliberately):
 - ❌ **The Docker images** — the builder (`Dockerfile`) is a throwaway build vehicle;
   the `ubuntu:24.04` runtime image (`docker/Dockerfile`) is only used for local dev
   against the REDeployments stack (its `agent` service). Neither ships to devices —
-  devices run the static binary pulled from `gs://re-agent`. Note the runtime image
+  devices run the static binary pulled from `gs://ironflock-downloads/device-agent`. Note the runtime image
   *is* pushed to `europe-docker.pkg.dev/.../ironflock-agent` on every tagged release
   (`release.yml` → `just push-docker-image`), so developers pull it; it just never
   reaches a device or a production cluster. Kept on **ubuntu** (not alpine) on
@@ -85,10 +85,10 @@ The **release** workflow (`.github/workflows/release.yml`, tag `vX.Y.Z` / manual
 **the exact binaries it publishes**. For every target it builds the binary, generates a
 per-binary CycloneDX SBOM (`just sbom-bin`), records a **sigstore-signed SBOM attestation**
 bound to the binary's digest (`actions/attest-sbom`), and then publishes that same binary to
-`gs://re-agent`. No GHAS required. Verify any published binary with:
+`gs://ironflock-downloads/device-agent`. No GHAS required. Verify any published binary with:
 
 ```bash
-gh attestation verify reagent-linux-amd64 --repo IronFlock/device-agent
+gh attestation verify device-agent-linux-amd64 --repo IronFlock/device-agent   # reagent-linux-amd64 up to v1.2.13
 # releases up to v1.2.8 were attested before the repo moved from RecordEvolution:
 gh attestation verify reagent-linux-amd64 --owner IronFlock --signer-repo RecordEvolution/DeviceManagementAgent
 ```

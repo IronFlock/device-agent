@@ -17,10 +17,12 @@ import (
 	"reagent/embedded"
 	"reagent/errdefs"
 	"reagent/filesystem"
+	"reagent/lifecycle"
 	"reagent/messenger"
 	"reagent/messenger/topics"
 	"reagent/release"
 	"reagent/safe"
+	"reagent/selfupdate"
 	"reagent/updatesig"
 	"runtime"
 	"strings"
@@ -72,13 +74,154 @@ func (sys *System) updateBaseURL() string {
 	return sys.config.CommandLineArguments.RemoteUpdateURL
 }
 
+// Agent download trees below the update base.
+//
+//	<base>/device-agent/manifest.json                        signed channel map (updatesig.Envelope)
+//	<base>/device-agent/<os>/<arch>/<v>/device-agent[.exe]   (+ .sha256, .sig)
+//	<base>/device-agent/frpc/<os>/<arch>/<v>/frpc[.exe]      Windows only
+//
+// The legacy tree (re-agent/: availableVersions.json, binaries named reagent)
+// is frozen at the version that moves devices to the current layout. An agent
+// reads it only when the current tree does not exist at its base: an
+// appliance whose mirror has not been updated yet.
+const (
+	agentTree          = "device-agent"
+	legacyAgentTree    = "re-agent"
+	agentManifestName  = "manifest.json"
+	legacyManifestName = "availableVersions.json"
+	// legacyUpdateBase is what the legacy tree sits below on GCS (bucket
+	// re-agent), where the current default base is the new bucket.
+	legacyUpdateBase = "https://storage.googleapis.com"
+)
+
+// agentSource is where agent binaries (and frpc) are downloaded from.
+type agentSource struct {
+	base          string
+	tree          string // agentTree or legacyAgentTree
+	publishedName string // "device-agent" or "reagent"
+}
+
+func (s agentSource) legacy() bool { return s.tree == legacyAgentTree }
+
+// agentManifestSubject is what device-agent/manifest.json is signed as.
+var agentManifestSubject = updatesig.Subject{Context: updatesig.ContextAgentManifest, Line: agentTree + "/" + agentManifestName}
+
+// agentManifest is the payload of device-agent/manifest.json.
+type agentManifest struct {
+	Channels map[string]string `json:"channels"`
+	IssuedAt string            `json:"issued_at"`
+}
+
+// resolveAgentVersions returns the channel → version map and the tree it came
+// from. The current tree's manifest must carry a valid signature; only when it
+// does not exist at all (404) does the agent fall back to the legacy tree's
+// unsigned availableVersions.json. A manifest that exists but does not verify
+// is an error, never a reason to fall back.
+func (sys *System) resolveAgentVersions() (map[string]string, agentSource, error) {
+	base := sys.updateBaseURL()
+	current := agentSource{base: base, tree: agentTree, publishedName: "device-agent"}
+	legacyBase := base
+	if base == config.DefaultUpdateBaseURL {
+		legacyBase = legacyUpdateBase
+	}
+	legacy := agentSource{base: legacyBase, tree: legacyAgentTree, publishedName: "reagent"}
+
+	manifestURL := current.base + "/" + current.tree + "/" + agentManifestName
+	data, status, err := fetchSmall(manifestURL)
+	if err != nil {
+		return nil, agentSource{}, err
+	}
+	switch status {
+	case http.StatusOK:
+		channels, err := openAgentManifest(data)
+		if err != nil {
+			return nil, agentSource{}, fmt.Errorf("refusing %s: %w", manifestURL, err)
+		}
+		return channels, current, nil
+	case http.StatusNotFound:
+		log.Debug().Msgf("no %s; reading the legacy update tree", manifestURL)
+	default:
+		return nil, agentSource{}, fmt.Errorf("%s returned status %d", manifestURL, status)
+	}
+
+	legacyURL := legacy.base + "/" + legacy.tree + "/" + legacyManifestName
+	data, status, err = fetchSmall(legacyURL)
+	if err != nil {
+		return nil, agentSource{}, err
+	}
+	if status != http.StatusOK {
+		return nil, agentSource{}, fmt.Errorf("%s returned status %d", legacyURL, status)
+	}
+	var channels map[string]string
+	if err := json.Unmarshal(data, &channels); err != nil {
+		return nil, agentSource{}, fmt.Errorf("%s is not a version map: %w", legacyURL, err)
+	}
+	return channels, legacy, nil
+}
+
+// openAgentManifest verifies a device-agent/manifest.json and returns its
+// channels. AGENT_UPDATE_ALLOW_UNSIGNED (for a broken signing key only)
+// accepts one that does not verify, with a warning.
+func openAgentManifest(data []byte) (map[string]string, error) {
+	keys, err := trustedUpdateKeys()
+	if err != nil {
+		return nil, err
+	}
+	payload, keyID, err := updatesig.OpenEnvelope(keys, agentManifestSubject, data)
+	if err != nil {
+		if !updatesig.AllowUnsigned() {
+			return nil, err
+		}
+		var envelope updatesig.Envelope
+		if jsonErr := json.Unmarshal(data, &envelope); jsonErr != nil {
+			return nil, err
+		}
+		log.Warn().Err(err).Msgf("WARNING: %s is set; using an agent manifest whose signature did not verify", updatesig.AGENT_UPDATE_ALLOW_UNSIGNED)
+		payload = envelope.Payload
+	} else {
+		log.Debug().Str("key_id", keyID).Msg("agent manifest signature verified")
+	}
+	var manifest agentManifest
+	if err := json.Unmarshal(payload, &manifest); err != nil {
+		return nil, fmt.Errorf("agent manifest payload: %w", err)
+	}
+	if len(manifest.Channels) == 0 {
+		return nil, errors.New("agent manifest names no channel")
+	}
+	return manifest.Channels, nil
+}
+
+// fetchSmall GETs a small document (a manifest) and returns its body and
+// status.
+func fetchSmall(url string) ([]byte, int, error) {
+	body, status, err := filesystem.GetRemoteFileWithStatus(url)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer body.Close()
+	data, err := io.ReadAll(io.LimitReader(body, 64<<10))
+	if err != nil {
+		return nil, status, err
+	}
+	return data, status, nil
+}
+
+// localBinaryName is what downloaded agent updates are called in AgentDir
+// (see layout.Paths.BinaryName); legacy when unset.
+func (sys *System) localBinaryName() string {
+	if name := sys.config.CommandLineArguments.BinaryName; name != "" {
+		return name
+	}
+	return "reagent"
+}
+
 // buildBinaryDownloadURL builds the OTA URL for a published binary:
 //
-//	<base>/<bucket>/<goos>/<arch>/<version>/<fileName>[.exe]
+//	<base>/<tree>/<goos>/<arch>/<version>/<fileName>[.exe]
 //
 // It is the single source of truth for the on-device URL layout, so the frpc
-// sub-bucket path (bucket "re-agent/frpc") and the agent path stay in step and
-// are unit-testable without a network.
+// sub-tree path ("<tree>/frpc") and the agent path stay in step and are
+// unit-testable without a network.
 func buildBinaryDownloadURL(base, bucketName, goos, arch, versionString, fileName string) string {
 	url := fmt.Sprintf("%s/%s/%s/%s/%s/%s", base, bucketName, goos, arch, versionString, fileName)
 	if goos == "windows" {
@@ -87,16 +230,16 @@ func buildBinaryDownloadURL(base, bucketName, goos, arch, versionString, fileNam
 	return url
 }
 
-// downloadBinary fetches a published binary, verifies it and moves it into
-// AgentDir. The file only gets there with a valid signature for
-// signatureContext (updatesig.ContextAgentUpdate / ContextFrpcDownload) and
-// exactly the os/arch/version/file it is downloaded as; see
-// verifyRemoteSignature.
-func (sys *System) downloadBinary(fileName string, bucketName string, versionString string, includeVersionString bool, signatureContext string, progressCallback func(filesystem.DownloadProgress)) error {
+// downloadBinary fetches the binary published as fileName below
+// <base>/<tree>, verifies it and moves it into AgentDir as localName. The file
+// only gets there with a valid signature for signatureContext
+// (updatesig.ContextAgentUpdate / ContextFrpcDownload) and exactly the
+// os/arch/version/file it is downloaded as; see verifyRemoteSignature.
+func (sys *System) downloadBinary(base, tree, fileName, localName string, versionString string, includeVersionString bool, signatureContext string, progressCallback func(filesystem.DownloadProgress)) error {
 	isWindows := runtime.GOOS == "windows"
 	agentHomedir := sys.config.CommandLineArguments.AgentDir
 	goos, arch := runtime.GOOS, release.GetBuildArch()
-	agentURL := buildBinaryDownloadURL(sys.updateBaseURL(), bucketName, goos, arch, versionString, fileName)
+	agentURL := buildBinaryDownloadURL(base, tree, goos, arch, versionString, fileName)
 
 	// What the signature must name, built from what this agent asked for (the
 	// URL comes from the same values), never from what the server answered.
@@ -108,16 +251,16 @@ func (sys *System) downloadBinary(fileName string, bucketName string, versionStr
 
 	var actualFileDestination string
 	if includeVersionString {
-		actualFileDestination = fmt.Sprintf("%s/%s-v%s", agentHomedir, fileName, versionString)
+		actualFileDestination = fmt.Sprintf("%s/%s-v%s", agentHomedir, localName, versionString)
 	} else {
-		actualFileDestination = fmt.Sprintf("%s/%s", agentHomedir, fileName)
+		actualFileDestination = fmt.Sprintf("%s/%s", agentHomedir, localName)
 	}
 
 	if isWindows {
 		actualFileDestination += ".exe"
 	}
 
-	tmpFilePath := sys.config.CommandLineArguments.DownloadDir + "/" + fileName + "-v" + versionString
+	tmpFilePath := sys.config.CommandLineArguments.DownloadDir + "/" + localName + "-v" + versionString
 	log.Debug().Msgf("Attempting to download latest %s binary at %s", fileName, agentURL)
 	err := filesystem.DownloadURL(tmpFilePath, agentURL, progressCallback)
 	if err != nil {
@@ -429,23 +572,21 @@ func GetEnvironment(config *config.Config) string {
 	return "local"
 }
 
-func (system *System) GetLatestVersion(bucketName string) (string, error) {
-	fullBucketName := system.updateBaseURL() + "/" + bucketName
-	resp, err := filesystem.GetRemoteFile(fullBucketName + "/availableVersions.json")
+// GetLatestVersion returns the agent version this device's channel names.
+func (system *System) GetLatestVersion() (string, error) {
+	channels, _, err := system.resolveAgentVersions()
 	if err != nil {
 		return "", err
 	}
-	defer resp.Close()
+	return system.channelVersion(channels), nil
+}
 
-	var environmentVersionMap map[string]string
-	json.NewDecoder(resp).Decode(&environmentVersionMap)
-
-	versionString := environmentVersionMap[GetEnvironment(system.config)]
+func (system *System) channelVersion(channels map[string]string) string {
+	versionString := channels[GetEnvironment(system.config)]
 	if versionString == "" {
-		versionString = environmentVersionMap["all"]
+		versionString = channels["all"]
 	}
-
-	return versionString, nil
+	return versionString
 }
 
 func (system *System) compareVersion(currentVersion string, latestVersion string) (bool, []error, error) {
@@ -507,9 +648,14 @@ func (system *System) DownloadFrpIfNotExists() error {
 }
 
 // downloadFrpc downloads the pinned frpc, which must carry a valid
-// frpc-download signature for exactly that version and this platform.
+// frpc-download signature for exactly that version and this platform. It
+// comes from the same tree as agent updates.
 func (system *System) downloadFrpc() error {
-	return system.downloadBinary("frpc", "re-agent/frpc", embedded.FRP_VERSION, false, updatesig.ContextFrpcDownload, nil)
+	_, source, err := system.resolveAgentVersions()
+	if err != nil {
+		return err
+	}
+	return system.downloadBinary(source.base, source.tree+"/frpc", "frpc", "frpc", embedded.FRP_VERSION, false, updatesig.ContextFrpcDownload, nil)
 }
 
 func (system *System) updateFrpIfRequired(progressCallback func(filesystem.DownloadProgress)) (UpdateResult, error) {
@@ -733,10 +879,11 @@ func (system *System) UpdateSystem(progressCallback func(filesystem.DownloadProg
 }
 
 func (system *System) updateAgentIfRequired(progressCallback func(filesystem.DownloadProgress)) (UpdateResult, error) {
-	latestVersion, err := system.GetLatestVersion("re-agent")
+	channels, source, err := system.resolveAgentVersions()
 	if err != nil {
 		return UpdateResult{}, err
 	}
+	latestVersion := system.channelVersion(channels)
 
 	currentVersion := release.GetVersion()
 
@@ -756,8 +903,19 @@ func (system *System) updateAgentIfRequired(progressCallback func(filesystem.Dow
 		}, nil
 	}
 
+	// A version that already failed its probation here stays blocked until a
+	// newer one appears; downloading it again would only cost bandwidth.
+	if lifecycle.Supervised() && selfupdate.New(system.config.CommandLineArguments.AgentDir).IsVersionBlocked(latestVersion) {
+		return UpdateResult{
+			CurrentVersion: currentVersion,
+			LatestVersion:  latestVersion,
+			Message:        fmt.Sprintf("v%s failed on this device before and is blocked", latestVersion),
+			DidUpdate:      false,
+		}, nil
+	}
+
 	log.Info().Msgf("Agent not up to date, downloading: %s", latestVersion)
-	err = system.downloadBinary("reagent", "re-agent", latestVersion, true, updatesig.ContextAgentUpdate, progressCallback)
+	err = system.downloadBinary(source.base, source.tree, source.publishedName, system.localBinaryName(), latestVersion, true, updatesig.ContextAgentUpdate, progressCallback)
 	if err != nil {
 		if errdefs.IsInProgress(err) {
 			return UpdateResult{

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -13,14 +14,20 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// newTestManager returns a Manager over a temp dir with an existing active
-// binary (content "old-binary") and injected exec/currentExe so no real
-// process is ever spawned.
+// newTestManager returns a Manager with the Windows names (two-rename swap)
+// over a temp dir with an existing active binary (content "old-binary") and
+// injected exec/currentExe so no real process is ever spawned.
 func newTestManager(t *testing.T) *Manager {
+	t.Helper()
+	return newTestManagerWith(t, WindowsNames)
+}
+
+func newTestManagerWith(t *testing.T, names Names) *Manager {
 	t.Helper()
 	dir := t.TempDir()
 
 	m := New(dir)
+	m.names = names
 	m.retryDelay = time.Millisecond
 	m.currentExe = func() (string, error) { return m.activePath(), nil }
 	m.execVersion = func(exePath string) (string, error) {
@@ -205,13 +212,116 @@ func TestOnServiceStartNoMarker(t *testing.T) {
 	assert.False(t, result.RollbackPerformed)
 }
 
-func TestOnServiceStartClearsInterruptedSwap(t *testing.T) {
+func TestOnServiceStartInterruptedSwapOfTheNewVersionStartsProbation(t *testing.T) {
+	// The process died after the swap but before the probation marker: the
+	// new version must still be on probation, or a broken one would stay.
 	m := newTestManager(t)
 	require.NoError(t, m.writeMarker(&state{Phase: phaseSwapping, NewVersion: "1.1.0", OldVersion: "1.0.0"}))
 
 	result := m.OnServiceStart("1.1.0")
 	assert.False(t, result.RollbackPerformed)
+	marker := readMarkerFile(t, m)
+	require.NotNil(t, marker)
+	assert.Equal(t, phaseProbation, marker.Phase)
+	assert.Equal(t, 1, marker.Attempts)
+}
+
+func TestOnServiceStartInterruptedSwapOfTheOldVersionClears(t *testing.T) {
+	m := newTestManager(t)
+	require.NoError(t, m.writeMarker(&state{Phase: phaseSwapping, NewVersion: "1.1.0", OldVersion: "1.0.0"}))
+
+	result := m.OnServiceStart("1.0.0")
+	assert.False(t, result.RollbackPerformed)
 	assert.Nil(t, readMarkerFile(t, m))
+}
+
+func TestActivateRefusedWhilePreviousUpdateIsOnProbation(t *testing.T) {
+	for name, names := range map[string]Names{"windows": WindowsNames, "linux": LinuxNames} {
+		t.Run(name, func(t *testing.T) {
+			m := newTestManagerWith(t, names)
+			require.NoError(t, m.writeMarker(&state{Phase: phaseProbation, NewVersion: "1.1.0", OldVersion: "1.0.0", Attempts: 1}))
+			writeDownload(t, m, "1.2.0")
+
+			err := m.Activate("1.2.0", "1.1.0")
+			require.ErrorContains(t, err, "still in probation")
+			assert.Equal(t, "old-binary", fileContent(t, m.activePath()))
+		})
+	}
+}
+
+func TestNewPicksThisOSNames(t *testing.T) {
+	m := New(t.TempDir())
+	if runtime.GOOS == "windows" {
+		assert.Equal(t, WindowsNames, m.names)
+	} else {
+		assert.Equal(t, LinuxNames, m.names)
+	}
+}
+
+func TestLinuxActivateNeverLeavesTheActivePathVacant(t *testing.T) {
+	m := newTestManagerWith(t, LinuxNames)
+	writeDownload(t, m, "1.1.0")
+
+	realRename, realLink := m.rename, m.link
+	m.rename = func(oldPath, newPath string) error {
+		if newPath == m.activePath() {
+			assert.FileExists(t, m.activePath(), "the update replaces the active binary in one step")
+		}
+		return realRename(oldPath, newPath)
+	}
+	m.link = func(oldPath, newPath string) error {
+		assert.FileExists(t, m.activePath())
+		return realLink(oldPath, newPath)
+	}
+
+	require.NoError(t, m.Activate("1.1.0", "1.0.0"))
+	assert.Equal(t, "1.1.0", fileContent(t, m.activePath()))
+	assert.Equal(t, "old-binary", fileContent(t, m.prevPath()), "the running binary is the rollback target")
+	assert.NoFileExists(t, m.versionedPath("1.1.0"))
+	marker := readMarkerFile(t, m)
+	require.NotNil(t, marker)
+	assert.Equal(t, phaseProbation, marker.Phase)
+}
+
+func TestLinuxActivateFailuresLeaveTheActiveBinary(t *testing.T) {
+	cases := map[string]func(m *Manager){
+		"link fails": func(m *Manager) {
+			m.link = func(string, string) error { return errors.New("read-only file system") }
+		},
+		"rename fails": func(m *Manager) {
+			real := m.rename
+			m.rename = func(oldPath, newPath string) error {
+				if newPath == m.activePath() {
+					return errors.New("read-only file system")
+				}
+				return real(oldPath, newPath)
+			}
+		},
+	}
+	for name, breakIt := range cases {
+		t.Run(name, func(t *testing.T) {
+			m := newTestManagerWith(t, LinuxNames)
+			writeDownload(t, m, "1.1.0")
+			breakIt(m)
+
+			require.Error(t, m.Activate("1.1.0", "1.0.0"))
+			assert.Equal(t, "old-binary", fileContent(t, m.activePath()))
+			assert.Nil(t, readMarkerFile(t, m), "no marker left behind")
+		})
+	}
+}
+
+func TestLinuxRollbackRestoresThePreviousBinary(t *testing.T) {
+	m := newTestManagerWith(t, LinuxNames)
+	require.NoError(t, os.WriteFile(m.prevPath(), []byte("old-binary"), 0755))
+	require.NoError(t, os.WriteFile(m.activePath(), []byte("1.1.0"), 0755))
+	require.NoError(t, m.writeMarker(&state{Phase: phaseProbation, NewVersion: "1.1.0", OldVersion: "1.0.0", Attempts: maxProbationAttempts}))
+
+	result := m.OnServiceStart("1.1.0")
+	assert.True(t, result.RollbackPerformed)
+	assert.Equal(t, "old-binary", fileContent(t, m.activePath()))
+	assert.Equal(t, "1.1.0", fileContent(t, m.failedPath("1.1.0")))
+	assert.True(t, m.IsVersionBlocked("1.1.0"))
 }
 
 func TestOnServiceStartProbationCountsAttempts(t *testing.T) {
@@ -240,9 +350,11 @@ func TestOnServiceStartProbationRollsBackAfterMaxAttempts(t *testing.T) {
 	assert.Equal(t, "old-binary", fileContent(t, m.activePath()), "previous binary restored")
 	assert.Equal(t, "1.1.0", fileContent(t, m.failedPath("1.1.0")), "failed binary quarantined")
 
+	// Suspect until the old version connects (see TestJudge*): held back
+	// meanwhile, like a blocked one.
 	marker := readMarkerFile(t, m)
 	require.NotNil(t, marker)
-	assert.Equal(t, phaseRolledBack, marker.Phase)
+	assert.Equal(t, phaseSuspect, marker.Phase)
 	assert.True(t, m.IsVersionBlocked("1.1.0"))
 	assert.False(t, m.IsVersionBlocked("1.2.0"))
 }

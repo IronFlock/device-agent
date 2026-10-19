@@ -13,6 +13,7 @@ import (
 	"reflect"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/rs/zerolog/log"
@@ -50,7 +51,21 @@ type AppManager struct {
 	// notePendingReservation.
 	reservationNotes    map[hostPortKey]uint64
 	reservationNoteLock sync.Mutex
+
+	// databaseUnsynced is set when this start created the database file.
+	// Until the first sync with the backend fills it, an empty database says
+	// nothing about which containers are orphans: an agent that opened the
+	// wrong database path would otherwise remove every app container.
+	databaseUnsynced atomic.Bool
 }
+
+// MarkDatabaseUnsynced suspends the orphaned-container cleanup until
+// MarkDatabaseSynced (see databaseUnsynced).
+func (am *AppManager) MarkDatabaseUnsynced() { am.databaseUnsynced.Store(true) }
+
+// MarkDatabaseSynced records that the database now holds the backend's
+// requested app states, so orphans can be told apart again.
+func (am *AppManager) MarkDatabaseSynced() { am.databaseUnsynced.Store(false) }
 
 // Retry pacing for a tunnel that failed to come up: a proxy frps will not
 // accept, or an add that failed outright (REtunnel refusing the remote port,
@@ -1059,6 +1074,10 @@ func IsInvalidOfflineTransition(app *common.App, payload common.TransitionPayloa
 const composeProjectLabel = "com.docker.compose.project"
 
 func (am *AppManager) CleanupOrphanedContainers() error {
+	if am.databaseUnsynced.Load() {
+		log.Warn().Msg("Not cleaning up orphaned containers: the app database was created by this start and has not been synced with the backend yet")
+		return nil
+	}
 	log.Info().Msg("🧹 Cleaning up orphaned containers not in database...")
 
 	ctx := context.Background()

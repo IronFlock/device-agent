@@ -1,7 +1,7 @@
 #!/bin/bash
-# Stage the built agent binaries (build/reagent-<os>-<arch>) at
-# gs://re-agent/<os>/<arch>/<version>/reagent[.exe], each with its .sha256
-# manifest: the agent verifies OTA downloads against it
+# Stage the built agent binaries (build/device-agent-<os>-<arch>) at
+# gs://ironflock-downloads/device-agent/<os>/<arch>/<version>/device-agent[.exe],
+# each with its .sha256 manifest: the agent verifies OTA downloads against it
 # (system.verifyRemoteChecksum) and the Windows service refuses to activate an
 # update that does not match.
 #
@@ -12,9 +12,14 @@
 #
 # A version that is already signed in the bucket has been promoted; restaging
 # it would put new bytes under its live .sig, so that is refused.
+#
+# The legacy tree gs://re-agent (binaries named reagent) is frozen at 1.3.0,
+# the version that moves devices to the new layout; see scripts/freeze-legacy.sh.
 set -euo pipefail
 
 VERSION=$(cat src/release/version.txt)
+BUCKET="gs://ironflock-downloads"
+TREE="device-agent"
 
 # Portable SHA-256 (ubuntu CI has sha256sum, macOS has shasum).
 sha256_of() {
@@ -28,24 +33,25 @@ sha256_of() {
 # Agent binaries only: build/ also holds frpc-windows-amd64 in release CI
 # (publish-frpc.sh publishes that), and sidecars or SBOMs locally.
 binaries=()
-for path in build/reagent-*; do
+for path in build/device-agent-*; do
     name=$(basename "$path")
-    [[ "$name" =~ ^reagent-[a-z]+-[a-z0-9]+$ ]] || continue
+    [[ "$name" =~ ^device-agent-[a-z]+-[a-z0-9]+$ ]] || continue
     binaries+=("$name")
 done
 if [ "${#binaries[@]}" -eq 0 ]; then
-    echo "no agent binaries (build/reagent-<os>-<arch>) to publish" >&2
+    echo "no agent binaries (build/device-agent-<os>-<arch>) to publish" >&2
     exit 1
 fi
 
 remote_path() {
-    local os arch binary_name="reagent"
-    os=$(echo "$1" | cut -d "-" -f 2)
-    arch=$(echo "$1" | cut -d "-" -f 3)
+    local platform os arch binary_name="device-agent"
+    platform=${1#device-agent-}
+    os=${platform%%-*}
+    arch=${platform#*-}
     if [ "$os" == "windows" ]; then
-        binary_name="reagent.exe"
+        binary_name="device-agent.exe"
     fi
-    echo "gs://re-agent/${os}/${arch}/${VERSION}/${binary_name}"
+    echo "${BUCKET}/${TREE}/${os}/${arch}/${VERSION}/${binary_name}"
 }
 
 signed=()
@@ -64,17 +70,20 @@ if [ "${#signed[@]}" -gt 0 ]; then
     (cd src && go run ./cmd/sign-update verify -version "$VERSION" "${signed[@]}")
 fi
 
+cp_nocache() {
+    gsutil -q -h "Cache-Control:public, max-age=0" cp "$1" "$2"
+}
+
 for element in "${binaries[@]}"; do
     GCLOUD=$(remote_path "$element")
-    gsutil cp "build/$element" "$GCLOUD"
+    cp_nocache "build/$element" "$GCLOUD"
 
     sha256_of "build/$element" > "build/$element.sha256"
-    gsutil cp "build/$element.sha256" "${GCLOUD}.sha256"
+    cp_nocache "build/$element.sha256" "${GCLOUD}.sha256"
     rm -f "build/$element.sha256"
 
     if [ -e "build/$element.sig" ]; then
-        gsutil cp "build/$element.sig" "${GCLOUD}.sig"
+        cp_nocache "build/$element.sig" "${GCLOUD}.sig"
     fi
+    echo "staged ${GCLOUD}"
 done
-
-gsutil -m setmeta -r -h "Cache-control:public, max-age=0" gs://re-agent

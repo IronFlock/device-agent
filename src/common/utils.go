@@ -512,15 +512,16 @@ type Stats struct {
 	StorageTotal      uint64  `json:"storage_total"`       // Total storage in bytes (root filesystem)
 	StorageUsed       uint64  `json:"storage_used"`        // Used storage in bytes (root filesystem)
 	StorageFree       uint64  `json:"storage_free"`        // Free storage in bytes (root filesystem)
-	DockerAppsTotal   uint64  `json:"docker_apps_total"`   // Total storage in bytes (/opt/reagent/docker-apps)
-	DockerAppsUsed    uint64  `json:"docker_apps_used"`    // Used storage in bytes (/opt/reagent/docker-apps)
-	DockerAppsFree    uint64  `json:"docker_apps_free"`    // Free storage in bytes (/opt/reagent/docker-apps)
-	DockerAppsMounted bool    `json:"docker_apps_mounted"` // Whether /opt/reagent/docker-apps is a separate mount
+	DockerAppsTotal   uint64  `json:"docker_apps_total"`   // Total storage in bytes (<agentDir>/docker-apps)
+	DockerAppsUsed    uint64  `json:"docker_apps_used"`    // Used storage in bytes (<agentDir>/docker-apps)
+	DockerAppsFree    uint64  `json:"docker_apps_free"`    // Free storage in bytes (<agentDir>/docker-apps)
+	DockerAppsMounted bool    `json:"docker_apps_mounted"` // Whether <agentDir>/docker-apps is a separate mount
 }
 
-// GetStats returns current system resource statistics.
+// GetStats returns current system resource statistics. dockerAppsPath is
+// Docker's data-root as ironflock-init sets it up (<agentDir>/docker-apps).
 // This function is cross-platform (Linux, macOS, Windows).
-func GetStats() Stats {
+func GetStats(dockerAppsPath string) Stats {
 	stats := Stats{}
 
 	// Get CPU count
@@ -547,8 +548,7 @@ func GetStats() Stats {
 		stats.StorageFree = diskStat.Free
 	}
 
-	// Get Docker apps storage - /opt/reagent/docker-apps mount
-	dockerAppsPath := "/opt/reagent/docker-apps"
+	// Get Docker apps storage - <agentDir>/docker-apps mount
 	if diskStat, err := disk.Usage(dockerAppsPath); err == nil {
 		stats.DockerAppsTotal = diskStat.Total
 		stats.DockerAppsUsed = diskStat.Used

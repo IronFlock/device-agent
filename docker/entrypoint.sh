@@ -86,5 +86,5 @@ dbus-daemon --config-file=/usr/share/dbus-1/system.conf --print-address 2>/dev/n
 AGENT_ENV="${AGENT_ENV:-local}"
 AGENT_NMW="${AGENT_NMW:-false}"
 
-echo "Starting reagent for device '${AGENT_DEVICE_NAME}' (swarm=${AGENT_SWARM_KEY}, device=${AGENT_DEVICE_KEY}, env=${AGENT_ENV})..."
-exec reagent -config "${CONFIG_PATH}" -prettyLogging -env="${AGENT_ENV}" -nmw="${AGENT_NMW}" "$@"
+echo "Starting device-agent for device '${AGENT_DEVICE_NAME}' (swarm=${AGENT_SWARM_KEY}, device=${AGENT_DEVICE_KEY}, env=${AGENT_ENV})..."
+exec device-agent -config "${CONFIG_PATH}" -prettyLogging -env="${AGENT_ENV}" -nmw="${AGENT_NMW}" "$@"

@@ -266,6 +266,28 @@ func TestCleanupOrphanedContainers(t *testing.T) {
 		require.NoError(t, err)
 	})
 
+	t.Run("keeps every container while a fresh database is unsynced", func(t *testing.T) {
+		am, mc, _, _, _, _ := amHarness(t)
+
+		// A database this start created: no Docker call at all, so no
+		// container can be removed (the strict mock fails on any call).
+		am.MarkDatabaseUnsynced()
+		require.NoError(t, am.CleanupOrphanedContainers())
+
+		// After the backend sync, cleanup works again.
+		am.MarkDatabaseSynced()
+		orphanName := "/" + common.BuildContainerName(common.PROD, 99, "ghost")
+		mc.EXPECT().
+			GetContainers(mock.Anything).
+			Return([]dockertypes.Container{{ID: "orphan-id", Names: []string{orphanName}}}, nil).
+			Once()
+		mc.EXPECT().
+			RemoveContainerByID(mock.Anything, "orphan-id", map[string]interface{}{"force": true}).
+			Return(nil).
+			Once()
+		require.NoError(t, am.CleanupOrphanedContainers())
+	})
+
 	t.Run("no containers is a clean no-op", func(t *testing.T) {
 		am, mc, _, _, _, _ := amHarness(t)
 

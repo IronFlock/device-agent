@@ -10,12 +10,15 @@ import (
 	// "reagent/common"
 	"reagent/config"
 	"reagent/filesystem"
+	"reagent/lifecycle"
 	"reagent/logging"
 	"reagent/release"
 	"reagent/safe"
+	"reagent/system"
 
 	"runtime"
 	"runtime/debug"
+	"syscall"
 	"time"
 
 	_ "net/http/pprof"
@@ -37,6 +40,9 @@ func main() {
 	// global flag package stops parsing at the first positional argument.
 	if len(os.Args) > 1 && os.Args[1] == "service" {
 		os.Exit(runServiceCommand(os.Args[2:]))
+	}
+	if len(os.Args) > 1 && os.Args[1] == "migrate-layout" {
+		os.Exit(runMigrateCommand(os.Args[2:]))
 	}
 
 	cliArgs, err := config.GetCliArguments()
@@ -87,7 +93,7 @@ func main() {
 	}
 
 	sigChan := make(chan os.Signal, 1)
-	signal.Notify(sigChan, os.Interrupt)
+	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
 
 	<-sigChan
 
@@ -142,20 +148,22 @@ func runAgent(cliArgs *config.CommandLineArguments) (*Agent, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to load .flock config file: %w", err)
 	}
+	applyTestFault(reswarmConfig)
 
 	generalConfig := config.New(cliArgs, reswarmConfig)
 	generalConfig.StartupLogChannel = startupLogChannel
 
+	// The agent updates itself only here, at its start, and when a user asks
+	// for it (the update_agent call) — never on its own while it runs, which
+	// would interrupt the device's service. The check runs before NewAgent,
+	// which waits for the connection to IronFlock: a version that cannot
+	// connect still receives the release that fixes it when it starts again
+	// (a rollback, a crash, a reboot).
+	checkForUpdateAtStart(&generalConfig)
+
 	agent := NewAgent(&generalConfig)
-
-	safe.Go((func() {
-		startupLogChannel <- "Checking for agent update in background..."
-
-		_, err := agent.System.UpdateSystem(nil, agent.Config.CommandLineArguments.ShouldUpdateAgent)
-		if err != nil {
-			log.Error().Err(err).Msgf("Failed to update system")
-		}
-	}))
+	lifecycle.MarkReady()
+	watchLayoutMigration(cliArgs, agent.Messenger.Connected)
 
 	startupLogChannel <- "Running onConnect handler"
 
@@ -170,4 +178,26 @@ func runAgent(cliArgs *config.CommandLineArguments) (*Agent, error) {
 	benchmark.LogBenchmarkResultsWhenFinished(&generalConfig)
 
 	return agent, nil
+}
+
+func checkForUpdateAtStart(cfg *config.Config) {
+	updates := system.New(cfg, nil)
+	safe.Go(func() {
+		if _, err := updates.UpdateSystem(nil, cfg.CommandLineArguments.ShouldUpdateAgent); err != nil {
+			log.Error().Err(err).Msg("update check failed")
+		}
+	})
+}
+
+// applyTestFault breaks a test build on purpose (release.TestFault).
+func applyTestFault(flock *config.ReswarmConfig) {
+	switch release.TestFault {
+	case "":
+	case "crash":
+		log.Error().Msg("test build: crashing at start (release.TestFault=crash)")
+		os.Exit(1)
+	case "offline":
+		log.Error().Msg("test build: never reaching IronFlock (release.TestFault=offline)")
+		flock.DeviceEndpointURL = "ws://127.0.0.1:9/ws-test-fault"
+	}
 }

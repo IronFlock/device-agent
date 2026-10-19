@@ -47,6 +47,7 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -97,11 +98,14 @@ const publicKeyPlaceholder = "TODO-AGENT-UPDATE-PUBLIC-KEY"
 // the current key. A value that is not a boolean keeps verification on.
 const AGENT_UPDATE_ALLOW_UNSIGNED = "AGENT_UPDATE_ALLOW_UNSIGNED"
 
-// Contexts: the first line of the signed message, naming what kind of binary
+// Contexts: the first line of the signed message, naming what kind of object
 // a signature is for. Bump the version suffix if the message format changes.
 const (
 	ContextAgentUpdate  = "reagent-update:v1"
 	ContextFrpcDownload = "frpc-download:v1"
+	// ContextAgentManifest signs device-agent/manifest.json, the channel →
+	// version map agents update from (see Envelope).
+	ContextAgentManifest = "device-agent-manifest:v1"
 )
 
 var (
@@ -218,10 +222,104 @@ func (t Target) Message(digest []byte) ([]byte, error) {
 			return nil, fmt.Errorf("%w: %q", ErrInvalidTarget, t.String())
 		}
 	}
+	return Subject{Context: t.Context, Line: t.Path()}.Message(digest)
+}
+
+// Subject names a signed object that is not a per-platform binary, such as a
+// manifest. Its message has the same three lines as a Target's:
+//
+//	<context>
+//	<line>          e.g. device-agent/manifest.json
+//	<sha256-hex>
+type Subject struct {
+	Context string
+	Line    string
+}
+
+func (s Subject) String() string {
+	return s.Context + " " + s.Line
+}
+
+// Message returns the bytes signed for an object with this SHA-256 digest.
+func (s Subject) Message(digest []byte) ([]byte, error) {
+	if s.Context == "" || s.Line == "" || strings.ContainsAny(s.Context+s.Line, "\n\r") {
+		return nil, fmt.Errorf("%w: %q", ErrInvalidTarget, s.String())
+	}
 	if len(digest) != sha256.Size {
 		return nil, fmt.Errorf("%w: digest of %d bytes", ErrInvalidTarget, len(digest))
 	}
-	return []byte(t.Context + "\n" + t.Path() + "\n" + hex.EncodeToString(digest)), nil
+	return []byte(s.Context + "\n" + s.Line + "\n" + hex.EncodeToString(digest)), nil
+}
+
+// SignBytes returns the .sig contents for data published as subject.
+func SignBytes(privateKey ed25519.PrivateKey, subject Subject, data []byte) ([]byte, error) {
+	digest := sha256.Sum256(data)
+	message, err := subject.Message(digest[:])
+	if err != nil {
+		return nil, err
+	}
+	return EncodeSignature(ed25519.Sign(privateKey, message)), nil
+}
+
+// VerifyBytes checks .sig contents against data published as subject and
+// returns the ID of the key that signed it.
+func VerifyBytes(keys []PublicKey, subject Subject, data []byte, signatureFile []byte) (string, error) {
+	if len(keys) == 0 {
+		return "", ErrNoTrustedKeys
+	}
+	signature, err := ParseSignature(signatureFile)
+	if err != nil {
+		return "", err
+	}
+	digest := sha256.Sum256(data)
+	message, err := subject.Message(digest[:])
+	if err != nil {
+		return "", err
+	}
+	for _, key := range keys {
+		if ed25519.Verify(key.Key, message, signature) {
+			return key.ID, nil
+		}
+	}
+	return "", fmt.Errorf("%w as %s", ErrBadSignature, subject)
+}
+
+// Envelope is a signed document published as ONE file, so a reader can never
+// combine a document with the signature of another revision (a mirror or a
+// cache serving a manifest and a separate .sig of different ages):
+//
+//	{"payload": "<base64 of the document>", "signature": "<.sig contents>"}
+type Envelope struct {
+	Payload   []byte `json:"payload"`
+	Signature string `json:"signature"`
+}
+
+// maxEnvelopeSize bounds what is read as an envelope.
+const maxEnvelopeSize = 64 << 10
+
+// SealEnvelope returns the envelope file for payload and its .sig contents.
+func SealEnvelope(payload []byte, signatureFile []byte) ([]byte, error) {
+	return json.MarshalIndent(Envelope{Payload: payload, Signature: strings.TrimSpace(string(signatureFile))}, "", "  ")
+}
+
+// OpenEnvelope verifies an envelope file published as subject and returns
+// its payload and the ID of the key that signed it.
+func OpenEnvelope(keys []PublicKey, subject Subject, file []byte) ([]byte, string, error) {
+	if len(file) > maxEnvelopeSize {
+		return nil, "", fmt.Errorf("%w: envelope of %d bytes", ErrMalformedSignature, len(file))
+	}
+	var envelope Envelope
+	if err := json.Unmarshal(file, &envelope); err != nil {
+		return nil, "", fmt.Errorf("%w: %v", ErrMalformedSignature, err)
+	}
+	if envelope.Signature == "" {
+		return nil, "", ErrMissingSignature
+	}
+	keyID, err := VerifyBytes(keys, subject, envelope.Payload, []byte(envelope.Signature))
+	if err != nil {
+		return nil, "", err
+	}
+	return envelope.Payload, keyID, nil
 }
 
 // FileDigest returns the SHA-256 digest of the file at path.

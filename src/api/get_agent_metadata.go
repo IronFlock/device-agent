@@ -55,7 +55,7 @@ func (ex *External) getAgentMetadataHandler(ctx context.Context, response messen
 	frpVersion := embedded.FRP_VERSION
 	frpIsLatest := true
 
-	lastAgentVersion, err := ex.System.GetLatestVersion("re-agent")
+	lastAgentVersion, err := ex.System.GetLatestVersion()
 	agentIsLatest := lastAgentVersion == currentAgentVersion
 	if err == nil {
 		dict["latestVersion"] = lastAgentVersion

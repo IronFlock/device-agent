@@ -1,14 +1,20 @@
 #!/usr/bin/env bash
 # Sign what agents are about to be offered, through OpenBao transit, right
-# before availableVersions.json flips. Run by `just promote` (and by
+# before the version files flip. Run by `just promote` (and by
 # `just publish-version` / `just publish-latestVersions`), so promotion cannot
 # skip it; `just sign-release` runs it alone.
 #
-# CI stages binaries in gs://re-agent WITHOUT signatures. The private key is
-# the transit key agent-update (ed25519, not exportable) and never leaves
-# OpenBao. Signed here:
-#   - reagent[.exe] of every version availableVersions.json names, all targets;
-#   - frpc[.exe] of the FRP_VERSION this tree pins.
+# CI stages binaries WITHOUT signatures. The private key is the transit key
+# agent-update (ed25519, not exportable) and never leaves OpenBao. Signed here:
+#   - device-agent[.exe] of every version availableVersions.json names, all
+#     targets, in gs://ironflock-downloads/device-agent/;
+#   - frpc[.exe] of the FRP_VERSION this tree pins, in device-agent/frpc/;
+#   - the manifest: availableVersions.json plus issued_at, sealed into
+#     build/manifest.json (an updatesig envelope). `just publish-latestVersions`
+#     uploads it; 1.3.0+ agents trust no channel map without it.
+# --legacy <version> signs reagent[.exe] of that one version in the frozen
+# gs://re-agent tree instead (scripts/freeze-legacy.sh), and no manifest.
+#
 # For each object: download it, hash it here (the .sha256 sidecar is only
 # cross-checked, never trusted), build the message (`sign-update message`),
 # sign all messages in ONE kubectl exec session, turn each vault:vN:<sig> into
@@ -23,7 +29,20 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 TRANSIT_KEY="agent-update"
-BUCKET="gs://re-agent"
+MANIFEST_CONTEXT="device-agent-manifest:v1"
+MANIFEST_SUBJECT="device-agent/manifest.json"
+
+if [[ "${1:-}" == "--legacy" ]]; then
+    legacy=1
+    BUCKET="gs://re-agent"
+    AGENT_KIND="reagent"
+    versions="${2:?usage: sign-release.sh --legacy <version>}"
+else
+    legacy=0
+    BUCKET="gs://ironflock-downloads/device-agent"
+    AGENT_KIND="device-agent"
+    versions=$(jq -r '[.[]] | unique | .[]' availableVersions.json)
+fi
 
 sha256_of() {
     if command -v sha256sum >/dev/null 2>&1; then
@@ -33,10 +52,9 @@ sha256_of() {
     fi
 }
 
-versions=$(jq -r '[.[]] | unique | .[]' availableVersions.json)
 for version in $versions; do
     if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-        echo "availableVersions.json names '$version', not MAJOR.MINOR.PATCH" >&2
+        echo "'$version' is not MAJOR.MINOR.PATCH" >&2
         exit 1
     fi
 done
@@ -60,7 +78,7 @@ for version in $versions; do
 done
 listing+="$(gsutil ls "$BUCKET/frpc/*/*/$frp_version/*" 2>/dev/null || true)"$'\n'
 
-objects=()   # gs:// object of each binary
+objects=()   # gs:// object of each binary ("" for the manifest)
 locals=()    # its local copy
 targets=()   # its sign-update target flags, space-separated
 requests=()  # "<index> <base64 message>" for the ones to sign
@@ -70,7 +88,7 @@ while IFS= read -r object; do
     rel=${object#"$BUCKET"/}
     file=${rel##*/}
     case "$file" in
-    reagent | reagent.exe | frpc | frpc.exe) ;;
+    "$AGENT_KIND" | "$AGENT_KIND.exe" | frpc | frpc.exe) ;;
     *) continue ;;
     esac
     kind=${file%.exe}
@@ -108,8 +126,24 @@ while IFS= read -r object; do
 done <<< "$listing"
 
 if [[ "$n" -eq 0 ]]; then
-    echo "nothing to sign: no reagent or frpc objects found" >&2
+    echo "nothing to sign: no $AGENT_KIND or frpc objects found" >&2
     exit 1
+fi
+
+# The manifest rides the same OpenBao session. Signed fresh every time: its
+# issued_at is the moment of promotion.
+manifest=-1
+if [[ "$legacy" -eq 0 ]]; then
+    manifest=$n
+    mkdir -p "$work/$n"
+    jq -c --arg now "$(date -u +%Y-%m-%dT%H:%M:%SZ)" '{channels: ., issued_at: $now}' availableVersions.json \
+        > "$work/$n/manifest.payload.json"
+    objects[n]=""
+    locals[n]="$work/$n/manifest.payload.json"
+    targets[n]="-context $MANIFEST_CONTEXT -subject $MANIFEST_SUBJECT"
+    # shellcheck disable=SC2086
+    requests+=("$n $("$helper" message ${targets[n]} "${locals[n]}")")
+    n=$((n + 1))
 fi
 
 if [[ "${#requests[@]}" -gt 0 ]]; then
@@ -140,11 +174,16 @@ for ((i = 0; i < n; i++)); do
     "$helper" verify ${targets[i]} "${locals[i]}"
 done
 
-if [[ "${#requests[@]}" -gt 0 ]]; then
-    for request in "${requests[@]}"; do
-        i=${request%% *}
-        gsutil -q -h "Cache-Control:public, max-age=0" cp "${locals[i]}.sig" "${objects[i]}.sig"
-        echo "signed: ${objects[i]}.sig"
-    done
+for request in "${requests[@]}"; do
+    i=${request%% *}
+    [[ "$i" -ne "$manifest" ]] || continue
+    gsutil -q -h "Cache-Control:public, max-age=0" cp "${locals[i]}.sig" "${objects[i]}.sig"
+    echo "signed: ${objects[i]}.sig"
+done
+
+if [[ "$manifest" -ge 0 ]]; then
+    mkdir -p build
+    "$helper" seal -context "$MANIFEST_CONTEXT" -subject "$MANIFEST_SUBJECT" "${locals[manifest]}" > build/manifest.json
+    echo "sealed: build/manifest.json ($(jq -c .channels "${locals[manifest]}")); publish-latestVersions uploads it"
 fi
 echo "==> $n object(s) signed for versions: $(echo $versions) and frpc $frp_version"

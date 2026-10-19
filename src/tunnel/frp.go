@@ -201,11 +201,13 @@ func CreateSubdomain(protocol Protocol, deviceKey uint64, appName string, localP
 func initialize(cfg *config.Config) TunnelConfigBuilder {
 	frpcConfigPath := filepath.Join(cfg.CommandLineArguments.AgentDir, "frpc.yaml")
 
-	// The default /var/log path is POSIX-only; on Windows it resolves to
-	// C:\var\log whose parents don't exist, and frpc fails to open its log.
-	// Keep Linux on the historical path (zero blast radius); put Windows under
-	// the agent dir it already owns.
-	frpcLogPath := "/var/log/frpc.log"
+	// The log path follows the agent's layout (/var/log/ironflock/frpc.log,
+	// or /var/log/frpc.log in the legacy one). Windows keeps it under the
+	// agent dir it owns: a POSIX path resolves to C:\var\log there.
+	frpcLogPath := cfg.CommandLineArguments.FrpcLogFileLocation
+	if frpcLogPath == "" {
+		frpcLogPath = "/var/log/frpc.log"
+	}
 	if runtime.GOOS == "windows" {
 		frpcLogPath = filepath.Join(cfg.CommandLineArguments.AgentDir, "frpc.log")
 	}

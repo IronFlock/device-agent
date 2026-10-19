@@ -1,9 +1,8 @@
-//go:build !windows
+//go:build !windows && !linux
 
 package system
 
-// maybeActivateAgentUpdate is a no-op off Windows: on Linux the downloaded
-// reagent-v<version> binary is activated externally by reagent-manager.sh
-// (symlink swap + systemctl restart).
+// maybeActivateAgentUpdate is a no-op here (macOS): downloads are kept, nothing
+// activates them.
 func (system *System) maybeActivateAgentUpdate(result UpdateResult) {
 }

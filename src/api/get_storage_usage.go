@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"errors"
+	"path/filepath"
 	"reagent/common"
 	"reagent/errdefs"
 	"reagent/messenger"
@@ -18,7 +19,7 @@ func (ex *External) getStorageDataHandler(ctx context.Context, response messenge
 		return nil, errdefs.InsufficientPrivileges(errors.New("insufficient privileges to get storage data"))
 	}
 
-	stats := common.GetStats()
+	stats := common.GetStats(filepath.Join(ex.Config.CommandLineArguments.AgentDir, "docker-apps"))
 
 	result := common.Dict{
 		"cpu_count":           stats.CPUCount,

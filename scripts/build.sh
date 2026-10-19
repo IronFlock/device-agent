@@ -130,14 +130,16 @@ else
     echo "Embedded frpc binary at ${embedded_dir}/frpc_binary (size: $(wc -c < ${embedded_dir}/frpc_binary) bytes)"
 fi
 
-prefix="reagent"
+# EXTRA_LDFLAGS: test builds only (device-init's e2e: release.versionOverride,
+# release.TestFault).
+prefix="device-agent"
 binary_name="$prefix-$target_os-$target_arch"
 if [ -n "$target_arch_variant" ]; then
     binary_name="$prefix-$target_os-${target_arch}v${target_arch_variant}"
 fi
 
-echo "Building reagent for ${target_os}/${build_arch}..."
-cd $src_path && go build -v -a -ldflags "-X 'reagent/release.BuildArch=$build_arch'" -o "$target_path/$binary_name"
+echo "Building device-agent for ${target_os}/${build_arch}..."
+cd $src_path && go build -v -a -ldflags "-X 'reagent/release.BuildArch=$build_arch' ${EXTRA_LDFLAGS:-}" -o "$target_path/$binary_name"
 build_status=$?
 
 # Cleanup embedded binary after build (don't let this mask a build failure: the

@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"errors"
+	"os"
 	"reagent/api"
 	"reagent/apps"
 	"reagent/benchmark"
@@ -10,6 +12,7 @@ import (
 	"reagent/container"
 	"reagent/diskguard"
 	"reagent/filesystem"
+	"reagent/lifecycle"
 	"reagent/logging"
 	"reagent/messenger"
 	"reagent/messenger/topics"
@@ -210,6 +213,8 @@ func (agent *Agent) OnConnect(reconnect bool) error {
 		err = agent.AppManager.UpdateLocalRequestedAppStatesWithRemote(remotePayloads)
 		if err != nil {
 			log.Error().Stack().Err(err).Msg("failed to sync app states with remote")
+		} else {
+			agent.AppManager.MarkDatabaseSynced()
 		}
 
 		// Step 4: Clean up orphaned containers not in database
@@ -306,6 +311,11 @@ func NewAgent(generalConfig *config.Config) (agent *Agent) {
 
 	ensureAppCABundle(generalConfig)
 
+	// A database file this start creates is empty: see
+	// AppManager.MarkDatabaseUnsynced.
+	_, statErr := os.Stat(cliArgs.DatabaseFileName)
+	freshDatabase := errors.Is(statErr, os.ErrNotExist)
+
 	database, err := persistence.NewSQLiteDb(generalConfig)
 	if err != nil {
 		log.Fatal().Stack().Err(err).Msg("failed to create SQLite db instance")
@@ -334,6 +344,9 @@ func NewAgent(generalConfig *config.Config) (agent *Agent) {
 	stateObserver := apps.NewObserver(container, &appStore, &logManager)
 	stateMachine := apps.NewStateMachine(container, &logManager, &stateObserver, &filesystem)
 	appManager := apps.NewAppManager(&stateMachine, &appStore, &stateObserver, tunnelManager)
+	if freshDatabase {
+		appManager.MarkDatabaseUnsynced()
+	}
 	terminalManager := terminal.NewTerminalManager(dummyMessenger, container)
 
 	var networkInstance network.Network
@@ -522,6 +535,7 @@ func NewAgent(generalConfig *config.Config) (agent *Agent) {
 	if err != nil {
 		log.Fatal().Stack().Err(err).Msg("failed to setup wamp connection")
 	}
+	lifecycle.SetConnectivity(mainSession.Connected)
 
 	benchmark.TimeTillSocketConnection = time.Since(benchmark.SocketConnectionInit)
 	benchmark.TimeTillSocketConnectionFromLaunch = time.Since(benchmark.SocketConnectionInitFromLaunch)

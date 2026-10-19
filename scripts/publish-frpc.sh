@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Publish a (already built and, in release CI, Authenticode-signed) frpc binary
-# to the re-agent bucket under a /frpc/ sub-path, with a SHA-256 manifest next
+# to gs://ironflock-downloads/device-agent/frpc/, with a SHA-256 manifest next
 # to it.
 #
 # The agent refuses an frpc without a valid frpc-download signature for exactly
@@ -15,10 +15,9 @@
 # A local <binary>.sig (a development signature) is uploaded too, but only if
 # it verifies for that path.
 #
-# It rides the EXISTING re-agent bucket + appliance /dl/re-agent/* proxy route
-# (the proxy forwards everything after the first path segment verbatim), so no
-# server-side route change is needed. The agent downloads it via
-# downloadBinary("frpc", "re-agent/frpc", FRP_VERSION, ...).
+# The agent downloads it from <its source tree>/frpc (system.downloadFrpc):
+# device-agent/frpc here; agents that fall back to the frozen legacy tree read
+# re-agent/frpc, which holds the same FRP_VERSION.
 #
 # Usage: scripts/publish-frpc.sh <goos> <goarch> <frpc-binary-path>
 set -euo pipefail
@@ -42,7 +41,7 @@ sha256_of() {
     fi
 }
 
-dest="gs://re-agent/frpc/${goos}/${goarch}/${FRP_VERSION}/${remote_name}"
+dest="gs://ironflock-downloads/device-agent/frpc/${goos}/${goarch}/${FRP_VERSION}/${remote_name}"
 
 if [ ! -e "${binary}.sig" ] && gsutil -q stat "${dest}.sig"; then
     echo "$dest is already signed; keeping it (frozen once signed, see above)"
@@ -53,16 +52,18 @@ if [ -e "${binary}.sig" ]; then
     (cd src && go run ./cmd/sign-update verify -kind frpc -os "$goos" -arch "$goarch" -version "$FRP_VERSION" "$binary_abs")
 fi
 
-gsutil cp "$binary" "$dest"
+cp_nocache() {
+    gsutil -q -h "Cache-Control:public, max-age=0" cp "$1" "$2"
+}
+
+cp_nocache "$binary" "$dest"
 
 sha256_of "$binary" > "${binary}.sha256"
-gsutil cp "${binary}.sha256" "${dest}.sha256"
+cp_nocache "${binary}.sha256" "${dest}.sha256"
 rm -f "${binary}.sha256"
 
 if [ -e "${binary}.sig" ]; then
-    gsutil cp "${binary}.sig" "${dest}.sig"
+    cp_nocache "${binary}.sig" "${dest}.sig"
 fi
-
-gsutil -m setmeta -r -h "Cache-control:public, max-age=0" "gs://re-agent/frpc"
 
 echo "Published $dest (+ .sha256)"

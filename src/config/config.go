@@ -9,8 +9,14 @@ import (
 
 	"os"
 	"path/filepath"
+	"reagent/layout"
 	"runtime"
 )
+
+// DefaultUpdateBaseURL is where agents fetch their updates when the .flock
+// names no update_url (cloud devices): the public download bucket, read
+// directly. Appliance-managed agents carry the appliance's /dl base instead.
+const DefaultUpdateBaseURL = "https://storage.googleapis.com/ironflock-downloads"
 
 // ReswarmConfig types for the .flock file
 type ReswarmConfig struct {
@@ -57,28 +63,33 @@ type ReswarmConfig struct {
 }
 
 type CommandLineArguments struct {
-	AppsDirectory              string
-	AppsComposeDir             string
-	AppsBuildDir               string
-	AppsSharedDir              string
-	AgentDir                   string
-	DownloadDir                string
-	CompressedBuildExtension   string
-	RemoteUpdateURL            string
-	Environment                string
-	Debug                      bool
-	DebugMessaging             bool
-	Version                    bool
-	Arch                       bool
-	Offline                    bool
-	Profiling                  bool
-	ProfilingPort              uint
-	ShouldUpdateAgent          bool
-	PrettyLogging              bool
-	UseNetworkManager          bool
-	LogFileLocation            string
-	ConfigFileLocation         string
-	DatabaseFileName           string
+	AppsDirectory            string
+	AppsComposeDir           string
+	AppsBuildDir             string
+	AppsSharedDir            string
+	AgentDir                 string
+	DownloadDir              string
+	CompressedBuildExtension string
+	RemoteUpdateURL          string
+	Environment              string
+	Debug                    bool
+	DebugMessaging           bool
+	Version                  bool
+	Arch                     bool
+	Offline                  bool
+	Profiling                bool
+	ProfilingPort            uint
+	ShouldUpdateAgent        bool
+	PrettyLogging            bool
+	UseNetworkManager        bool
+	LogFileLocation          string
+	FrpcLogFileLocation      string
+	ConfigFileLocation       string
+	DatabaseFileName         string
+	// Layout is the file layout this agent found itself in (see package
+	// layout); BinaryName is what downloaded updates are called in AgentDir.
+	Layout                     layout.Kind
+	BinaryName                 string
 	PingPongTimeout            uint
 	ResponseTimeout            uint
 	ConnectionEstablishTimeout uint
@@ -98,19 +109,18 @@ func New(cliArgs *CommandLineArguments, reswarmConfig *ReswarmConfig) Config {
 }
 
 func GetCliArguments() (*CommandLineArguments, error) {
-	defaultAgentDir := "/opt/reagent"
-	defaultLogFilePath := "/var/log/reagent.log"
-
-	// fallback for when reagent is ran on mac/windows
+	// The defaults follow the layout on disk: legacy units pass only -config
+	// and -appsDir, and a database path that does not match the layout would
+	// open an empty database (see package layout).
+	paths := layout.Detect("")
 	if runtime.GOOS != "linux" {
 		homeDir, err := os.UserHomeDir()
 		if err != nil {
 			return nil, err
 		}
-
-		defaultLogFilePath = fmt.Sprintf("%s/%s", homeDir, "reagent/reagent.log")
-		defaultAgentDir = fmt.Sprintf("%s/%s", homeDir, "reagent")
+		paths = layout.DetectHome(homeDir, runtime.GOOS)
 	}
+	defaultAgentDir := paths.AgentDir
 
 	// By default apps are stored inside the default agent directory, as well, to
 	// support a variety of distributions/systems with a rootfs only. However,
@@ -118,10 +128,7 @@ func GetCliArguments() (*CommandLineArguments, error) {
 	// dedicated (update-)persistent partition mounted at "/apps"
 	defaultAppsDir := filepath.Join(defaultAgentDir, "apps")
 
-	// sqlite database files go into the default agent directory as well
-	defaultDatabaseFileName := filepath.Join(defaultAgentDir, "reagent.db")
-
-	logFile := flag.String("logFile", defaultLogFilePath, "log file used by the reagent")
+	logFile := flag.String("logFile", paths.LogFile, "log file of the agent")
 	debug := flag.Bool("debug", true, "sets the log level to debug")
 	shouldUpdate := flag.Bool("update", true, "determines if the agent should update on start")
 	offline := flag.Bool("offline", false, "starts the agent without establishing a socket connection. meant for debugging")
@@ -131,10 +138,10 @@ func GetCliArguments() (*CommandLineArguments, error) {
 	profiling := flag.Bool("profiling", false, "spins up a pprof webserver on the defined port")
 	profilingPort := flag.Uint("profilingPort", 80, "port of the profiling service")
 	prettyLogging := flag.Bool("prettyLogging", false, "enables the pretty console writing, intended for debugging")
-	remoteUpdateURL := flag.String("remoteUpdateURL", "https://storage.googleapis.com", "bucket to be used to download updates")
+	remoteUpdateURL := flag.String("remoteUpdateURL", DefaultUpdateBaseURL, "download base for agent updates (the .flock update_url wins)")
 	agentDir := flag.String("agentDir", defaultAgentDir, "default location of the agent binary")
 	appsDir := flag.String("appsDir", defaultAppsDir, "default path for apps and app-data")
-	databaseFileName := flag.String("dbFileName", defaultDatabaseFileName, "defines the name used to persist the database file")
+	databaseFileName := flag.String("dbFileName", paths.Database, "defines the name used to persist the database file")
 	debugMessaging := flag.Bool("debugMessaging", false, "enables debug logs for messenging layer")
 	nmw := flag.Bool("nmw", true, "enables the agent to use the NetworkManager API on Linux machines")
 	compressedBuildExtension := flag.String("compressedBuildExtension", "tgz", "sets the extension in which the compressed build files will be provided")
@@ -160,7 +167,10 @@ func GetCliArguments() (*CommandLineArguments, error) {
 		PrettyLogging:              *prettyLogging,
 		DebugMessaging:             *debugMessaging,
 		LogFileLocation:            *logFile,
+		FrpcLogFileLocation:        paths.FrpcLog,
 		ConfigFileLocation:         *cfgFile,
+		Layout:                     paths.Kind,
+		BinaryName:                 paths.BinaryName,
 		Profiling:                  *profiling,
 		ProfilingPort:              *profilingPort,
 		ShouldUpdateAgent:          *shouldUpdate,

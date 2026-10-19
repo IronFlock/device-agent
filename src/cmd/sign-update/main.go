@@ -15,6 +15,11 @@
 //	pubkey-from-openbao
 //	    reads `bao read -format=json transit/keys/agent-update` from stdin and
 //	    prints the AGENT_UPDATE_PUBLIC_KEYS line of every key version
+//	seal -context <c> -subject <line> <payload>
+//	    prints the signed envelope (updatesig.Envelope) of <payload> and its
+//	    <payload>.sig, once that verifies: how device-agent/manifest.json is made
+//	open -context <c> -subject <line> [-public-key <b64>] <envelope>
+//	    verifies an envelope and prints its payload
 //
 // Development and tests only, with a local key file that never signs a release:
 //
@@ -24,9 +29,12 @@
 // A signature names what it is for (updatesig.Target): the kind of binary and
 // the os/arch/version/file it is published as. -version is always required.
 // Kind, os and arch come from a build output name <kind>-<os>-<arch>
-// (build/reagent-linux-armv7, build/frpc-windows-amd64; kind is reagent or
-// frpc) unless -kind, -os and -arch say otherwise. The file name follows: kind,
-// plus .exe on windows.
+// (build/device-agent-linux-armv7, build/frpc-windows-amd64; kind is
+// device-agent, reagent (the frozen legacy tree) or frpc) unless -kind, -os
+// and -arch say otherwise. The file name follows: kind, plus .exe on windows.
+//
+// A file that is not a per-platform binary (a manifest) is named with
+// -context and -subject instead (updatesig.Subject).
 //
 // sign refuses a key that is not in this build's AGENT_UPDATE_PUBLIC_KEYS:
 // agents built from this tree would reject what it signs. No subcommand ever
@@ -36,6 +44,7 @@ package main
 import (
 	"crypto/ed25519"
 	"crypto/rand"
+	"crypto/sha256"
 	"crypto/x509"
 	"encoding/base64"
 	"encoding/json"
@@ -53,54 +62,92 @@ import (
 	"time"
 )
 
-const usage = `usage (target flags: -version <v> [-kind reagent|frpc] [-os <os>] [-arch <arch>]):
+const usage = `usage (target flags: -version <v> [-kind device-agent|reagent|frpc] [-os <os>] [-arch <arch>],
+       or -context <context> -subject <line> for a file that is not a binary):
   sign-update message <target flags> <binary>
   sign-update sig-from-openbao <target flags> [-public-key <base64>] <binary>  < vault:v<N>:<base64>
   sign-update verify <target flags> [-public-key <base64>] <binary>...
+  sign-update seal -context <c> -subject <line> <payload>             (needs <payload>.sig)
+  sign-update open -context <c> -subject <line> [-public-key <base64>] <envelope>
   sign-update pubkey-from-openbao  < bao read -format=json transit/keys/agent-update
   sign-update keygen -out <private-key.pem>                          (development only)
   sign-update sign -key-file <pem> <target flags> <binary>...        (development only)`
 
 // signatureContexts maps a binary kind to the context its signatures carry.
+// reagent is the legacy name, in the frozen gs://re-agent tree.
 var signatureContexts = map[string]string{
-	"reagent": updatesig.ContextAgentUpdate,
-	"frpc":    updatesig.ContextFrpcDownload,
+	"device-agent": updatesig.ContextAgentUpdate,
+	"reagent":      updatesig.ContextAgentUpdate,
+	"frpc":         updatesig.ContextFrpcDownload,
 }
 
-// targetFlags are the flags that say what a binary is signed for.
+// targetFlags are the flags that say what a file is signed for.
 type targetFlags struct {
-	version, kind, os, arch *string
+	version, kind, os, arch, context, subject *string
 }
 
 func addTargetFlags(flags *flag.FlagSet) targetFlags {
 	return targetFlags{
 		version: flags.String("version", "", "version the binaries are published as (required)"),
-		kind:    flags.String("kind", "", "reagent or frpc (default: from the file name)"),
+		kind:    flags.String("kind", "", "device-agent, reagent or frpc (default: from the file name)"),
 		os:      flags.String("os", "", "GOOS the binaries are for (default: from the file name)"),
 		arch:    flags.String("arch", "", "arch path segment, e.g. amd64 or armv7 (default: from the file name)"),
+		context: flags.String("context", "", "with -subject: the signature context, e.g. "+updatesig.ContextAgentManifest),
+		subject: flags.String("subject", "", "sign a file that is not a binary as this subject line, e.g. device-agent/manifest.json"),
 	}
 }
 
-// targetFor returns what binary is published as: the flags where given,
-// otherwise its build output name <kind>-<os>-<arch>.
+// subjectFor returns what file is signed as: -context/-subject, or else the
+// target of a binary (the flags where given, otherwise its build output name
+// <kind>-<os>-<arch>).
+func (f targetFlags) subjectFor(file string) (updatesig.Subject, error) {
+	if *f.subject != "" || *f.context != "" {
+		if *f.subject == "" || *f.context == "" || *f.kind != "" || *f.os != "" || *f.arch != "" || *f.version != "" {
+			return updatesig.Subject{}, fmt.Errorf("%s: -context and -subject go together, without the binary target flags", file)
+		}
+		return updatesig.Subject{Context: *f.context, Line: *f.subject}, nil
+	}
+	target, err := f.targetFor(file)
+	if err != nil {
+		return updatesig.Subject{}, err
+	}
+	// Target.Message checks the fields (no "/" in them); the subject then
+	// signs the same bytes.
+	if _, err := target.Message(make([]byte, sha256.Size)); err != nil {
+		return updatesig.Subject{}, err
+	}
+	return updatesig.Subject{Context: target.Context, Line: target.Path()}, nil
+}
+
+// kindsLongestFirst: "device-agent" holds a dash, so build names are matched
+// by kind prefix, not split at the first dash.
+var kindsLongestFirst = []string{"device-agent", "reagent", "frpc"}
+
 func (f targetFlags) targetFor(binary string) (updatesig.Target, error) {
 	kind, goos, arch := *f.kind, *f.os, *f.arch
-	parts := strings.Split(filepath.Base(binary), "-")
-	if kind == "" {
-		kind = parts[0]
+	base := filepath.Base(binary)
+	nameKind, platform := "", ""
+	for _, k := range kindsLongestFirst {
+		if rest, ok := strings.CutPrefix(base, k+"-"); ok {
+			nameKind, platform = k, rest
+			break
+		}
 	}
-	if len(parts) == 3 {
+	if kind == "" {
+		kind = nameKind
+	}
+	if parts := strings.Split(platform, "-"); nameKind != "" && len(parts) == 2 {
 		if goos == "" {
-			goos = parts[1]
+			goos = parts[0]
 		}
 		if arch == "" {
-			arch = parts[2]
+			arch = parts[1]
 		}
 	}
 
 	context, ok := signatureContexts[kind]
 	if !ok {
-		return updatesig.Target{}, fmt.Errorf("%s: kind %q is neither reagent nor frpc; pass -kind", binary, kind)
+		return updatesig.Target{}, fmt.Errorf("%s: kind %q is none of device-agent, reagent, frpc; pass -kind", binary, kind)
 	}
 	if *f.version == "" || goos == "" || arch == "" {
 		return updatesig.Target{}, fmt.Errorf("%s: need -version, and -os/-arch unless the name is <kind>-<os>-<arch>", binary)
@@ -135,6 +182,10 @@ func run(args []string, stdin io.Reader, stdout io.Writer) error {
 		return sigFromOpenBao(args[1:], stdin, stdout)
 	case "verify":
 		return verify(args[1:], stdout)
+	case "seal":
+		return seal(args[1:], stdout)
+	case "open":
+		return openEnvelope(args[1:], stdout)
 	case "pubkey-from-openbao":
 		return pubkeyFromOpenBao(args[1:], stdin, stdout)
 	case "keygen":
@@ -224,23 +275,27 @@ func sign(args []string, stdout io.Writer) error {
 	}
 
 	// Resolve every target first, so a bad name signs nothing at all.
-	signTargets := make([]updatesig.Target, flags.NArg())
+	subjects := make([]updatesig.Subject, flags.NArg())
 	for i, binary := range flags.Args() {
-		signTargets[i], err = targets.targetFor(binary)
+		subjects[i], err = targets.subjectFor(binary)
 		if err != nil {
 			return err
 		}
 	}
 
 	for i, binary := range flags.Args() {
-		target := signTargets[i]
-		signature, err := updatesig.SignFile(privateKey, target, binary)
+		target := subjects[i]
+		data, err := os.ReadFile(binary)
+		if err != nil {
+			return err
+		}
+		signature, err := updatesig.SignBytes(privateKey, target, data)
 		if err != nil {
 			return err
 		}
 		// Read back through the agent's own verification, so a format slip
 		// fails here and not on the devices.
-		_, err = updatesig.VerifyFile(keys, target, binary, signature)
+		_, err = updatesig.VerifyBytes(keys, target, data, signature)
 		if err != nil {
 			return fmt.Errorf("%s: fresh signature does not verify: %w", binary, err)
 		}
@@ -271,7 +326,7 @@ func verify(args []string, stdout io.Writer) error {
 	}
 
 	for _, binary := range flags.Args() {
-		target, err := targets.targetFor(binary)
+		target, err := targets.subjectFor(binary)
 		if err != nil {
 			return err
 		}
@@ -279,7 +334,7 @@ func verify(args []string, stdout io.Writer) error {
 		if err != nil {
 			return err
 		}
-		keyID, err := updatesig.VerifyFile(keys, target, binary, signature)
+		keyID, err := verifyFile(keys, target, binary, signature)
 		if err != nil {
 			return fmt.Errorf("%s: %w", binary, err)
 		}
@@ -312,7 +367,7 @@ func message(args []string, stdout io.Writer) error {
 	}
 	binary := flags.Arg(0)
 
-	target, err := targets.targetFor(binary)
+	target, err := targets.subjectFor(binary)
 	if err != nil {
 		return err
 	}
@@ -368,7 +423,7 @@ func sigFromOpenBao(args []string, stdin io.Reader, stdout io.Writer) error {
 	}
 	binary := flags.Arg(0)
 
-	target, err := targets.targetFor(binary)
+	target, err := targets.subjectFor(binary)
 	if err != nil {
 		return err
 	}
@@ -386,7 +441,7 @@ func sigFromOpenBao(args []string, stdin io.Reader, stdout io.Writer) error {
 	}
 
 	signature := updatesig.EncodeSignature(raw)
-	keyID, err := updatesig.VerifyFile(keys, target, binary, signature)
+	keyID, err := verifyFile(keys, target, binary, signature)
 	if err != nil {
 		return fmt.Errorf("%s: OpenBao's signature (transit key version %d) does not verify: %w", binary, keyVersion, err)
 	}
@@ -396,6 +451,82 @@ func sigFromOpenBao(args []string, stdin io.Reader, stdout io.Writer) error {
 	}
 	fmt.Fprintf(stdout, "%s: signed as %s by transit key version %d (key %s) -> %s.sig\n", binary, target, keyVersion, keyID, binary)
 	return nil
+}
+
+// verifyFile checks a .sig against the file at path, signed as subject.
+func verifyFile(keys []updatesig.PublicKey, subject updatesig.Subject, path string, signature []byte) (string, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return "", err
+	}
+	return updatesig.VerifyBytes(keys, subject, data, signature)
+}
+
+// envelopeFlags parses -context/-subject (required) and -public-key.
+func envelopeFlags(name string, args []string) (updatesig.Subject, string, string, error) {
+	flags := flag.NewFlagSet(name, flag.ContinueOnError)
+	context := flags.String("context", "", "signature context, e.g. "+updatesig.ContextAgentManifest+" (required)")
+	subject := flags.String("subject", "", "subject line, e.g. device-agent/manifest.json (required)")
+	publicKey := flags.String("public-key", "", "base64 Ed25519 public key (default: the keys compiled into this build)")
+	if err := flags.Parse(args); err != nil {
+		return updatesig.Subject{}, "", "", err
+	}
+	if *context == "" || *subject == "" || flags.NArg() != 1 {
+		return updatesig.Subject{}, "", "", fmt.Errorf("%s needs -context, -subject and exactly one file", name)
+	}
+	return updatesig.Subject{Context: *context, Line: *subject}, *publicKey, flags.Arg(0), nil
+}
+
+// seal prints the envelope of payload and payload.sig, once the signature
+// verifies against the compiled-in keys and the envelope opens again.
+func seal(args []string, stdout io.Writer) error {
+	subject, publicKey, payloadPath, err := envelopeFlags("seal", args)
+	if err != nil {
+		return err
+	}
+	keys, err := verificationKeys(publicKey)
+	if err != nil {
+		return err
+	}
+	payload, err := os.ReadFile(payloadPath)
+	if err != nil {
+		return err
+	}
+	signature, err := os.ReadFile(payloadPath + ".sig")
+	if err != nil {
+		return err
+	}
+	envelope, err := updatesig.SealEnvelope(payload, signature)
+	if err != nil {
+		return err
+	}
+	if _, _, err := updatesig.OpenEnvelope(keys, subject, envelope); err != nil {
+		return fmt.Errorf("%s: %w", payloadPath, err)
+	}
+	_, err = fmt.Fprintln(stdout, string(envelope))
+	return err
+}
+
+// openEnvelope verifies an envelope file and prints its payload.
+func openEnvelope(args []string, stdout io.Writer) error {
+	subject, publicKey, path, err := envelopeFlags("open", args)
+	if err != nil {
+		return err
+	}
+	keys, err := verificationKeys(publicKey)
+	if err != nil {
+		return err
+	}
+	file, err := os.ReadFile(path)
+	if err != nil {
+		return err
+	}
+	payload, _, err := updatesig.OpenEnvelope(keys, subject, file)
+	if err != nil {
+		return fmt.Errorf("%s: %w", path, err)
+	}
+	_, err = stdout.Write(payload)
+	return err
 }
 
 // transitKey is the part of `bao read -format=json transit/keys/<name>` that

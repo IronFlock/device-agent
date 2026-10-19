@@ -13,6 +13,16 @@ import (
 var version string
 var BuildArch string = ""
 
+// Test builds only, set with -ldflags -X (scripts/build.sh EXTRA_LDFLAGS;
+// no release build sets them): versionOverride replaces version.txt, and
+// TestFault makes a deliberately broken agent for device-init's end-to-end
+// test of update rollbacks ("crash": exits at start; "offline": never
+// reaches IronFlock).
+var (
+	versionOverride string
+	TestFault       string
+)
+
 // SystemInfo holds architecture and detailed OS information about the host system.
 type SystemInfo struct {
 	OS         string // runtime.GOOS: "linux", "darwin", "windows"
@@ -78,6 +88,9 @@ func getDetailedOS(goos string) (result string) {
 }
 
 func GetVersion() string {
+	if versionOverride != "" {
+		return versionOverride
+	}
 	return strings.TrimSpace(version)
 }
 

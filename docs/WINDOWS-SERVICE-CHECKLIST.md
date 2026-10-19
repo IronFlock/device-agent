@@ -97,7 +97,7 @@ headless runner, no real console host), so it must be exercised here.
 ## Tunnels (frp) on Windows
 
 22. frpc is downloaded (not embedded) to `<AgentDir>\frpc.exe` from
-    `gs://re-agent/frpc/windows/amd64/<ver>/`; confirm it arrives and
+    `gs://ironflock-downloads/device-agent/frpc/windows/amd64/<ver>/`; confirm it arrives and
     `frpc.exe -version` matches the pinned FRP_VERSION.
 23. A full tunnel lifecycle works: publish an app with an HTTP + a TCP port →
     tunnel comes up → reachable from the cloud; `frpc.log` is under the agent

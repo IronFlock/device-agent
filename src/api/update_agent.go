@@ -6,6 +6,7 @@ import (
 	"reagent/common"
 	"reagent/errdefs"
 	"reagent/filesystem"
+	"reagent/lifecycle"
 	"reagent/messenger"
 	"reagent/messenger/topics"
 )
@@ -43,6 +44,19 @@ func (ex *External) updateReagent(ctx context.Context, response messenger.Result
 			return nil, err
 		}
 		return &messenger.InvokeResult{Arguments: []interface{}{updateResult}}, nil
+	}
+
+	// Nothing newer to install on a legacy install: the user's update moves
+	// it to the current layout (the move waits for a request or a start,
+	// like an update).
+	if !updateResult.DidUpdate {
+		started, err := lifecycle.StartLayoutMigration()
+		if err != nil {
+			return nil, err
+		}
+		if started {
+			updateResult.Message = "moving the device to the current layout; Docker and the apps restart once"
+		}
 	}
 
 	return &messenger.InvokeResult{Arguments: []interface{}{updateResult}}, nil

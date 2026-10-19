@@ -148,7 +148,7 @@ sbom: download-frpc
     set -euo pipefail
     mkdir -p build/sbom
     VERSION=$(cat src/release/version.txt)
-    (cd src && go run github.com/CycloneDX/cyclonedx-gomod/cmd/cyclonedx-gomod@{{CYCLONEDX_GOMOD_VERSION}} mod -licenses -json -output "../build/sbom/reagent-${VERSION}.cdx.json" .)
+    (cd src && go run github.com/CycloneDX/cyclonedx-gomod/cmd/cyclonedx-gomod@{{CYCLONEDX_GOMOD_VERSION}} mod -licenses -json -output "../build/sbom/device-agent-${VERSION}.cdx.json" .)
     go run github.com/CycloneDX/cyclonedx-gomod/cmd/cyclonedx-gomod@{{CYCLONEDX_GOMOD_VERSION}} bin -json -output "build/sbom/frpc-{{FRP_VERSION}}.cdx.json" src/embedded/frpc_binary
     echo "SBOMs written to build/sbom/"
 
@@ -199,7 +199,7 @@ security: download-frpc
 vuln-binaries:
     #!/usr/bin/env bash
     set +e
-    for bin in build/reagent-*; do
+    for bin in build/device-agent-*; do
         echo "==> $bin"
         go run golang.org/x/vuln/cmd/govulncheck@{{GOVULNCHECK_VERSION}} -mode=binary "$bin"
     done
@@ -384,78 +384,33 @@ clean:
     rm -f build/*
     rm -f src/embedded/frpc_binary
 
-# Promote a staged version to live: sign it through OpenBao (sign-release), republish
-# the `latest` alias, then publish version.txt + availableVersions.json.
-# This is the manual release gate — agents read availableVersions.json.
+# Promote a staged version to live: sign it through OpenBao (sign-release, which
+# also seals build/manifest.json), republish the `latest` alias, then publish
+# version.txt, availableVersions.json and the signed manifest.json.
+# This is the manual release gate — agents read device-agent/manifest.json.
 promote: sign-release publish-latest-alias publish-version publish-latestVersions
 
-# Docs and manual (Windows) installs need a link that never goes stale — there is no reswarmify
-# on Windows to resolve availableVersions.json for the user. Server-side copy, so the
+# Docs and manual (Windows) installs need a link that never goes stale — there is no installer
+# on Windows to resolve the channel versions for the user. Server-side copy, so the
 # Authenticode signature, the .sha256 sidecar and the .sig update signature carry over
 # byte-for-byte (the glob copies every object of the version, sidecars included). The .sig
 # names the concrete version, not "latest": agents never download latest/ (they resolve a
 # version), and a human checks a latest/ copy with `sign-update verify -version <version>`.
 #
-# Runs FIRST in `promote`: it reads the local availableVersions.json and fails when nothing is
-# staged for that version, or when a staged binary has no .sig next to it, so a version the
-# release CI never published (or published unsigned) is caught here — before the live
-# availableVersions.json flips and agents start chasing it. Agents refuse an update without a
-# valid signature, so an unsigned version would only strand the fleet where it is.
+# Runs FIRST in `promote` after signing: it fails when nothing is staged for the production
+# version, or when a staged binary has no .sig next to it, so a version the release CI never
+# published (or published unsigned) is caught before the live manifest flips and agents
+# start chasing it. Agents refuse an update without a valid signature, so an unsigned
+# version would only strand the fleet where it is.
 #
-# Alias the production version's binaries to gs://re-agent/<os>/<arch>/latest/
+# Alias the production version's binaries to gs://ironflock-downloads/device-agent/<os>/<arch>/latest/
 publish-latest-alias:
-    #!/usr/bin/env bash
-    set -euo pipefail
-    cd {{ROOT_DIR}}
-    version=$(jq -r '.production' availableVersions.json)
-    if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-        echo "availableVersions.json .production is not MAJOR.MINOR.PATCH: '$version'" >&2
-        exit 1
-    fi
-    # <os>/<arch>/<version>/<file> — four segments, so the five-segment frpc sub-tree
-    # (re-agent/frpc/<os>/<arch>/<frpver>/frpc) can never match this glob.
-    objects=$(gsutil ls "gs://re-agent/*/*/${version}/*" 2>/dev/null || true)
-    if [[ -z "$objects" ]]; then
-        echo "no binaries staged at gs://re-agent/*/*/${version}/ — did the release CI run?" >&2
-        exit 1
-    fi
-    unsigned=""
-    while IFS= read -r obj; do
-        case "$obj" in ""|*.sha256|*.sig) continue ;; esac
-        grep -qxF "${obj}.sig" <<< "$objects" || unsigned="${unsigned}    ${obj}"$'\n'
-    done <<< "$objects"
-    if [[ -n "$unsigned" ]]; then
-        echo "not promoting ${version}: no update signature (.sig) next to" >&2
-        printf '%s' "$unsigned" >&2
-        exit 1
-    fi
-    echo "==> aliasing ${version} -> latest"
-    count=0
-    # read -r line-by-line rather than `for obj in $objects`: that would lean on IFS word
-    # splitting, which also splits on spaces and is a no-op in a non-bash shell.
-    while IFS= read -r obj; do
-        [[ -n "$obj" ]] || continue
-        rest=${obj#gs://re-agent/}
-        os=${rest%%/*}; rest=${rest#*/}
-        arch=${rest%%/*}; rest=${rest#*/}
-        ver=${rest%%/*}; file=${rest#*/}
-        [[ "$ver" == "$version" ]] || continue
-        # Cache-Control is set on the copy itself: publish.sh's bucket-wide setmeta runs at
-        # stage time, before these alias objects exist.
-        gsutil -q -h "Cache-Control:public, max-age=0" cp "$obj" "gs://re-agent/${os}/${arch}/latest/${file}"
-        echo "    ${os}/${arch}/${file}"
-        count=$((count + 1))
-    done <<< "$objects"
-    if [[ "$count" -eq 0 ]]; then
-        echo "matched no <os>/<arch>/${version}/<file> objects — bucket layout changed?" >&2
-        exit 1
-    fi
-    echo "==> aliased ${count} object(s) to latest"
+    scripts/publish-latest-alias.sh gs://ironflock-downloads/device-agent "$(jq -r '.production' availableVersions.json)"
 
 # Needs kubectl access to the production OpenBao (OPENBAO_KUBE_CONTEXT) and gsutil.
 # The private key never leaves OpenBao; see scripts/sign-release.sh and README
 # "Update signatures". `promote` runs this first, so a version cannot go live unsigned.
-# Sign every agent binary availableVersions.json names, and the pinned frpc, through OpenBao transit.
+# Sign every agent binary availableVersions.json names, the pinned frpc and the manifest, through OpenBao transit.
 sign-release:
     scripts/sign-release.sh
 
@@ -470,12 +425,37 @@ publish:
     scripts/publish.sh
 
 publish-version: sign-release
-    gsutil cp "src/release/version.txt" gs://re-agent
-    gsutil setmeta -r -h "Cache-control:public, max-age=0" gs://re-agent/version.txt
+    gsutil -q -h "Cache-Control:public, max-age=0" cp "src/release/version.txt" gs://ironflock-downloads/device-agent/version.txt
 
+# manifest.json (signed, read by 1.3.0+ agents) must match availableVersions.json (unsigned,
+# kept for the flasher and older tooling) before either goes live.
 publish-latestVersions: sign-release
-    gsutil cp "availableVersions.json" gs://re-agent
-    gsutil setmeta -r -h "Cache-control:public, max-age=0" gs://re-agent/availableVersions.json
+    #!/usr/bin/env bash
+    set -euo pipefail
+    cd {{ROOT_DIR}}
+    channels=$(cd src && go run ./cmd/sign-update open -context device-agent-manifest:v1 -subject device-agent/manifest.json ../build/manifest.json | jq -cS .channels)
+    if [[ "$channels" != "$(jq -cS . availableVersions.json)" ]]; then
+        echo "build/manifest.json names $channels, availableVersions.json something else; run just sign-release" >&2
+        exit 1
+    fi
+    gsutil -q -h "Cache-Control:public, max-age=0" cp availableVersions.json gs://ironflock-downloads/device-agent/availableVersions.json
+    gsutil -q -h "Cache-Control:public, max-age=0" cp build/manifest.json gs://ironflock-downloads/device-agent/manifest.json
+    # The bucket is public by object name only, so a missing object answers 403, not 404:
+    # agents would read an absent switch as "unknown" and never migrate. Always publish one.
+    if ! gsutil -q stat gs://ironflock-downloads/device-agent/migration.json; then
+        echo '{"enabled": true}' > build/migration.json
+        gsutil -q -h "Cache-Control:public, max-age=0" cp build/migration.json gs://ironflock-downloads/device-agent/migration.json
+        echo "==> published device-agent/migration.json (enabled)"
+    fi
+    echo "==> live: $channels"
+
+# One-off, with the release that moves devices to the new layout (1.3.0): copy that
+# staged version into the frozen legacy tree gs://re-agent under the legacy names
+# (reagent[.exe]), sign it there, point every legacy channel and latest/ at it, and
+# never touch that tree again. Every agent before 1.3.0, however late it comes
+# online, updates to it and then reads the new tree.
+freeze-legacy VERSION:
+    scripts/freeze-legacy.sh {{VERSION}}
 
 # -----------------------------------------------------------------------------
 # Official agent docker image (runtime image with prebuilt binary and default
@@ -485,18 +465,18 @@ publish-latestVersions: sign-release
 # binaries produced by `just build-all-docker` from the build/ directory.
 # -----------------------------------------------------------------------------
 
-# Build agent runtime image for linux/amd64 (reuses build/reagent-linux-amd64)
+# Build agent runtime image for linux/amd64 (reuses build/device-agent-linux-amd64)
 build-docker-image-amd64:
-    @test -f build/reagent-linux-amd64 || { echo "ERROR: build/reagent-linux-amd64 missing. Run 'just build-all-docker' first."; exit 1; }
+    @test -f build/device-agent-linux-amd64 || { echo "ERROR: build/device-agent-linux-amd64 missing. Run 'just build-all-docker' first."; exit 1; }
     docker build --platform linux/amd64 \
         --build-arg TARGETARCH=amd64 \
         -f docker/Dockerfile \
         -t {{AGENT_IMAGE_NAME}}:{{AGENT_IMAGE_VERSION}}-amd64 \
         -t {{AGENT_IMAGE_NAME}}:latest-amd64 .
 
-# Build agent runtime image for linux/arm64 (reuses build/reagent-linux-arm64)
+# Build agent runtime image for linux/arm64 (reuses build/device-agent-linux-arm64)
 build-docker-image-arm64:
-    @test -f build/reagent-linux-arm64 || { echo "ERROR: build/reagent-linux-arm64 missing. Run 'just build-all-docker' first."; exit 1; }
+    @test -f build/device-agent-linux-arm64 || { echo "ERROR: build/device-agent-linux-arm64 missing. Run 'just build-all-docker' first."; exit 1; }
     docker build --platform linux/arm64 \
         --build-arg TARGETARCH=arm64 \
         -f docker/Dockerfile \

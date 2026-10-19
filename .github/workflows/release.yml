@@ -1,4 +1,4 @@
-# Build + publish the reagent agent (binaries to GCS, multi-arch images to
+# Build + publish the device agent (binaries to GCS, multi-arch images to
 # Artifact Registry) and record a signed SBOM attestation per binary.
 #
 # The binaries are staged WITHOUT the Ed25519 signature (.sig) agents require
@@ -6,10 +6,11 @@
 # OpenBao (non-exportable transit key), and GitHub holds no signing material.
 # `just promote` signs them (scripts/sign-release.sh) before they go live.
 #
-# This STAGES a version: binaries land at gs://re-agent/<os>/<arch>/<version>/
-# and images are pushed, but agents do NOT pick it up until the version is
-# promoted by the MANUAL release step (`just promote` -> version.txt +
-# availableVersions.json). See README "Build, Publish and Release".
+# This STAGES a version: binaries land at
+# gs://ironflock-downloads/device-agent/<os>/<arch>/<version>/ and images are
+# pushed, but agents do NOT pick it up until the version is promoted by the
+# MANUAL release step (`just promote` -> the signed manifest.json). See README
+# "Build, Publish and Release".
 #
 # Trigger: push a tag `vX.Y.Z` matching src/release/version.txt (or run manually).
 # Auth: Workload Identity Federation (keyless) — see README one-time setup.
@@ -66,8 +67,8 @@ jobs:
         id: bin
         run: |
           IFS=/ read -r os arch variant <<< "${{ matrix.target }}"
-          name="reagent-${os}-${arch}"
-          [ -n "${variant:-}" ] && name="reagent-${os}-${arch}v${variant}"
+          name="device-agent-${os}-${arch}"
+          [ -n "${variant:-}" ] && name="device-agent-${os}-${arch}v${variant}"
           echo "name=${name}" >> "$GITHUB_OUTPUT"
 
       - name: Generate SBOM
@@ -106,7 +107,7 @@ jobs:
       - uses: extractions/setup-just@v4
 
       # Collect every built binary back into build/ (bin-* only — not the SBOMs,
-      # so scripts/publish.sh's `ls build` sees only reagent-* binaries).
+      # so scripts/publish.sh sees only device-agent-* binaries).
       - name: Collect built binaries
         uses: actions/download-artifact@v8
         with:
@@ -135,10 +136,10 @@ jobs:
           cache-dependency-path: src/go.sum
 
       # frpc is delivered to Windows devices as a separate, out-of-process
-      # binary (never embedded into reagent.exe, whose bytes would then trip
-      # antivirus). Build it from source at the pinned tag so we control the
-      # supply chain and can sign it. It publishes to the re-agent bucket under
-      # /frpc/, which the appliance /dl/re-agent proxy already covers.
+      # binary (never embedded into device-agent.exe, whose bytes would then
+      # trip antivirus). Build it from source at the pinned tag so we control
+      # the supply chain and can sign it. It publishes to device-agent/frpc/,
+      # which the appliance /dl/device-agent proxy route covers.
       - name: Build frpc for Windows from source
         run: scripts/build-frpc.sh windows amd64 build/frpc-windows-amd64
 
@@ -151,16 +152,16 @@ jobs:
         env:
           WINDOWS_SIGNING_PFX_B64: ${{ secrets.WINDOWS_SIGNING_PFX_B64 }}
           WINDOWS_SIGNING_PFX_PASSWORD: ${{ secrets.WINDOWS_SIGNING_PFX_PASSWORD }}
-        run: scripts/sign-windows.sh build/reagent-windows-amd64 build/frpc-windows-amd64
+        run: scripts/sign-windows.sh build/device-agent-windows-amd64 build/frpc-windows-amd64
 
-      - name: Publish agent binaries to gs://re-agent
+      - name: Publish agent binaries to gs://ironflock-downloads/device-agent
         # Only a v* tag publishes; a manual run (workflow_dispatch) is a dry run of
         # gate, builds, GCP login and signing. It builds whatever ref it is run on,
         # which overwrote the unsigned 1.2.3 objects on 2026-10-13 (main was stale).
         if: startsWith(github.ref, 'refs/tags/v')
         run: scripts/publish.sh
 
-      - name: Publish frpc to gs://re-agent/frpc
+      - name: Publish frpc to gs://ironflock-downloads/device-agent/frpc
         # Only a v* tag publishes; a manual run (workflow_dispatch) is a dry run of
         # gate, builds, GCP login and signing. It builds whatever ref it is run on,
         # which overwrote the unsigned 1.2.3 objects on 2026-10-13 (main was stale).
@@ -189,4 +190,4 @@ jobs:
         # which overwrote the unsigned 1.2.3 objects on 2026-10-13 (main was stale).
         if: startsWith(github.ref, 'refs/tags/v')
         run: |
-          echo "::notice::Version staged UNSIGNED. Promote it manually with: just promote  (signs through OpenBao, then publishes version.txt + availableVersions.json)"
+          echo "::notice::Version staged UNSIGNED. Promote it manually with: just promote  (signs through OpenBao, then publishes version.txt, availableVersions.json and the signed manifest.json)"

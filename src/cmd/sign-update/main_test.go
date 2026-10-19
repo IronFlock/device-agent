@@ -406,11 +406,70 @@ func TestSignRefuses(t *testing.T) {
 		odd := writeTestBinary(t, "agent.bin", "build")
 
 		err := run([]string{"sign", "-key-file", keyPath, "-version", "1.2.6", named, odd}, nil, &bytes.Buffer{})
-		assert.ErrorContains(t, err, "neither reagent nor frpc")
+		assert.ErrorContains(t, err, "none of device-agent, reagent, frpc")
 		assert.NoFileExists(t, named+".sig", "nothing is signed when one target is unknown")
 
 		err = run([]string{"sign", "-key-file", keyPath, "-version", "1.2.6", "-kind", "reagent", odd}, nil, &bytes.Buffer{})
 		assert.ErrorContains(t, err, "-os/-arch")
 		assert.NoFileExists(t, odd+".sig")
+	})
+}
+
+// device-agent holds a dash: its build names still give os and arch.
+func TestSignDeviceAgentBuildName(t *testing.T) {
+	keyPath, privateKey, _ := keygenForTest(t)
+	publicKey := privateKey.Public().(ed25519.PublicKey)
+	trustOnly(t, publicKey)
+
+	for name, target := range map[string]updatesig.Target{
+		"device-agent-linux-armv7":   {Context: updatesig.ContextAgentUpdate, OS: "linux", Arch: "armv7", Version: "1.3.0", FileName: "device-agent"},
+		"device-agent-windows-amd64": {Context: updatesig.ContextAgentUpdate, OS: "windows", Arch: "amd64", Version: "1.3.0", FileName: "device-agent.exe"},
+		"reagent-linux-arm64":        {Context: updatesig.ContextAgentUpdate, OS: "linux", Arch: "arm64", Version: "1.3.0", FileName: "reagent"},
+	} {
+		binary := writeTestBinary(t, name, "build of "+name)
+		require.NoError(t, run([]string{"sign", "-key-file", keyPath, "-version", "1.3.0", binary}, nil, &bytes.Buffer{}))
+		signature, err := os.ReadFile(binary + ".sig")
+		require.NoError(t, err)
+		_, err = updatesig.VerifyFile(publicKeys(publicKey), target, binary, signature)
+		require.NoError(t, err, name)
+		require.NoError(t, run([]string{"verify", "-version", "1.3.0", binary}, nil, &bytes.Buffer{}))
+	}
+}
+
+// The manifest: signed as a subject, sealed into the envelope the agent opens.
+func TestSealAndOpenAManifest(t *testing.T) {
+	keyPath, privateKey, _ := keygenForTest(t)
+	publicKey := privateKey.Public().(ed25519.PublicKey)
+	trustOnly(t, publicKey)
+	subject := []string{"-context", updatesig.ContextAgentManifest, "-subject", "device-agent/manifest.json"}
+
+	payload := writeTestBinary(t, "manifest.payload.json", `{"channels":{"production":"1.3.0"}}`)
+	var out bytes.Buffer
+	require.NoError(t, run(append(append([]string{"sign", "-key-file", keyPath}, subject...), payload), nil, &out))
+
+	out.Reset()
+	require.NoError(t, run(append(append([]string{"seal"}, subject...), payload), nil, &out))
+	envelope := out.Bytes()
+	got, _, err := updatesig.OpenEnvelope(publicKeys(publicKey), updatesig.Subject{Context: updatesig.ContextAgentManifest, Line: "device-agent/manifest.json"}, envelope)
+	require.NoError(t, err)
+	assert.Equal(t, `{"channels":{"production":"1.3.0"}}`, string(got))
+
+	manifest := writeTestBinary(t, "manifest.json", string(envelope))
+	out.Reset()
+	require.NoError(t, run(append(append([]string{"open"}, subject...), manifest), nil, &out))
+	assert.Equal(t, `{"channels":{"production":"1.3.0"}}`, out.String())
+
+	t.Run("another subject does not open it", func(t *testing.T) {
+		err := run([]string{"open", "-context", updatesig.ContextAgentManifest, "-subject", "re-agent/manifest.json", manifest}, nil, &bytes.Buffer{})
+		assert.ErrorIs(t, err, updatesig.ErrBadSignature)
+	})
+	t.Run("a changed payload does not seal", func(t *testing.T) {
+		require.NoError(t, os.WriteFile(payload, []byte(`{"channels":{"production":"0.0.1"}}`), 0o644))
+		err := run(append(append([]string{"seal"}, subject...), payload), nil, &bytes.Buffer{})
+		assert.ErrorIs(t, err, updatesig.ErrBadSignature)
+	})
+	t.Run("subject and binary flags do not mix", func(t *testing.T) {
+		err := run(append(append([]string{"verify", "-version", "1.3.0"}, subject...), payload), nil, &bytes.Buffer{})
+		assert.ErrorContains(t, err, "go together")
 	})
 }

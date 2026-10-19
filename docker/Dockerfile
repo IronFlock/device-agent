@@ -2,15 +2,15 @@
 #
 # Official IronFlock Device Management Agent runtime image.
 #
-# This Dockerfile does NOT build the agent. It expects a prebuilt reagent
-# binary (produced by `make build-all-docker`) to be available under
-# ./build/reagent-linux-<arch> at the repo root.
+# This Dockerfile does NOT build the agent. It expects a prebuilt device-agent
+# binary (produced by `just build-all-docker`) to be available under
+# ./build/device-agent-linux-<arch> at the repo root.
 #
 # Build context: the repository root (DeviceManagementAgent).
 #
 # Examples:
 #   # build linux/amd64 image using the existing prebuilt binary
-#   make build-all-docker                                  # produces build/reagent-linux-amd64 etc.
+#   just build-all-docker                                  # produces build/device-agent-linux-amd64 etc.
 #   docker build -f docker/Dockerfile \
 #       --build-arg TARGETARCH=amd64 \
 #       -t ironflock-agent:local .
@@ -50,14 +50,18 @@ RUN apt-get update && apt-get -y upgrade && apt-get install -y --no-install-reco
     && apt-get install -y --no-install-recommends docker-ce-cli docker-compose-plugin \
     && rm -rf /var/lib/apt/lists/*
 
-RUN mkdir -p /opt/reagent /app
+# The agent picks its paths from what it finds (package layout): a volume at
+# the legacy /opt/reagent keeps the legacy paths, so existing installs keep
+# their database; otherwise /opt/ironflock/device-agent.
+RUN mkdir -p /opt/ironflock/device-agent /app
 
 WORKDIR /app
 
 # Copy the prebuilt binary for the requested arch. Run
-# `make build-all-docker` (or `make build-all`) first to produce it.
-COPY build/reagent-linux-${TARGETARCH} /usr/local/bin/reagent
-RUN chmod +x /usr/local/bin/reagent
+# `just build-all-docker` first to produce it. reagent stays as a link for
+# compose files that still name it.
+COPY build/device-agent-linux-${TARGETARCH} /usr/local/bin/device-agent
+RUN chmod +x /usr/local/bin/device-agent && ln -s device-agent /usr/local/bin/reagent
 
 COPY docker/entrypoint.sh /app/entrypoint.sh
 

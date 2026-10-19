@@ -149,7 +149,7 @@ func TestGetLatestVersion_Integration(t *testing.T) {
 	}
 	sys := New(cfg, nil)
 
-	version, err := sys.GetLatestVersion("re-agent")
+	version, err := sys.GetLatestVersion()
 	if err != nil {
 		t.Skipf("skipping: could not reach update bucket %q (%v)",
 			cfg.CommandLineArguments.RemoteUpdateURL, err)

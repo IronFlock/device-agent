@@ -1,9 +1,10 @@
-//go:build windows
+//go:build windows || linux
 
 package system
 
 import (
 	"reagent/lifecycle"
+	"reagent/migrate"
 	"reagent/safe"
 	"reagent/selfupdate"
 	"time"
@@ -12,21 +13,34 @@ import (
 )
 
 // maybeActivateAgentUpdate swaps a freshly downloaded agent version into the
-// service binary path and requests a supervised restart — the in-process
-// equivalent of what reagent-manager.sh does externally on Linux. Only active
-// in service mode: console runs (development, FlockFlasher test devices) keep
-// the historical download-only behavior.
+// active binary path and requests a supervised restart. Only active under a
+// supervisor (the Windows service, ironflock-device-agent.service on Linux):
+// console runs (development, FlockFlasher test devices) and legacy Linux
+// installs, where reagent-manager.sh activates updates, only download.
 func (system *System) maybeActivateAgentUpdate(result UpdateResult) {
 	if !result.DidAgentUpdate && !result.DidUpdate {
 		return
 	}
 
 	if !lifecycle.Supervised() {
-		log.Info().Msgf("agent v%s downloaded but not activated: running in console mode (install the Windows service for automatic updates)", result.LatestVersion)
+		log.Info().Msgf("agent v%s downloaded but not activated here: not running under the agent's service", result.LatestVersion)
+		return
+	}
+
+	// The layout migration's health check waits for THIS version to stay up
+	// for a minute; activating an update meanwhile would roll the move back.
+	// The next update (the agent's next start, or one a user starts)
+	// activates it.
+	if migrate.InProgress("") {
+		log.Info().Msgf("agent v%s downloaded but not activated: the layout migration is still checking this version", result.LatestVersion)
 		return
 	}
 
 	manager := selfupdate.New(system.config.CommandLineArguments.AgentDir)
+	if reason := manager.ActivationHold(time.Now()); reason != "" {
+		log.Info().Msgf("agent v%s downloaded but not activated yet: %s", result.LatestVersion, reason)
+		return
+	}
 	if manager.IsVersionBlocked(result.LatestVersion) {
 		log.Warn().Msgf("agent v%s previously failed on this device, not activating it again", result.LatestVersion)
 		return

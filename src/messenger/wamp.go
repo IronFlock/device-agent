@@ -7,7 +7,9 @@ import (
 	"fmt"
 	"math/rand"
 	"os"
+	"path/filepath"
 	"regexp"
+	"runtime"
 	"runtime/debug"
 	"strings"
 	"sync"
@@ -20,6 +22,7 @@ import (
 	"reagent/diskguard"
 	"reagent/errdefs"
 	"reagent/messenger/topics"
+	"reagent/migrate"
 
 	"github.com/ironflock/nexus/v3/client"
 	"github.com/ironflock/nexus/v3/transport"
@@ -1060,7 +1063,7 @@ func (s *WampSession) UpdateRemoteDeviceStatus(status DeviceStatus) error {
 		status = EMERGENCY
 	}
 
-	stats := common.GetStats()
+	stats := common.GetStats(filepath.Join(cfg.CommandLineArguments.AgentDir, "docker-apps"))
 
 	statsDict := common.Dict{
 		"cpu_count":           stats.CPUCount,
@@ -1086,6 +1089,17 @@ func (s *WampSession) UpdateRemoteDeviceStatus(status DeviceStatus) error {
 	// supervisor's status-transition pushes reuse this exact payload path.
 	if s.dockerAvailableFn != nil {
 		statsDict["docker_available"] = s.dockerAvailableFn()
+	}
+
+	// The file layout (package layout), for following the fleet's move to
+	// /opt/ironflock/device-agent; layout_error says why a move was rolled back.
+	if cfg.CommandLineArguments.Layout != "" {
+		statsDict["layout"] = string(cfg.CommandLineArguments.Layout)
+	}
+	if runtime.GOOS == "linux" {
+		if layoutErr := migrate.LastError(""); layoutErr != "" {
+			statsDict["layout_error"] = layoutErr
+		}
 	}
 
 	payload := common.Dict{

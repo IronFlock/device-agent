@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -324,4 +325,63 @@ func TestAllowUnsigned(t *testing.T) {
 		t.Setenv(AGENT_UPDATE_ALLOW_UNSIGNED, value)
 		assert.Equal(t, want, AllowUnsigned(), "%s=%q", AGENT_UPDATE_ALLOW_UNSIGNED, value)
 	}
+}
+
+func TestSubjectMessageMatchesTargetMessage(t *testing.T) {
+	digest := make([]byte, 32)
+	target := agentTarget("1.3.0")
+	fromTarget, err := target.Message(digest)
+	require.NoError(t, err)
+	fromSubject, err := Subject{Context: target.Context, Line: target.Path()}.Message(digest)
+	require.NoError(t, err)
+	assert.Equal(t, fromTarget, fromSubject, "a target is a subject whose line is its download path")
+
+	for _, bad := range []Subject{{}, {Context: ContextAgentManifest}, {Context: ContextAgentManifest, Line: "a\nb"}} {
+		_, err := bad.Message(digest)
+		assert.ErrorIs(t, err, ErrInvalidTarget, "%+v", bad)
+	}
+}
+
+func TestEnvelopeRoundTripAndRefusals(t *testing.T) {
+	pub, priv := newKey(t)
+	keys := trusted(pub)
+	subject := Subject{Context: ContextAgentManifest, Line: "device-agent/manifest.json"}
+	payload := []byte(`{"channels":{"production":"1.3.0"}}`)
+
+	sig, err := SignBytes(priv, subject, payload)
+	require.NoError(t, err)
+	file, err := SealEnvelope(payload, sig)
+	require.NoError(t, err)
+
+	got, keyID, err := OpenEnvelope(keys, subject, file)
+	require.NoError(t, err)
+	assert.Equal(t, payload, got)
+	assert.Equal(t, KeyID(pub), keyID)
+
+	t.Run("tampered payload", func(t *testing.T) {
+		var envelope Envelope
+		require.NoError(t, json.Unmarshal(file, &envelope))
+		envelope.Payload = []byte(`{"channels":{"production":"9.9.9"}}`)
+		tampered, _ := json.Marshal(envelope)
+		_, _, err := OpenEnvelope(keys, subject, tampered)
+		assert.ErrorIs(t, err, ErrBadSignature)
+	})
+	t.Run("another subject", func(t *testing.T) {
+		_, _, err := OpenEnvelope(keys, Subject{Context: ContextAgentUpdate, Line: "device-agent/manifest.json"}, file)
+		assert.ErrorIs(t, err, ErrBadSignature)
+	})
+	t.Run("untrusted key", func(t *testing.T) {
+		other, _ := newKey(t)
+		_, _, err := OpenEnvelope(trusted(other), subject, file)
+		assert.ErrorIs(t, err, ErrBadSignature)
+	})
+	t.Run("no signature", func(t *testing.T) {
+		unsigned, _ := json.Marshal(Envelope{Payload: payload})
+		_, _, err := OpenEnvelope(keys, subject, unsigned)
+		assert.ErrorIs(t, err, ErrMissingSignature)
+	})
+	t.Run("not an envelope", func(t *testing.T) {
+		_, _, err := OpenEnvelope(keys, subject, payload)
+		assert.Error(t, err)
+	})
 }
