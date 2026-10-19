@@ -86,6 +86,11 @@ func newDevice(t *testing.T) *device {
 	d.file("/boot/demo_swarm.flock", `{"secret":"s3cr3t"}`, 0o644)
 	d.link("/opt/reagent/device-config.flock", d.p("/boot/demo_swarm.flock"))
 	d.file(bootDeviceINI, "secret=s3cr3t\n", 0o644)
+	// What an OS image built from another enrolled machine brought along,
+	// next to the host's own boot files.
+	d.file("/boot/demo_demo_swarm_test45.flock", `{"secret":"other"}`, 0o644)
+	d.file("/boot/firmware/old.reswarm", `{"secret":"other"}`, 0o644)
+	d.file("/boot/firmware/config.txt", "dtoverlay=x\n", 0o644)
 	d.file(daemonJSON, `{"data-root": "/opt/reagent/docker-apps", "log-driver": "json-file"}`, 0o644)
 	d.file(legacyLog, "agent log", 0o644)
 	d.file("/var/log/reagent-2026-10-17.log", "rotated", 0o644)
@@ -277,6 +282,10 @@ func TestMigrateMovesALegacyInstall(t *testing.T) {
 
 	assert.True(t, d.journal().Done)
 	assert.Equal(t, layout.Current, layout.Detect(d.root).Kind)
+	// Open like a fresh install's: users look into it (the login banner).
+	info, err := os.Stat(d.p("/opt/ironflock"))
+	require.NoError(t, err)
+	assert.Equal(t, os.FileMode(0o755), info.Mode().Perm(), "/opt/ironflock")
 
 	agentDir := layout.AgentDir
 	snap := d.snapshot()
@@ -298,6 +307,7 @@ func TestMigrateMovesALegacyInstall(t *testing.T) {
 		"/var/log/ironflock/device-agent-2026-10-17.log": "-rw-r--r-- rotated",
 		"/var/log/ironflock/frpc.log":                    "-rw-r--r-- frpc log",
 		"/apps/app/data":                                 "-rw-r--r-- app data",
+		"/boot/firmware/config.txt":                      "-rw-r--r-- dtoverlay=x\n",
 	}
 	assert.Equal(t, want, snap)
 

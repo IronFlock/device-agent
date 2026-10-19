@@ -264,6 +264,7 @@ func TestBootCopiesStayWhileAUnitUsesTheLegacyFolder(t *testing.T) {
 	require.NoError(t, Run(e))
 	assert.FileExists(t, d.p("/boot/demo_swarm.flock"))
 	assert.FileExists(t, d.p(bootDeviceINI))
+	assert.FileExists(t, d.p("/boot/demo_demo_swarm_test45.flock"))
 }
 
 // A failed attempt starts Docker again even when it did not stop it (a boot

@@ -317,6 +317,11 @@ func Stage(e Env, selfExe string) error {
 		attempts = previous.Attempts
 		preferLink = previous.PreferLink || (previous.FailedStep == stepIndex("stop-docker") && previous.Strategy == StrategyMove)
 	}
+	// /opt/ironflock first, with its own mode: MkdirAll would give it the
+	// 0700 of .migrate, and the login banner (the user's shell) looks into it.
+	if err := os.MkdirAll(filepath.Dir(e.p(migrateDir)), 0o755); err != nil {
+		return err
+	}
 	if err := os.MkdirAll(e.p(migrateDir), 0o700); err != nil {
 		return err
 	}
@@ -1131,7 +1136,12 @@ func cleanup(e Env, j *Journal) error {
 			if strings.HasPrefix(j.ConfigTarget, "/boot/") {
 				_ = os.Remove(e.p(j.ConfigTarget))
 			}
-			_ = os.Remove(e.p(bootDeviceINI))
+			for _, glob := range bootSecretGlobs {
+				matches, _ := filepath.Glob(e.p(glob))
+				for _, m := range matches {
+					_ = os.Remove(m)
+				}
+			}
 		}
 		_ = os.Remove(e.p(rootKeyCopy))
 		_ = os.Remove(e.p(rootPubCopy))
@@ -1148,6 +1158,15 @@ func cleanup(e Env, j *Journal) error {
 	_ = os.RemoveAll(e.p(migrateDir))
 	_ = e.Systemctl("daemon-reload")
 	return nil
+}
+
+// bootSecretGlobs: the secrets installs before 1.4.0 left in /boot, the
+// config (.flock, .reswarm before 2024) and device.ini. All of them go, not
+// only the copy the config link points to: an OS image built from an
+// enrolled machine brings another device's along.
+var bootSecretGlobs = []string{
+	"/boot/*.flock", "/boot/*.reswarm", bootDeviceINI,
+	"/boot/firmware/*.flock", "/boot/firmware/*.reswarm", "/boot/firmware/device.ini",
 }
 
 // --- helpers -----------------------------------------------------------------
