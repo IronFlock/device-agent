@@ -724,6 +724,10 @@ func filterLargeEnvVars(envVars []string) []string {
 	return filtered
 }
 
+// hostDBusDir holds the host's D-Bus system bus socket; a variable so tests
+// can point it at a temp dir.
+var hostDBusDir = "/run/dbus"
+
 func computeMounts(stage common.Stage, appName string, config *config.Config) ([]mount.Mount, error) {
 	appSpecificDirectory := config.CommandLineArguments.AppsDirectory + "/" + strings.ToLower(string(stage)) + "/" + strings.ToLower(appName)
 
@@ -766,6 +770,20 @@ func computeMounts(stage common.Stage, appName string, config *config.Config) ([
 			Source:   caDir,
 			Target:   trust.ContainerDir,
 			ReadOnly: true,
+		})
+	}
+
+	// The host's D-Bus system bus, so apps can drive host services such as
+	// BlueZ (bleak, bluetoothctl). Apps run on the bridge network, where the
+	// kernel refuses AF_BLUETOOTH sockets outside the initial network
+	// namespace: going through the host's bluetoothd is the only Bluetooth
+	// path left. The directory, not the socket, is bound so a dbus restart
+	// (new socket inode) does not leave the container with a stale file.
+	if _, err := os.Stat(hostDBusDir); err == nil {
+		mounts = append(mounts, mount.Mount{
+			Type:   mount.TypeBind,
+			Source: hostDBusDir,
+			Target: "/run/dbus",
 		})
 	}
 
