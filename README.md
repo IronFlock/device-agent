@@ -406,27 +406,31 @@ REPO=IronFlock/device-agent
 REPO_ID=$(gh api repos/${REPO} --jq .id)   # 314514906 — immutable, survives renames and transfers
 SA=reagent-release@${PROJECT}.iam.gserviceaccount.com
 
-# 1. Workload Identity Pool + GitHub OIDC provider (locked to this repo by its numeric id)
+# 1. Workload Identity Pool + GitHub OIDC provider, shared by every IronFlock repository
+#    (locked to the organisation by its numeric id). attribute.release is
+#    "<repository id>:release" only for a v* tag run of the repository's own
+#    .github/workflows/release.yml (or of the shared release-image workflow).
+OWNER_ID=$(gh api orgs/IronFlock --jq .id)   # 340168802
 gcloud iam workload-identity-pools create $POOL --project=$PROJECT --location=global --display-name="GitHub Actions"
 gcloud iam workload-identity-pools providers create-oidc $PROVIDER \
   --project=$PROJECT --location=global --workload-identity-pool=$POOL \
   --display-name="GitHub" --issuer-uri="https://token.actions.githubusercontent.com" \
-  --attribute-mapping="google.subject=assertion.sub,attribute.repository=assertion.repository,attribute.repository_id=assertion.repository_id" \
-  --attribute-condition="assertion.repository_id=='${REPO_ID}'"
+  --attribute-mapping="google.subject=assertion.sub,attribute.repository=assertion.repository,attribute.repository_id=assertion.repository_id,attribute.release=assertion.repository_id + (assertion.ref.startsWith('refs/tags/v') && (assertion.job_workflow_ref.startsWith('IronFlock/workflows/.github/workflows/release-image.yml@refs/tags/v') || assertion.job_workflow_ref.startsWith(assertion.repository + '/.github/workflows/release.yml@refs/tags/v')) ? ':release' : ':other')" \
+  --attribute-condition="assertion.repository_owner_id=='${OWNER_ID}'"
 
 # 2. Service account with publish permissions
 gcloud iam service-accounts create reagent-release --project=$PROJECT --display-name="reagent release"
 gsutil iam ch "serviceAccount:${SA}:roles/storage.objectAdmin" gs://ironflock-downloads
 gcloud projects add-iam-policy-binding $PROJECT --member="serviceAccount:${SA}" --role="roles/artifactregistry.writer"
 
-# 3. Let the repo impersonate the SA via the pool
+# 3. Let only this repository's tag release runs act as the SA
 PROJNUM=$(gcloud projects describe $PROJECT --format='value(projectNumber)')
 gcloud iam service-accounts add-iam-policy-binding $SA --project=$PROJECT \
   --role=roles/iam.workloadIdentityUser \
-  --member="principalSet://iam.googleapis.com/projects/${PROJNUM}/locations/global/workloadIdentityPools/${POOL}/attribute.repository_id/${REPO_ID}"
+  --member="principalSet://iam.googleapis.com/projects/${PROJNUM}/locations/global/workloadIdentityPools/${POOL}/attribute.release/${REPO_ID}:release"
 ```
 
-**The signing identity** (Cloud KMS). The pool's provider maps `attribute.release` to `<repository_id>:release` only for a `v*` tag run of the repository's own `.github/workflows/release.yml` (or the shared release-image workflow); only that principal may act as `agent-signer`, and `agent-signer` may only sign with this key:
+**The signing identity** (Cloud KMS). As for publishing, only the `<repository id>:release` principal may act as `agent-signer`, and `agent-signer` may only sign with this key:
 
 ```Shell
 gcloud kms keyrings create ironflock-release --location=europe-west1 --project=$PROJECT
@@ -442,7 +446,7 @@ gcloud iam service-accounts add-iam-policy-binding agent-signer@${PROJECT}.iam.g
 
 (Cloud HSM has no Ed25519; the key is software-protected, still non-exportable.)
 
-Then add two **organization variables** in `IronFlock` (Settings → Secrets and variables → Actions → Variables; the provider condition limits them to this repo anyway):
+Then add two **organization variables** in `IronFlock` (Settings → Secrets and variables → Actions → Variables; the bindings limit them to this repository's tag release runs anyway):
 
 - `GCP_WORKLOAD_IDENTITY_PROVIDER` = `projects/<projNum>/locations/global/workloadIdentityPools/github-pool/providers/github-provider`
 - `GCP_SERVICE_ACCOUNT` = `reagent-release@record-1283.iam.gserviceaccount.com`

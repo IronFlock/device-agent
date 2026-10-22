@@ -559,7 +559,9 @@ func TestComposeCommandArgvIncludesEnvFile(t *testing.T) {
 // A single line longer than bufio.Scanner's 64 KB default must not end the
 // scan: that would stop the pipe being drained and hang the command.
 func TestComposeLongOutputLineDoesNotStall(t *testing.T) {
-	c := newFakeComposeCompose(t, `awk 'BEGIN { s=""; while (length(s) < 200000) s = s "x"; print s }'; echo "tail marker" >&2; exit 1`)
+	// head | tr writes the line in linear time; an awk concatenation loop is
+	// quadratic and on a loaded CI runner alone outlasted the 30s below.
+	c := newFakeComposeCompose(t, `head -c 200000 /dev/zero | tr '\0' x; echo; echo "tail marker" >&2; exit 1`)
 
 	outputChan, cmd, err := c.composeCommandContext(context.Background(), "/tmp/does-not-matter.yml", "up")
 	require.NoError(t, err)
