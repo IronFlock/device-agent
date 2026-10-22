@@ -123,7 +123,7 @@ func probeHostPortFree(protocol string, port uint64) bool {
 		if err != nil {
 			return false
 		}
-		conn.Close()
+		_ = conn.Close()
 		return true
 	}
 
@@ -131,7 +131,7 @@ func probeHostPortFree(protocol string, port uint64) bool {
 	if err != nil {
 		return false
 	}
-	listener.Close()
+	_ = listener.Close()
 	return true
 }
 

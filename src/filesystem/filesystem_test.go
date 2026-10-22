@@ -29,15 +29,6 @@ func testFsConfig(t *testing.T) *config.Config {
 	return builders.DefaultTestConfig()
 }
 
-// tmpScriptCount counts the generated *.sh script files in os.TempDir(), used
-// to assert ExecuteAsScript cleans up after itself.
-func tmpScriptCount(t *testing.T) int {
-	t.Helper()
-	entries, err := filepath.Glob(filepath.Join(os.TempDir(), "*.sh"))
-	require.NoError(t, err)
-	return len(entries)
-}
-
 // tarEntry describes one member of a tar archive used in tests.
 type tarEntry struct {
 	name    string
@@ -162,6 +153,23 @@ func TestExtractTarGzUnknownType(t *testing.T) {
 	err := ExtractTarGz(archive, dest)
 	require.Error(t, err, "unsupported entry type should error")
 	assert.Contains(t, err.Error(), "unknown type")
+}
+
+func TestExtractTarGzRejectsEntriesOutsideDest(t *testing.T) {
+	for _, name := range []string{"../escape.txt", "sub/../../escape.txt", "/abs/escape.txt"} {
+		t.Run(name, func(t *testing.T) {
+			parent := t.TempDir()
+			dest := filepath.Join(parent, "dest")
+			require.NoError(t, os.MkdirAll(dest, 0755))
+			archive := buildTarGz(t, t.TempDir(), "evil.tgz", []tarEntry{{name: name, body: "x"}})
+
+			err := ExtractTarGz(archive, dest)
+			require.Error(t, err, "entry %q must be rejected", name)
+			assert.Contains(t, err.Error(), "outside the target directory")
+			_, statErr := os.Stat(filepath.Join(parent, "escape.txt"))
+			assert.True(t, os.IsNotExist(statErr), "nothing may be written outside dest")
+		})
+	}
 }
 
 func TestExtractTarGzMissingSource(t *testing.T) {
@@ -369,41 +377,6 @@ func TestInitDirectoriesPrivateAppDirs(t *testing.T) {
 		require.NoError(t, err)
 		assert.NotEqualf(t, os.FileMode(0700), info.Mode().Perm(), "%s", dir)
 	}
-}
-
-func TestExecuteAsScript(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("ExecuteAsScript shells out to /bin/bash")
-	}
-
-	out, err := ExecuteAsScript(`printf "hello-%s" script`)
-	require.NoError(t, err)
-	assert.Equal(t, "hello-script", string(out), "stdout of the script is returned")
-}
-
-func TestExecuteAsScriptCleansUpScriptFile(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("ExecuteAsScript shells out to /bin/bash")
-	}
-
-	// Capture the temp dir before/after to confirm the generated *.sh is removed.
-	before := tmpScriptCount(t)
-	_, err := ExecuteAsScript(`true`)
-	require.NoError(t, err)
-	after := tmpScriptCount(t)
-
-	assert.Equal(t, before, after, "the generated script file should be removed after execution")
-}
-
-func TestExecuteAsScriptCommandError(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("ExecuteAsScript shells out to /bin/bash")
-	}
-
-	// The generated script ends with "exit 0", so a normal failing command
-	// still exits 0. Force a non-zero exit before that trailer is reached.
-	_, err := ExecuteAsScript(`exit 7`)
-	require.Error(t, err, "a non-zero script exit should surface as an error")
 }
 
 func TestDownloadURL(t *testing.T) {

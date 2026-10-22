@@ -50,7 +50,7 @@ type agentService struct {
 // and only restart when SetRecoveryActionsOnNonCrashFailures is on.)
 func exitForRestart(elog *eventlog.Log, reason string) {
 	if elog != nil {
-		elog.Info(1, "reagent is exiting for a supervised restart: "+reason)
+		_ = elog.Info(1, "reagent is exiting for a supervised restart: "+reason)
 	}
 	log.Info().Msgf("exiting for a supervised restart: %s", reason)
 	os.Exit(1)
@@ -59,7 +59,7 @@ func exitForRestart(elog *eventlog.Log, reason string) {
 func (s *agentService) Execute(args []string, requests <-chan svc.ChangeRequest, changes chan<- svc.Status) (ssec bool, errno uint32) {
 	elog, err := eventlog.Open(serviceName)
 	if err == nil {
-		defer elog.Close()
+		defer func() { _ = elog.Close() }()
 	} else {
 		elog = nil
 	}
@@ -92,7 +92,7 @@ func (s *agentService) Execute(args []string, requests <-chan svc.ChangeRequest,
 	// on either.
 	changes <- svc.Status{State: svc.Running, Accepts: svc.AcceptStop | svc.AcceptShutdown}
 	if elog != nil {
-		elog.Info(1, "reagent service started (v"+release.GetVersion()+")")
+		_ = elog.Info(1, "reagent service started (v"+release.GetVersion()+")")
 	}
 
 	// Probation and the judgement of a rolled-back version hang on the
@@ -131,7 +131,7 @@ func (s *agentService) Execute(args []string, requests <-chan svc.ChangeRequest,
 		case err := <-errChan:
 			log.Error().Err(err).Msg("agent failed to start")
 			if elog != nil {
-				elog.Error(1, "reagent failed to start: "+err.Error())
+				_ = elog.Error(1, "reagent failed to start: "+err.Error())
 			}
 			// Crash-exit so SCM restarts us (throttled by the recovery
 			// delays); Docker/WAMP outages at boot resolve themselves this
@@ -148,7 +148,7 @@ func (s *agentService) Execute(args []string, requests <-chan svc.ChangeRequest,
 				changes <- request.CurrentStatus
 			case svc.Stop, svc.Shutdown:
 				if elog != nil {
-					elog.Info(1, "reagent service stopping")
+					_ = elog.Info(1, "reagent service stopping")
 				}
 				shutdownAgent()
 				// svc.Run reports SERVICE_STOPPED (exit code 0) after

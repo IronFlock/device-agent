@@ -428,7 +428,7 @@ func (frpTm *FrpTunnelManager) routeReachable(route tunnelRoute, openWebsocket b
 	if err != nil {
 		return err
 	}
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 
 	caFile := ""
 	serverName := yamlConfig.ServerAddr // frpc's own fallback
@@ -511,7 +511,7 @@ func dialThroughHTTPProxy(ctx context.Context, proxy *url.URL, addr string) (net
 	if proxy.Scheme == "https" {
 		tlsConn := tls.Client(conn, &tls.Config{ServerName: proxy.Hostname()})
 		if err := tlsConn.HandshakeContext(ctx); err != nil {
-			conn.Close()
+			_ = conn.Close()
 			return nil, err
 		}
 		conn = tlsConn
@@ -532,17 +532,17 @@ func dialThroughHTTPProxy(ctx context.Context, proxy *url.URL, addr string) (net
 	request.Header.Set("User-Agent", "Mozilla/5.0")
 
 	if err := request.Write(conn); err != nil {
-		conn.Close()
+		_ = conn.Close()
 		return nil, err
 	}
 	response, err := http.ReadResponse(bufio.NewReader(conn), request)
 	if err != nil {
-		conn.Close()
+		_ = conn.Close()
 		return nil, err
 	}
-	response.Body.Close()
+	_ = response.Body.Close()
 	if response.StatusCode != http.StatusOK {
-		conn.Close()
+		_ = conn.Close()
 		return nil, fmt.Errorf("proxy refused CONNECT to %s: %s", addr, response.Status)
 	}
 
@@ -562,7 +562,7 @@ func dialThroughHTTPProxy(ctx context.Context, proxy *url.URL, addr string) (net
 // trustedCaFile; only the wss route handshakes then, since TLS is its
 // transport.
 func verifyTunnelServer(conn net.Conn, caFile, serverName string) (*tls.Conn, error) {
-	tlsConfig := &tls.Config{ServerName: serverName, InsecureSkipVerify: caFile == ""}
+	tlsConfig := &tls.Config{ServerName: serverName, InsecureSkipVerify: caFile == ""} //nolint:gosec // G402: documented plain-mode route: without a CA file there is no TLS to verify (see doc comment)
 	if caFile != "" {
 		bundle, err := os.ReadFile(caFile)
 		if err != nil {
@@ -631,7 +631,7 @@ func requestFrpWebsocket(conn net.Conn, host string) error {
 	if err != nil {
 		return err
 	}
-	response.Body.Close()
+	_ = response.Body.Close()
 	if response.StatusCode != http.StatusSwitchingProtocols {
 		return fmt.Errorf("the tunnel server answered %q instead of opening frp's websocket at %s", response.Status, frpWebsocketPath)
 	}
@@ -968,7 +968,7 @@ func (frpTm *FrpTunnelManager) Start() error {
 	frpcPath := filesystem.GetTunnelBinaryPath(frpTm.config, "frpc")
 
 	ctx, cancelNotifyContext := signal.NotifyContext(context.Background(), os.Interrupt)
-	frpCommand := exec.CommandContext(ctx, frpcPath, "-c", frpTm.configBuilder.ConfigPath)
+	frpCommand := exec.CommandContext(ctx, frpcPath, "-c", frpTm.configBuilder.ConfigPath) //nolint:gosec // G204: frpc binary installed by the agent itself, with its own config
 	frpCommand.Dir = filepath.Dir(frpcPath)
 	frpCommand.Env = frpcEnv()
 	setPdeathsig(frpCommand)
@@ -1356,7 +1356,7 @@ func (frpTm *FrpTunnelManager) Reload() error {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second*5)
 	defer cancel()
 
-	reloadCommand := exec.CommandContext(ctx, frpcPath, "reload", "-c", frpTm.configBuilder.ConfigPath)
+	reloadCommand := exec.CommandContext(ctx, frpcPath, "reload", "-c", frpTm.configBuilder.ConfigPath) //nolint:gosec // G204: frpc binary installed by the agent itself, with its own config
 	reloadCommand.Env = frpcEnv()
 
 	output, err := reloadCommand.CombinedOutput()
@@ -1511,7 +1511,7 @@ func (frpTm *FrpTunnelManager) AllStatus() ([]TunnelStatus, error) {
 		log.Error().Err(err).Msg("Failed to call frpc API")
 		return []TunnelStatus{}, nil
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		log.Error().Msgf("frpc API returned status code: %d", resp.StatusCode)

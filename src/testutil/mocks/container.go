@@ -12,7 +12,8 @@ import (
 	"reagent/container"
 	"time"
 
-	"github.com/docker/docker/api/types"
+	dockerbuild "github.com/docker/docker/api/types/build"
+
 	container0 "github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/api/types/events"
 	"github.com/docker/docker/api/types/network"
@@ -119,7 +120,7 @@ func (_c *Container_Attach_Call) RunAndReturn(run func(ctx context.Context, cont
 }
 
 // Build provides a mock function for the type Container
-func (_mock *Container) Build(ctx context.Context, pathToTar string, options types.ImageBuildOptions) (io.ReadCloser, error) {
+func (_mock *Container) Build(ctx context.Context, pathToTar string, options dockerbuild.ImageBuildOptions) (io.ReadCloser, error) {
 	ret := _mock.Called(ctx, pathToTar, options)
 
 	if len(ret) == 0 {
@@ -128,17 +129,17 @@ func (_mock *Container) Build(ctx context.Context, pathToTar string, options typ
 
 	var r0 io.ReadCloser
 	var r1 error
-	if returnFunc, ok := ret.Get(0).(func(context.Context, string, types.ImageBuildOptions) (io.ReadCloser, error)); ok {
+	if returnFunc, ok := ret.Get(0).(func(context.Context, string, dockerbuild.ImageBuildOptions) (io.ReadCloser, error)); ok {
 		return returnFunc(ctx, pathToTar, options)
 	}
-	if returnFunc, ok := ret.Get(0).(func(context.Context, string, types.ImageBuildOptions) io.ReadCloser); ok {
+	if returnFunc, ok := ret.Get(0).(func(context.Context, string, dockerbuild.ImageBuildOptions) io.ReadCloser); ok {
 		r0 = returnFunc(ctx, pathToTar, options)
 	} else {
 		if ret.Get(0) != nil {
 			r0 = ret.Get(0).(io.ReadCloser)
 		}
 	}
-	if returnFunc, ok := ret.Get(1).(func(context.Context, string, types.ImageBuildOptions) error); ok {
+	if returnFunc, ok := ret.Get(1).(func(context.Context, string, dockerbuild.ImageBuildOptions) error); ok {
 		r1 = returnFunc(ctx, pathToTar, options)
 	} else {
 		r1 = ret.Error(1)
@@ -154,12 +155,12 @@ type Container_Build_Call struct {
 // Build is a helper method to define mock.On call
 //   - ctx context.Context
 //   - pathToTar string
-//   - options types.ImageBuildOptions
+//   - options dockerbuild.ImageBuildOptions
 func (_e *Container_Expecter) Build(ctx any, pathToTar any, options any) *Container_Build_Call {
 	return &Container_Build_Call{Call: _e.mock.On("Build", ctx, pathToTar, options)}
 }
 
-func (_c *Container_Build_Call) Run(run func(ctx context.Context, pathToTar string, options types.ImageBuildOptions)) *Container_Build_Call {
+func (_c *Container_Build_Call) Run(run func(ctx context.Context, pathToTar string, options dockerbuild.ImageBuildOptions)) *Container_Build_Call {
 	_c.Call.Run(func(args mock.Arguments) {
 		var arg0 context.Context
 		if args[0] != nil {
@@ -169,9 +170,9 @@ func (_c *Container_Build_Call) Run(run func(ctx context.Context, pathToTar stri
 		if args[1] != nil {
 			arg1 = args[1].(string)
 		}
-		var arg2 types.ImageBuildOptions
+		var arg2 dockerbuild.ImageBuildOptions
 		if args[2] != nil {
-			arg2 = args[2].(types.ImageBuildOptions)
+			arg2 = args[2].(dockerbuild.ImageBuildOptions)
 		}
 		run(
 			arg0,
@@ -187,7 +188,7 @@ func (_c *Container_Build_Call) Return(readCloser io.ReadCloser, err error) *Con
 	return _c
 }
 
-func (_c *Container_Build_Call) RunAndReturn(run func(ctx context.Context, pathToTar string, options types.ImageBuildOptions) (io.ReadCloser, error)) *Container_Build_Call {
+func (_c *Container_Build_Call) RunAndReturn(run func(ctx context.Context, pathToTar string, options dockerbuild.ImageBuildOptions) (io.ReadCloser, error)) *Container_Build_Call {
 	_c.Call.Return(run)
 	return _c
 }
@@ -608,22 +609,22 @@ func (_c *Container_GetConfig_Call) RunAndReturn(run func() *config.Config) *Con
 }
 
 // GetContainer provides a mock function for the type Container
-func (_mock *Container) GetContainer(ctx context.Context, containerName string) (types.Container, error) {
+func (_mock *Container) GetContainer(ctx context.Context, containerName string) (container0.Summary, error) {
 	ret := _mock.Called(ctx, containerName)
 
 	if len(ret) == 0 {
 		panic("no return value specified for GetContainer")
 	}
 
-	var r0 types.Container
+	var r0 container0.Summary
 	var r1 error
-	if returnFunc, ok := ret.Get(0).(func(context.Context, string) (types.Container, error)); ok {
+	if returnFunc, ok := ret.Get(0).(func(context.Context, string) (container0.Summary, error)); ok {
 		return returnFunc(ctx, containerName)
 	}
-	if returnFunc, ok := ret.Get(0).(func(context.Context, string) types.Container); ok {
+	if returnFunc, ok := ret.Get(0).(func(context.Context, string) container0.Summary); ok {
 		r0 = returnFunc(ctx, containerName)
 	} else {
-		r0 = ret.Get(0).(types.Container)
+		r0 = ret.Get(0).(container0.Summary)
 	}
 	if returnFunc, ok := ret.Get(1).(func(context.Context, string) error); ok {
 		r1 = returnFunc(ctx, containerName)
@@ -663,12 +664,12 @@ func (_c *Container_GetContainer_Call) Run(run func(ctx context.Context, contain
 	return _c
 }
 
-func (_c *Container_GetContainer_Call) Return(v types.Container, err error) *Container_GetContainer_Call {
+func (_c *Container_GetContainer_Call) Return(v container0.Summary, err error) *Container_GetContainer_Call {
 	_c.Call.Return(v, err)
 	return _c
 }
 
-func (_c *Container_GetContainer_Call) RunAndReturn(run func(ctx context.Context, containerName string) (types.Container, error)) *Container_GetContainer_Call {
+func (_c *Container_GetContainer_Call) RunAndReturn(run func(ctx context.Context, containerName string) (container0.Summary, error)) *Container_GetContainer_Call {
 	_c.Call.Return(run)
 	return _c
 }
@@ -942,23 +943,23 @@ func (_c *Container_GetContainerState_Call) RunAndReturn(run func(ctx context.Co
 }
 
 // GetContainers provides a mock function for the type Container
-func (_mock *Container) GetContainers(ctx context.Context) ([]types.Container, error) {
+func (_mock *Container) GetContainers(ctx context.Context) ([]container0.Summary, error) {
 	ret := _mock.Called(ctx)
 
 	if len(ret) == 0 {
 		panic("no return value specified for GetContainers")
 	}
 
-	var r0 []types.Container
+	var r0 []container0.Summary
 	var r1 error
-	if returnFunc, ok := ret.Get(0).(func(context.Context) ([]types.Container, error)); ok {
+	if returnFunc, ok := ret.Get(0).(func(context.Context) ([]container0.Summary, error)); ok {
 		return returnFunc(ctx)
 	}
-	if returnFunc, ok := ret.Get(0).(func(context.Context) []types.Container); ok {
+	if returnFunc, ok := ret.Get(0).(func(context.Context) []container0.Summary); ok {
 		r0 = returnFunc(ctx)
 	} else {
 		if ret.Get(0) != nil {
-			r0 = ret.Get(0).([]types.Container)
+			r0 = ret.Get(0).([]container0.Summary)
 		}
 	}
 	if returnFunc, ok := ret.Get(1).(func(context.Context) error); ok {
@@ -993,12 +994,12 @@ func (_c *Container_GetContainers_Call) Run(run func(ctx context.Context)) *Cont
 	return _c
 }
 
-func (_c *Container_GetContainers_Call) Return(vs []types.Container, err error) *Container_GetContainers_Call {
+func (_c *Container_GetContainers_Call) Return(vs []container0.Summary, err error) *Container_GetContainers_Call {
 	_c.Call.Return(vs, err)
 	return _c
 }
 
-func (_c *Container_GetContainers_Call) RunAndReturn(run func(ctx context.Context) ([]types.Container, error)) *Container_GetContainers_Call {
+func (_c *Container_GetContainers_Call) RunAndReturn(run func(ctx context.Context) ([]container0.Summary, error)) *Container_GetContainers_Call {
 	_c.Call.Return(run)
 	return _c
 }

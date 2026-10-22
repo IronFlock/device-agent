@@ -215,7 +215,7 @@ func (lm *LogManager) oldestAvailable(ctx context.Context, containerName string)
 	if err != nil {
 		return time.Time{}
 	}
-	defer reader.Close()
+	defer func() { _ = reader.Close() }()
 
 	scanner := bufio.NewScanner(reader)
 	scanner.Buffer(make([]byte, 0, 64*1024), maxLogLineBytes)

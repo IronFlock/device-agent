@@ -639,7 +639,7 @@ func (g *Guard) truncateOversizedLogs() {
 func (g *Guard) run(name string, args ...string) {
 	ctx, cancel := context.WithTimeout(context.Background(), cmdTimeout)
 	defer cancel()
-	if err := exec.CommandContext(ctx, name, args...).Run(); err != nil {
+	if err := exec.CommandContext(ctx, name, args...).Run(); err != nil { //nolint:gosec // G204: fixed system commands (systemctl/journalctl) chosen by the agent
 		log.Warn().Err(err).Str("cmd", name).Msg("diskguard: command failed")
 	}
 }
@@ -686,7 +686,7 @@ func ensureDockerLogRotation() {
 		log.Error().Err(err).Msg("diskguard: failed to ensure /etc/docker")
 		return
 	}
-	if err := os.WriteFile(daemonJSONPath, append(out, '\n'), 0o644); err != nil {
+	if err := os.WriteFile(daemonJSONPath, append(out, '\n'), 0o644); err != nil { //nolint:gosec // G306: Docker daemon.json / journald drop-in: system configuration, no secrets
 		log.Error().Err(err).Msg("diskguard: failed to write daemon.json")
 		return
 	}
@@ -702,7 +702,7 @@ func ensureJournaldCap() {
 		log.Error().Err(err).Msg("diskguard: failed to ensure journald.conf.d")
 		return
 	}
-	if err := os.WriteFile(journaldDropin, []byte(want), 0o644); err != nil {
+	if err := os.WriteFile(journaldDropin, []byte(want), 0o644); err != nil { //nolint:gosec // G306: Docker daemon.json / journald drop-in: system configuration, no secrets
 		log.Error().Err(err).Msg("diskguard: failed to write journald cap")
 		return
 	}

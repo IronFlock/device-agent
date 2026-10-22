@@ -136,6 +136,20 @@ func TestLoadReswarmConfig_RewritesLegacyURLs(t *testing.T) {
 			endpointOut: "wss://cbw.ironflock.com/ws-re-dev",
 		},
 		{
+			name:        "retired pre-router endpoint devices.reswarm.io:8080 is rewritten",
+			registryIn:  "registry.ironflock.com/",
+			endpointIn:  "wss://devices.reswarm.io:8080/ws",
+			registryOut: "registry.ironflock.com/",
+			endpointOut: "wss://cbw.ironflock.com/ws-re-dev",
+		},
+		{
+			name:        "retired pre-router endpoint devices.record-evolution.com:8080 is rewritten",
+			registryIn:  "registry.ironflock.com/",
+			endpointIn:  "wss://devices.record-evolution.com:8080/ws",
+			registryOut: "registry.ironflock.com/",
+			endpointOut: "wss://cbw.ironflock.com/ws-re-dev",
+		},
+		{
 			name:        "already-migrated values are left untouched",
 			registryIn:  "registry.ironflock.com/",
 			endpointIn:  "wss://cbw.ironflock.com/ws-re-dev",

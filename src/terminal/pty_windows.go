@@ -107,8 +107,8 @@ func startHostShell() (hostShell, error) {
 
 	shellOut, ptyOut, err := os.Pipe()
 	if err != nil {
-		ptyIn.Close()
-		shellIn.Close()
+		_ = ptyIn.Close()
+		_ = shellIn.Close()
 		return nil, fmt.Errorf("terminal: failed to create the output pipe: %w", err)
 	}
 
@@ -129,12 +129,12 @@ func startHostShell() (hostShell, error) {
 	// either way. Dropping the output pipe's write end is what makes the shell
 	// exiting observable at all: while this process still holds it, the pipe
 	// can never break and the read loop would park on it forever.
-	ptyIn.Close()
-	ptyOut.Close()
+	_ = ptyIn.Close()
+	_ = ptyOut.Close()
 
 	if createErr != nil {
-		shellIn.Close()
-		shellOut.Close()
+		_ = shellIn.Close()
+		_ = shellOut.Close()
 		return nil, fmt.Errorf("terminal: failed to create the pseudoconsole: %w", createErr)
 	}
 
@@ -142,8 +142,8 @@ func startHostShell() (hostShell, error) {
 	if err != nil {
 		// Same ordering as Close: our end of the output pipe goes first, so
 		// ClosePseudoConsole can never be left waiting on a pipe nobody reads.
-		shellIn.Close()
-		shellOut.Close()
+		_ = shellIn.Close()
+		_ = shellOut.Close()
 		windows.ClosePseudoConsole(console)
 		return nil, err
 	}
@@ -167,7 +167,7 @@ func startAttachedProcess(commandLine string, console windows.Handle) (windows.H
 	// `go vet` flags the conversion as a possible misuse of unsafe.Pointer;
 	// it is what the Win32 API asks for, and both reference implementations
 	// (creack-adjacent go-pty and UserExistsError/conpty) do the same.
-	err = attributes.Update(windows.PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE, unsafe.Pointer(console), unsafe.Sizeof(console))
+	err = attributes.Update(windows.PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE, unsafe.Pointer(console), unsafe.Sizeof(console)) //nolint:gosec,govet // G103/unsafeptr: the Win32 pseudoconsole API takes the handle by value (see comment above)
 	if err != nil {
 		return 0, fmt.Errorf("terminal: failed to attach the pseudoconsole to the shell: %w", err)
 	}
@@ -225,7 +225,7 @@ func startAttachedProcess(commandLine string, console windows.Handle) (windows.H
 		return 0, fmt.Errorf("terminal: failed to start the shell: %w", err)
 	}
 
-	windows.CloseHandle(processInfo.Thread)
+	_ = windows.CloseHandle(processInfo.Thread)
 
 	// The shell being alive is not the same as the shell being reachable, and
 	// the two failure modes look identical from the browser: a cursor and
@@ -258,7 +258,7 @@ func shellCommandLine() (string, error) {
 	}
 
 	powershell := filepath.Join(systemRoot, "System32", "WindowsPowerShell", "v1.0", "powershell.exe")
-	if _, err := os.Stat(powershell); err == nil {
+	if _, err := os.Stat(powershell); err == nil { //nolint:gosec // G703: path of the system PowerShell
 		return powershellCommandLine(powershell), nil
 	}
 
@@ -340,7 +340,7 @@ func (s *windowsShell) releaseProcess() {
 	defer s.procMu.Unlock()
 
 	if s.process != 0 {
-		windows.CloseHandle(s.process)
+		_ = windows.CloseHandle(s.process)
 		s.process = 0
 	}
 }

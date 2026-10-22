@@ -8,6 +8,8 @@ import (
 	"strings"
 	"testing"
 
+	dockercontainer "github.com/docker/docker/api/types/container"
+
 	"reagent/common"
 	"reagent/config"
 	containerpkg "reagent/container"
@@ -15,7 +17,6 @@ import (
 	"reagent/testutil/builders"
 	"reagent/testutil/mocks"
 
-	dockertypes "github.com/docker/docker/api/types"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
@@ -62,7 +63,7 @@ func TestUpdateAppPullsBeforeTeardown(t *testing.T) {
 	// The OLD container exists and must only be removed after the pull.
 	mc.EXPECT().GetContainer(mock.Anything, payload.ContainerName.Prod).
 		Run(func(context.Context, string) { seq = append(seq, "get-container") }).
-		Return(dockertypes.Container{ID: "old-ctr"}, nil).Once()
+		Return(dockercontainer.Summary{ID: "old-ctr"}, nil).Once()
 	mc.EXPECT().RemoveContainerByID(mock.Anything, "old-ctr", mock.Anything).
 		Run(func(context.Context, string, map[string]interface{}) { seq = append(seq, "remove-container") }).
 		Return(nil).Once()

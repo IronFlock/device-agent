@@ -234,14 +234,11 @@ func (b *logBatcher) close() {
 }
 
 type JSONProgress struct {
-	terminalFd uintptr
 	Current    int64  `json:"current,omitempty"`
 	Total      int64  `json:"total,omitempty"`
 	Start      int64  `json:"start,omitempty"`
 	HideCounts bool   `json:"hidecounts,omitempty"`
 	Units      string `json:"units,omitempty"`
-	nowFunc    func() time.Time
-	winSize    int
 }
 
 type JSONError struct {
@@ -289,7 +286,7 @@ func (lm *LogManager) ClearLogHistory(containerName string) error {
 		}
 
 		// clear in database
-		lm.Database.ClearAllLogHistory(appName, appKey, common.Stage(stage))
+		_ = lm.Database.ClearAllLogHistory(appName, appKey, common.Stage(stage))
 	})
 
 	return nil
@@ -431,7 +428,7 @@ func (lm *LogManager) emitStream(logEntry *LogProccess) error {
 			logEntry.Active = false
 			logEntry.subscriptionStateMutex.Unlock()
 
-			logEntry.Stream.Close()
+			_ = logEntry.Stream.Close()
 
 			stage, appKey, appName, err := common.ParseContainerName(logEntry.ContainerName)
 			if err != nil {
@@ -513,7 +510,7 @@ func (lm *LogManager) emitStream(logEntry *LogProccess) error {
 	}
 
 	errChunk := &ErrorChunk{}
-	json.Unmarshal([]byte(lastChunk), errChunk)
+	_ = json.Unmarshal([]byte(lastChunk), errChunk)
 	if errChunk.Error != "" {
 		return errors.New(errChunk.Error)
 	}
@@ -584,7 +581,7 @@ func (lm *LogManager) ReviveDeadLogs() error {
 					continue
 				}
 
-				lm.StreamLogsChannel(logStream, containerName)
+				_, _ = lm.StreamLogsChannel(logStream, containerName)
 			} else {
 				reader, err := lm.getLogStream(containerName)
 				if err != nil {
@@ -612,7 +609,7 @@ func (lm *LogManager) ReviveDeadLogs() error {
 
 				if reader != nil {
 					safe.Go(func() {
-						lm.emitStream(&subscriptionEntry)
+						_ = lm.emitStream(&subscriptionEntry)
 					})
 				}
 			}
@@ -822,7 +819,7 @@ func (lm *LogManager) SetupLogConsumer(containerName string) chan *LogProccess {
 		logChannel := lm.logProcessChannelMap[containerName]
 		for sub := range logChannel {
 			sub.StreamEvent <- StreamEvent{eventType: "start"}
-			lm.emitChannelStream(sub)
+			_ = lm.emitChannelStream(sub)
 			sub.StreamEvent <- StreamEvent{eventType: "finished"}
 		}
 	})
@@ -1070,7 +1067,7 @@ func (lm *LogManager) getActiveSubscriptionID(containerName string) string {
 		return ""
 	}
 
-	if result.Arguments == nil || len(result.Arguments) == 0 {
+	if len(result.Arguments) == 0 {
 		return ""
 	}
 
@@ -1118,7 +1115,7 @@ func (lm *LogManager) StreamBlocking(containerName string, logType common.LogTyp
 	if reader == nil {
 		return nil
 	}
-	defer reader.Close()
+	defer func() { _ = reader.Close() }()
 
 	topic := lm.buildTopic(containerName)
 
@@ -1212,7 +1209,7 @@ func (lm *LogManager) StreamBlocking(containerName string, logType common.LogTyp
 	}
 
 	errChunk := &ErrorChunk{}
-	json.Unmarshal([]byte(lastChunk), errChunk)
+	_ = json.Unmarshal([]byte(lastChunk), errChunk)
 	if errChunk.Error != "" {
 		return errors.New(errChunk.Error)
 	}
@@ -1232,14 +1229,14 @@ func (lm *LogManager) Stream(containerName string, logType common.LogType, other
 
 		if reader != nil {
 			safe.Go(func() {
-				lm.initLogStream(containerName, logType, reader)
+				_ = lm.initLogStream(containerName, logType, reader)
 			})
 			return
 		}
 
 		if otherReader != nil {
 			safe.Go(func() {
-				lm.initLogStream(containerName, logType, otherReader)
+				_ = lm.initLogStream(containerName, logType, otherReader)
 			})
 		}
 	})

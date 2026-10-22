@@ -150,7 +150,7 @@ func (am *AppStore) GetAppCredKey() (string, error) {
 		return "", err
 	}
 
-	if resp.Arguments == nil || len(resp.Arguments) == 0 {
+	if len(resp.Arguments) == 0 {
 		return "", fmt.Errorf("empty app_cred_key payload")
 	}
 
@@ -246,7 +246,7 @@ func (am *AppStore) FetchRequestedAppStates() ([]common.TransitionPayload, error
 	}
 
 	deviceSyncStateResponse := make([]common.DeviceSyncResponse, 0)
-	json.Unmarshal(byteArr, &deviceSyncStateResponse)
+	_ = json.Unmarshal(byteArr, &deviceSyncStateResponse)
 
 	appPayloads := make([]common.TransitionPayload, 0)
 	for _, deviceSyncState := range deviceSyncStateResponse {

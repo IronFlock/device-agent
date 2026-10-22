@@ -105,7 +105,7 @@ func (ex *External) downloadOSUpdateHandler(ctx context.Context, response messen
 
 		serialNumber := ex.Config.ReswarmConfig.SerialNumber
 		topic := common.BuildDownloadOSUpdateProgress(serialNumber)
-		ex.LogMessenger.Publish(topics.Topic(topic), []interface{}{progress}, nil, nil)
+		_ = ex.LogMessenger.Publish(topics.Topic(topic), []interface{}{progress}, nil, nil)
 	}
 
 	// start downloading...
@@ -136,7 +136,7 @@ func (ex *External) installOSUpdateHandler(ctx context.Context, response messeng
 
 		serialNumber := ex.Config.ReswarmConfig.SerialNumber
 		topic := common.BuildInstallOSUpdateProgress(serialNumber)
-		ex.LogMessenger.Publish(topics.Topic(topic), []interface{}{progress}, nil, nil)
+		_ = ex.LogMessenger.Publish(topics.Topic(topic), []interface{}{progress}, nil, nil)
 	}
 
 	// start installing OS bundle...

@@ -1,0 +1,29 @@
+# gitleaks: the default rules plus reviewed exceptions for this repository.
+# Each allowlist names the files, the rule and the line it covers, with the
+# reason, so a new key elsewhere in the same files is still reported.
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "Test data (reviewed 2026-10-22): a deliberately invalid PEM in a sign-update negative test."
+targetRules = ["generic-api-key"]
+condition = "AND"
+paths = ['''(^|/)src/cmd/sign-update/main_test\.go$''']
+regexTarget = "line"
+regexes = ['''writeTestBinary\(t, "key\.pem", ''']
+
+[[allowlists]]
+description = "Test data (reviewed 2026-10-22): the app-credential HMAC test vector (key base64('test-key-for-vector'), app key 06a0bf96-…, cross-checked against the SQL implementation)."
+targetRules = ["generic-api-key"]
+condition = "AND"
+paths = ['''(^|/)src/apps/app_credential_test\.go$''']
+regexTarget = "match"
+regexes = ['''06a0bf96-a539-4d6a-8471-ac7adc67616e''']
+
+[[allowlists]]
+description = "Local-dev demo device (reviewed 2026-10-22): endpoint ws://localhost, same demo secret as platform-db install/create_demo.sql, which only local-dev loads (MIGRATOR_LOAD_DEMO=true). No production credential."
+targetRules = ["generic-api-key"]
+condition = "AND"
+paths = ['''(^|/)src/test-config\.flock$''']
+regexTarget = "line"
+regexes = ['''"secret": ''']

@@ -227,17 +227,17 @@ func keygen(args []string, stdout io.Writer) error {
 		err = closeErr
 	}
 	if err != nil {
-		os.Remove(*out)
+		_ = os.Remove(*out)
 		return fmt.Errorf("cannot write the private key file: %w", err)
 	}
 
 	keyID := updatesig.KeyID(publicKey)
 	encoded := updatesig.EncodePublicKey(publicKey)
-	fmt.Fprintf(stdout, "DEVELOPMENT key written to %s (mode 0600). Releases are signed by OpenBao, never with a key file.\n", *out)
-	fmt.Fprintf(stdout, "Key ID:     %s\n", keyID)
-	fmt.Fprintf(stdout, "Public key: %s\n\n", encoded)
-	fmt.Fprintf(stdout, "To test with it, add this line to AGENT_UPDATE_PUBLIC_KEYS in a local build (never commit it):\n\n")
-	fmt.Fprintf(stdout, "%s # DEVELOPMENT key %s, created %s\n", encoded, keyID, time.Now().UTC().Format("2006-01-02"))
+	_, _ = fmt.Fprintf(stdout, "DEVELOPMENT key written to %s (mode 0600). Releases are signed by OpenBao, never with a key file.\n", *out)
+	_, _ = fmt.Fprintf(stdout, "Key ID:     %s\n", keyID)
+	_, _ = fmt.Fprintf(stdout, "Public key: %s\n\n", encoded)
+	_, _ = fmt.Fprintf(stdout, "To test with it, add this line to AGENT_UPDATE_PUBLIC_KEYS in a local build (never commit it):\n\n")
+	_, _ = fmt.Fprintf(stdout, "%s # DEVELOPMENT key %s, created %s\n", encoded, keyID, time.Now().UTC().Format("2006-01-02"))
 	return nil
 }
 
@@ -299,11 +299,11 @@ func sign(args []string, stdout io.Writer) error {
 		if err != nil {
 			return fmt.Errorf("%s: fresh signature does not verify: %w", binary, err)
 		}
-		err = os.WriteFile(binary+".sig", signature, 0o644)
+		err = os.WriteFile(binary+".sig", signature, 0o644) //nolint:gosec // G306: signatures are public
 		if err != nil {
 			return err
 		}
-		fmt.Fprintf(stdout, "signed %s as %s with key %s -> %s.sig\n", binary, target, keyID, binary)
+		_, _ = fmt.Fprintf(stdout, "signed %s as %s with key %s -> %s.sig\n", binary, target, keyID, binary)
 	}
 	return nil
 }
@@ -338,7 +338,7 @@ func verify(args []string, stdout io.Writer) error {
 		if err != nil {
 			return fmt.Errorf("%s: %w", binary, err)
 		}
-		fmt.Fprintf(stdout, "%s: signature OK as %s (key %s)\n", binary, target, keyID)
+		_, _ = fmt.Fprintf(stdout, "%s: signature OK as %s (key %s)\n", binary, target, keyID)
 	}
 	return nil
 }
@@ -379,7 +379,7 @@ func message(args []string, stdout io.Writer) error {
 	if err != nil {
 		return err
 	}
-	fmt.Fprintln(stdout, base64.StdEncoding.EncodeToString(signed))
+	_, _ = fmt.Fprintln(stdout, base64.StdEncoding.EncodeToString(signed))
 	return nil
 }
 
@@ -445,11 +445,11 @@ func sigFromOpenBao(args []string, stdin io.Reader, stdout io.Writer) error {
 	if err != nil {
 		return fmt.Errorf("%s: OpenBao's signature (transit key version %d) does not verify: %w", binary, keyVersion, err)
 	}
-	err = os.WriteFile(binary+".sig", signature, 0o644)
+	err = os.WriteFile(binary+".sig", signature, 0o644) //nolint:gosec // G306: signatures are public
 	if err != nil {
 		return err
 	}
-	fmt.Fprintf(stdout, "%s: signed as %s by transit key version %d (key %s) -> %s.sig\n", binary, target, keyVersion, keyID, binary)
+	_, _ = fmt.Fprintf(stdout, "%s: signed as %s by transit key version %d (key %s) -> %s.sig\n", binary, target, keyVersion, keyID, binary)
 	return nil
 }
 
@@ -488,11 +488,11 @@ func seal(args []string, stdout io.Writer) error {
 	if err != nil {
 		return err
 	}
-	payload, err := os.ReadFile(payloadPath)
+	payload, err := os.ReadFile(payloadPath) //nolint:gosec // G703: release tool run by the release manager on local files
 	if err != nil {
 		return err
 	}
-	signature, err := os.ReadFile(payloadPath + ".sig")
+	signature, err := os.ReadFile(payloadPath + ".sig") //nolint:gosec // G703: release tool run by the release manager on local files
 	if err != nil {
 		return err
 	}
@@ -517,7 +517,7 @@ func openEnvelope(args []string, stdout io.Writer) error {
 	if err != nil {
 		return err
 	}
-	file, err := os.ReadFile(path)
+	file, err := os.ReadFile(path) //nolint:gosec // G703: release tool run by the release manager on local files
 	if err != nil {
 		return err
 	}
@@ -581,7 +581,7 @@ func pubkeyFromOpenBao(args []string, stdin io.Reader, stdout io.Writer) error {
 		if created != "" {
 			line += ", created " + created
 		}
-		fmt.Fprintln(stdout, line)
+		_, _ = fmt.Fprintln(stdout, line)
 	}
 	return nil
 }

@@ -791,7 +791,7 @@ func (so *StateObserver) driveCorrectedProdApp(app *common.App, latestAppState c
 		return false
 	}
 
-	so.AppManager.RequestAppState(payload)
+	_ = so.AppManager.RequestAppState(payload)
 	return false
 }
 
@@ -976,7 +976,7 @@ func (so *StateObserver) initObserverSpawner() chan error {
 							continue
 						}
 
-						so.addComposeObserver(stage, key, name)
+						_, _ = so.addComposeObserver(stage, key, name)
 
 						continue
 					}

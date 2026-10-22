@@ -132,7 +132,7 @@ func runService(cliArgs *config.CommandLineArguments) {
 func writeRunFile(path string) {
 	err := os.MkdirAll(filepath.Dir(path), 0o755)
 	if err == nil {
-		err = os.WriteFile(path, []byte(fmt.Sprintf("%d %s\n", os.Getpid(), release.GetVersion())), 0o644)
+		err = os.WriteFile(path, []byte(fmt.Sprintf("%d %s\n", os.Getpid(), release.GetVersion())), 0o644) //nolint:gosec // G306: pid file, no secrets
 	}
 	if err != nil {
 		log.Warn().Err(err).Msgf("could not write %s", path)

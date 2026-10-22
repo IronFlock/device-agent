@@ -6,11 +6,12 @@ import (
 	"testing"
 	"time"
 
+	dockercontainer "github.com/docker/docker/api/types/container"
+
 	"reagent/common"
 	containerpkg "reagent/container"
 	"reagent/messenger/topics"
 
-	dockertypes "github.com/docker/docker/api/types"
 	"github.com/docker/docker/api/types/events"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
@@ -109,7 +110,7 @@ func TestSpawnerSupervisorRecoversFromDaemonOutage(t *testing.T) {
 	mc.EXPECT().GetImages(mock.Anything, "").Return(nil, nil).Once()
 	mc.EXPECT().GetContainers(mock.Anything).
 		Run(func(ctx context.Context) { close(reconcileRan) }).
-		Return([]dockertypes.Container{}, nil).
+		Return([]dockercontainer.Summary{}, nil).
 		Once()
 
 	// Zero seeded apps: this just latches the supervisor and starts spawner #1.
@@ -118,15 +119,17 @@ func TestSpawnerSupervisorRecoversFromDaemonOutage(t *testing.T) {
 	// Daemon outage: the docker client delivers exactly one error per stream.
 	errC1 <- errors.New("unexpected EOF")
 
+	// Generous waits: under -race on a CI runner the reconcile (SQLite with a
+	// 2.5 s busy timeout) has taken longer than 3 s.
 	select {
 	case <-secondListen:
-	case <-time.After(3 * time.Second):
+	case <-time.After(10 * time.Second):
 		t.Fatal("the event spawner was not restarted after the stream died")
 	}
 
 	select {
 	case <-reconcileRan:
-	case <-time.After(3 * time.Second):
+	case <-time.After(10 * time.Second):
 		t.Fatal("the daemon-recovery reconcile did not run after the spawner restart")
 	}
 

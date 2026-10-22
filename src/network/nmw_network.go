@@ -89,31 +89,6 @@ func (n NWMNetwork) getActiveWirelessDevice() (networkmanager.DeviceWireless, er
 	return nil, ErrDeviceNotFound
 }
 
-func (n NWMNetwork) getAccessPointBySSID(ssid string) (networkmanager.AccessPoint, error) {
-	activeWirelessDevice, err := n.getWirelessDevice()
-	if err != nil {
-		return nil, err
-	}
-
-	accessPoints, err := activeWirelessDevice.GetAllAccessPoints()
-	if err != nil {
-		return nil, err
-	}
-
-	for _, ap := range accessPoints {
-		foundSSID, err := ap.GetPropertySSID()
-		if err != nil {
-			return nil, err
-		}
-
-		if foundSSID == ssid {
-			return ap, nil
-		}
-	}
-
-	return nil, errdefs.ErrNotFound
-}
-
 func (n NWMNetwork) getAccessPointByMAC(mac string) (networkmanager.AccessPoint, error) {
 	activeWirelessDevice, err := n.getWirelessDevice()
 	if err != nil {
@@ -664,7 +639,7 @@ func swapUint32(n uint32) uint32 {
 
 func ip2Long(ip string) uint32 {
 	var long uint32
-	binary.Read(bytes.NewBuffer(net.ParseIP(ip).To4()), binary.BigEndian, &long)
+	_ = binary.Read(bytes.NewBuffer(net.ParseIP(ip).To4()), binary.BigEndian, &long)
 	return swapUint32(long)
 }
 

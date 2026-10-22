@@ -21,7 +21,7 @@ import (
 	"syscall"
 	"time"
 
-	_ "net/http/pprof"
+	_ "net/http/pprof" //nolint:gosec // G108: profiling is opt-in (-profiling flag) for local debugging
 
 	"github.com/rs/zerolog/log"
 )
@@ -111,7 +111,7 @@ func runAgent(cliArgs *config.CommandLineArguments) (*Agent, error) {
 		}
 
 		safe.Go(func() {
-			err := http.ListenAndServe(fmt.Sprintf(":%d", port), nil)
+			err := http.ListenAndServe(fmt.Sprintf(":%d", port), nil) //nolint:gosec // G114: profiling is opt-in (-profiling flag) for local debugging
 			if err != nil {
 				log.Error().Stack().Err(err).Msgf("Failed to init web server")
 			}

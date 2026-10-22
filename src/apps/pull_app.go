@@ -159,7 +159,7 @@ func (sm *StateMachine) pullApp(payload common.TransitionPayload, app *common.Ap
 	reader, err := sm.Container.Pull(context.Background(), fullImageNameWithVersion, pullOptions)
 	if err != nil {
 		errorMessage := fmt.Sprintf("Error occured while trying to pull the image: %s", err.Error())
-		sm.LogManager.Write(payload.ContainerName.Prod, errorMessage)
+		_ = sm.LogManager.Write(payload.ContainerName.Prod, errorMessage)
 		return err
 	}
 

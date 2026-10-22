@@ -32,7 +32,7 @@ import (
 func installTrustAnchors(agentDir string) {
 	for _, root := range codesign.EmbeddedRoots() {
 		certPath := filepath.Join(agentDir, root.FileName)
-		if err := os.WriteFile(certPath, root.PEM, 0644); err != nil {
+		if err := os.WriteFile(certPath, root.PEM, 0644); err != nil { //nolint:gosec // G306: public CA certificate / repair script / Docker engine config, no secrets
 			fmt.Fprintf(os.Stderr, "warning: could not write code-signing root %q: %v\n", root.FileName, err)
 			continue
 		}
@@ -166,7 +166,7 @@ func serviceInstall(args []string) error {
 	}
 
 	repairCmd := filepath.Join(opts.AgentDir, "repair.cmd")
-	err = os.WriteFile(repairCmd, []byte(repairCmdContent(opts.AgentDir)), 0644)
+	err = os.WriteFile(repairCmd, []byte(repairCmdContent(opts.AgentDir)), 0644) //nolint:gosec // G306: public CA certificate / repair script / Docker engine config, no secrets
 	if err != nil {
 		return fmt.Errorf("failed to write repair.cmd: %w", err)
 	}
@@ -175,11 +175,11 @@ func serviceInstall(args []string) error {
 	if err != nil {
 		return fmt.Errorf("failed to connect to the service manager: %w", err)
 	}
-	defer m.Disconnect()
+	defer func() { _ = m.Disconnect() }()
 
 	existing, err := m.OpenService(serviceName)
 	if err == nil {
-		existing.Close()
+		_ = existing.Close()
 		return fmt.Errorf("service %q is already installed — run 'reagent service uninstall' first", serviceName)
 	}
 
@@ -193,7 +193,7 @@ func serviceInstall(args []string) error {
 	if err != nil {
 		return fmt.Errorf("failed to create the service: %w", err)
 	}
-	defer service.Close()
+	defer func() { _ = service.Close() }()
 
 	// From here on the service exists and can run. The remaining steps only harden it, so a
 	// failure is a warning: leaving a freshly registered device offline because a resilience
@@ -345,13 +345,13 @@ func serviceUninstall() error {
 	if err != nil {
 		return fmt.Errorf("failed to connect to the service manager: %w", err)
 	}
-	defer m.Disconnect()
+	defer func() { _ = m.Disconnect() }()
 
 	service, err := m.OpenService(serviceName)
 	if err != nil {
 		return fmt.Errorf("service %q is not installed", serviceName)
 	}
-	defer service.Close()
+	defer func() { _ = service.Close() }()
 
 	// Recover the agent dir from the baked ImagePath before deleting, so the
 	// dir-scoped side effects (Defender exclusion, cert file) can be reversed.
@@ -455,13 +455,13 @@ func serviceControl(action func(*mgr.Service) error) error {
 	if err != nil {
 		return fmt.Errorf("failed to connect to the service manager: %w", err)
 	}
-	defer m.Disconnect()
+	defer func() { _ = m.Disconnect() }()
 
 	service, err := m.OpenService(serviceName)
 	if err != nil {
 		return fmt.Errorf("service %q is not installed", serviceName)
 	}
-	defer service.Close()
+	defer func() { _ = service.Close() }()
 
 	return action(service)
 }
@@ -499,11 +499,11 @@ func findExistingAgentDirs() []string {
 // installed at all.
 func dockerDaemonJSONPath() (string, error) {
 	desktopExe := filepath.Join(os.Getenv("ProgramFiles"), "Docker", "Docker", "Docker Desktop.exe")
-	_, desktopErr := os.Stat(desktopExe)
+	_, desktopErr := os.Stat(desktopExe) //nolint:gosec // G703: paths from the installer layout and Program Files, not remote input
 
 	if desktopErr != nil {
 		engineDir := filepath.Join(os.Getenv("ProgramData"), "docker")
-		if _, err := os.Stat(engineDir); err == nil {
+		if _, err := os.Stat(engineDir); err == nil { //nolint:gosec // G703: paths from the installer layout and Program Files, not remote input
 			return filepath.Join(engineDir, "config", "daemon.json"), nil
 		}
 	}
@@ -553,7 +553,7 @@ func ensureDockerInsecureRegistries(flockPath string) error {
 	if err != nil {
 		return err
 	}
-	err = os.WriteFile(daemonPath, merged, 0644)
+	err = os.WriteFile(daemonPath, merged, 0644) //nolint:gosec // G306: public CA certificate / repair script / Docker engine config, no secrets
 	if err != nil {
 		return err
 	}
@@ -614,7 +614,7 @@ func ensureDockerCredentialStore(flockPath string) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(configPath, merged, 0600)
+	return os.WriteFile(configPath, merged, 0600) //nolint:gosec // G703: paths from the installer layout and Program Files, not remote input
 }
 
 // setServiceProxy writes the proxy into the service's Environment registry
@@ -630,13 +630,13 @@ func setServiceProxy(cfg proxyConfig) error {
 	if err != nil {
 		return err
 	}
-	defer key.Close()
+	defer func() { _ = key.Close() }()
 
 	return key.SetStringsValue("Environment", cfg.environmentEntries())
 }
 
 func runCommand(name string, args ...string) error {
-	output, err := exec.Command(name, args...).CombinedOutput()
+	output, err := exec.Command(name, args...).CombinedOutput() //nolint:gosec // G204: fixed Windows service/registry tools chosen by the installer
 	if err != nil {
 		return fmt.Errorf("%s %s: %v: %s", name, strings.Join(args, " "), err, strings.TrimSpace(string(output)))
 	}
@@ -660,12 +660,12 @@ func copyFileIfDifferent(src string, dst string) error {
 	if err != nil {
 		return err
 	}
-	defer source.Close()
+	defer func() { _ = source.Close() }()
 
 	// Write to a temp name first so a torn copy never leaves a half-written
 	// file at the final path.
 	tmp := dst + ".tmp"
-	destination, err := os.OpenFile(tmp, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0755)
+	destination, err := os.OpenFile(tmp, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0755) //nolint:gosec // G302: installed agent executable, must be executable
 	if err != nil {
 		return err
 	}
@@ -673,11 +673,11 @@ func copyFileIfDifferent(src string, dst string) error {
 	_, err = io.Copy(destination, source)
 	closeErr := destination.Close()
 	if err != nil {
-		os.Remove(tmp)
+		_ = os.Remove(tmp)
 		return err
 	}
 	if closeErr != nil {
-		os.Remove(tmp)
+		_ = os.Remove(tmp)
 		return closeErr
 	}
 

@@ -32,7 +32,7 @@ func SystemEnv(version string, logf func(format string, args ...any)) Env {
 }
 
 func systemctl(args ...string) error {
-	out, err := exec.Command("systemctl", args...).CombinedOutput()
+	out, err := exec.Command("systemctl", args...).CombinedOutput() //nolint:gosec // G204: fixed systemctl invocations with unit names from the agent layout
 	if err != nil {
 		return fmt.Errorf("systemctl %s: %w: %s", strings.Join(args, " "), err, strings.TrimSpace(string(out)))
 	}
@@ -40,7 +40,7 @@ func systemctl(args ...string) error {
 }
 
 func mainPID(unit string) (int, error) {
-	out, err := exec.Command("systemctl", "show", "--property=MainPID", "--value", unit).Output()
+	out, err := exec.Command("systemctl", "show", "--property=MainPID", "--value", unit).Output() //nolint:gosec // G204: fixed systemctl invocations with unit names from the agent layout
 	if err != nil {
 		return 0, fmt.Errorf("systemctl show %s: %w", unit, err)
 	}
@@ -48,7 +48,7 @@ func mainPID(unit string) (int, error) {
 }
 
 func unitLoaded(unit string) bool {
-	out, err := exec.Command("systemctl", "show", "--property=LoadState", "--value", unit).Output()
+	out, err := exec.Command("systemctl", "show", "--property=LoadState", "--value", unit).Output() //nolint:gosec // G204: fixed systemctl invocations with unit names from the agent layout
 	return err == nil && strings.TrimSpace(string(out)) == "loaded"
 }
 
@@ -59,7 +59,7 @@ func mountPoints() ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 	var mounts []string
 	scanner := bufio.NewScanner(file)
 	scanner.Buffer(make([]byte, 64<<10), 1<<20)

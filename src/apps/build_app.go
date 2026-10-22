@@ -16,7 +16,8 @@ import (
 	"reagent/tunnel"
 	"strings"
 
-	"github.com/docker/docker/api/types"
+	dockerbuild "github.com/docker/docker/api/types/build"
+
 	"github.com/rs/zerolog/log"
 )
 
@@ -224,7 +225,13 @@ func (sm *StateMachine) SetupComposeFiles(payload common.TransitionPayload, app 
 		}
 	}
 
-	err = os.WriteFile(dotEnvFilePath, []byte(dotEnvFileContents), os.ModePerm)
+	// 0600: the .env carries the app's parameters, including values marked
+	// secret; only docker compose (root) reads it. WriteFile keeps the mode of
+	// an existing file, hence the explicit chmod for files from older agents.
+	err = os.WriteFile(dotEnvFilePath, []byte(dotEnvFileContents), 0600)
+	if err == nil {
+		err = os.Chmod(dotEnvFilePath, 0600)
+	}
 	if err != nil {
 		return "", err
 	}
@@ -249,7 +256,7 @@ func (sm *StateMachine) SetupComposeFiles(payload common.TransitionPayload, app 
 		}
 	}
 
-	err = os.WriteFile(dockerComposeFilePath, dockerComposeJSONString, os.ModePerm)
+	err = os.WriteFile(dockerComposeFilePath, dockerComposeJSONString, os.ModePerm) //nolint:gosec // G306: the app developer's compose file plus an env_file reference; parameter values live in the 0600 .env
 	if err != nil {
 		return "", err
 	}
@@ -406,7 +413,7 @@ func (sm *StateMachine) buildDevApp(payload common.TransitionPayload, app *commo
 	// this ensures that the dev release will be set to exists = true
 	// prod ready builds will not be set to exists until after they are pushed
 	app.ReleaseBuild = releaseBuild
-	buildOptions := types.ImageBuildOptions{
+	buildOptions := dockerbuild.ImageBuildOptions{
 		Tags:       []string{payload.RegistryImageName.Dev},
 		Dockerfile: dockerFileName,
 		BuildID:    common.BuildDockerBuildID(app.AppKey, app.AppName),

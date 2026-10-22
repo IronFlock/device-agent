@@ -9,16 +9,16 @@ All recipes live in the repo-root `Justfile` and run from `src/`:
 
 | Command | What it does |
 |---|---|
-| `just test` | Unit tests, fast (`go test -short ./...`). Integration-tagged tests are excluded. |
+| `just test` | Unit tests as CI runs them (`-race -shuffle=on -count=1`). Integration-tagged tests are excluded. |
+| `just test-short` | Unit tests, fast (`go test -short ./...`), for quick iteration. |
 | `just test-integration` | Integration tests (`-tags integration`). Need external resources — see below. |
 | `just test-coverage` | Unit tests + HTML coverage report at `src/coverage.html`. |
-| `just test-race` | Unit tests under the race detector. |
 | `just test-generate-mocks` | Regenerate the mockery mocks (see below). |
 
-`download-frpc` is a prerequisite of the test recipes: `./...` compiles the
+`build-frpc` is a prerequisite of the test recipes: `./...` compiles the
 `api` and `system` packages, which `//go:embed` the frpc binary, so the build
-fails without `src/embedded/frpc_binary`. The recipe copies it from the local
-cache (`.cache/frp`).
+fails without `src/embedded/frpc_binary`. The recipe builds frpc for this host
+from the `frp/` module (Go's build cache keeps repeated runs quick).
 
 ## Test doubles — where they live
 

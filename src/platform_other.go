@@ -34,7 +34,7 @@ func acquireSingleInstanceLock() error {
 		f, err := lockFile(path)
 		if err != nil {
 			for _, held := range singleInstanceLockFiles {
-				held.Close()
+				_ = held.Close()
 			}
 			singleInstanceLockFiles = nil
 			return err
@@ -49,18 +49,18 @@ func lockFile(path string) (*os.File, error) {
 	for {
 		// O_RDONLY is enough for flock(2) and keeps the file openable by any
 		// user regardless of which user created it (root service vs console).
-		f, err := os.OpenFile(path, os.O_RDONLY|os.O_CREATE, 0o644)
+		f, err := os.OpenFile(path, os.O_RDONLY|os.O_CREATE, 0o644) //nolint:gosec // G302: lock file, no content
 		if err != nil {
 			return nil, fmt.Errorf("cannot open the machine-wide agent lock %s: %w", path, err)
 		}
 
 		err = unix.Flock(int(f.Fd()), unix.LOCK_EX|unix.LOCK_NB)
 		if err == unix.EWOULDBLOCK {
-			f.Close()
+			_ = f.Close()
 			return nil, errAgentAlreadyRunning()
 		}
 		if err != nil {
-			f.Close()
+			_ = f.Close()
 			return nil, fmt.Errorf("cannot lock the machine-wide agent lock %s: %w", path, err)
 		}
 
@@ -74,7 +74,7 @@ func lockFile(path string) (*os.File, error) {
 			fdStat.Ino == pathStat.Ino && fdStat.Dev == pathStat.Dev {
 			return f, nil
 		}
-		f.Close()
+		_ = f.Close()
 	}
 }
 

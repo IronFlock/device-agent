@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"testing"
 
+	dockercontainer "github.com/docker/docker/api/types/container"
+
 	"reagent/common"
 	"reagent/container"
 	"reagent/errdefs"
@@ -16,7 +18,6 @@ import (
 	"reagent/testutil/fakes"
 	"reagent/testutil/mocks"
 
-	dockertypes "github.com/docker/docker/api/types"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
@@ -154,7 +155,7 @@ func TestRemoveProdApp(t *testing.T) {
 		// skipped entirely; only the image gets removed.
 		mc.EXPECT().
 			GetContainer(mock.Anything, payload.ContainerName.Prod).
-			Return(dockertypes.Container{}, notFoundErr()).
+			Return(dockercontainer.Summary{}, notFoundErr()).
 			Once()
 		mc.EXPECT().
 			RemoveImagesByName(mock.Anything, payload.RegistryImageName.Prod, mock.Anything).
@@ -187,7 +188,7 @@ func TestRemoveProdApp(t *testing.T) {
 
 		mc.EXPECT().
 			GetContainer(mock.Anything, payload.ContainerName.Prod).
-			Return(dockertypes.Container{ID: containerID}, nil).
+			Return(dockercontainer.Summary{ID: containerID}, nil).
 			Once()
 		mc.EXPECT().
 			RemoveContainerByID(mock.Anything, containerID, mock.Anything).
@@ -221,7 +222,7 @@ func TestRemoveProdApp(t *testing.T) {
 
 		mc.EXPECT().
 			GetContainer(mock.Anything, payload.ContainerName.Prod).
-			Return(dockertypes.Container{}, notFoundErr()).
+			Return(dockercontainer.Summary{}, notFoundErr()).
 			Once()
 		mc.EXPECT().
 			RemoveImagesByName(mock.Anything, payload.RegistryImageName.Prod, mock.Anything).
@@ -266,7 +267,7 @@ func TestStopApp(t *testing.T) {
 
 		mc.EXPECT().
 			GetContainer(mock.Anything, payload.ContainerName.Prod).
-			Return(dockertypes.Container{ID: containerID}, nil).
+			Return(dockercontainer.Summary{ID: containerID}, nil).
 			Once()
 		mc.EXPECT().
 			StopContainerByID(mock.Anything, containerID, mock.Anything).

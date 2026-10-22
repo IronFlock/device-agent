@@ -9,8 +9,10 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
-// FRP_VERSION must match the version used in RETunnel
-const FRP_VERSION = "0.71.0"
+// FRP_VERSION is the frpc version built from the frp/ module (frp/go.mod).
+// It must match the tunnel server's frp version (scripts/check-frp-version.sh
+// checks this repository; the tunnel repository is kept equal by hand).
+const FRP_VERSION = "0.71.1"
 
 // frpcBinary holds the embedded frpc binary for the target platform
 // The actual binary path is determined at build time based on GOOS/GOARCH
@@ -41,7 +43,7 @@ func ExtractFrpc(targetPath string) error {
 	}
 
 	// Write binary to file
-	if err := os.WriteFile(targetPath, data, 0755); err != nil {
+	if err := os.WriteFile(targetPath, data, 0755); err != nil { //nolint:gosec // G306: frpc executable, must be executable
 		return fmt.Errorf("failed to write frpc binary: %w", err)
 	}
 

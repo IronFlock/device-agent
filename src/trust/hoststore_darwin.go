@@ -21,7 +21,7 @@ func hostRootDERs() ([][]byte, error) {
 
 	var ders [][]byte
 	for _, keychain := range keychains {
-		out, err := exec.CommandContext(ctx, "security", "find-certificate", "-a", "-p", keychain).Output()
+		out, err := exec.CommandContext(ctx, "security", "find-certificate", "-a", "-p", keychain).Output() //nolint:gosec // G204: macOS security tool with the fixed system keychain paths
 		if err != nil {
 			continue
 		}

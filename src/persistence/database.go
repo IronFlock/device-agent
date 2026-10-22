@@ -243,18 +243,18 @@ func (ast *AppStateDatabase) GetAppState(appKey uint64, stage common.Stage) (*co
 	hasRow := rows.Next()
 	if !hasRow {
 		if err != nil {
-			rows.Close()
+			_ = rows.Close()
 			return &common.App{}, err
 		}
 
-		rows.Close()
+		_ = rows.Close()
 		return nil, nil
 	}
 
 	app := &common.App{}
 	err = rows.Scan(&app.AppName, &app.AppKey, &app.Version, &app.ReleaseKey, &app.Stage, &app.CurrentState, &app.LastUpdated)
 	if err != nil {
-		rows.Close()
+		_ = rows.Close()
 		return &common.App{}, err
 	}
 
@@ -323,7 +323,7 @@ func (ast *AppStateDatabase) insertAppState(app *common.App) (common.Timestamp, 
 		return "", err
 	}
 
-	defer insertStatement.Close()
+	defer func() { _ = insertStatement.Close() }()
 
 	timestamp := time.Now().Format(time.RFC3339)
 
@@ -358,7 +358,7 @@ func (ast *AppStateDatabase) GetRequestedStates() ([]common.TransitionPayload, e
 		return nil, err
 	}
 
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	payloads := []common.TransitionPayload{}
 	for rows.Next() {
@@ -573,13 +573,13 @@ func (ast *AppStateDatabase) BulkUpsertRequestedStateChanges(payloads []common.T
 	for _, payload := range payloads {
 		upsertStatement, err := tx.Prepare(QueryUpsertRequestedStateEntry) // Prepare statement.
 		if err != nil {
-			tx.Rollback()
+			_ = tx.Rollback()
 			return err
 		}
 
 		environmentsJSONBytes, err := json.Marshal(payload.EnvironmentVariables)
 		if err != nil {
-			tx.Rollback()
+			_ = tx.Rollback()
 			return err
 		}
 
@@ -587,7 +587,7 @@ func (ast *AppStateDatabase) BulkUpsertRequestedStateChanges(payloads []common.T
 
 		environmentTemplateJSONBytes, err := json.Marshal(payload.EnvironmentTemplate)
 		if err != nil {
-			tx.Rollback()
+			_ = tx.Rollback()
 			return err
 		}
 
@@ -595,7 +595,7 @@ func (ast *AppStateDatabase) BulkUpsertRequestedStateChanges(payloads []common.T
 
 		portsJSONBytes, err := json.Marshal(payload.Ports)
 		if err != nil {
-			tx.Rollback()
+			_ = tx.Rollback()
 			return err
 		}
 
@@ -603,7 +603,7 @@ func (ast *AppStateDatabase) BulkUpsertRequestedStateChanges(payloads []common.T
 
 		dockerComposeJSONBytes, err := json.Marshal(payload.DockerCompose)
 		if err != nil {
-			tx.Rollback()
+			_ = tx.Rollback()
 			return err
 		}
 
@@ -611,7 +611,7 @@ func (ast *AppStateDatabase) BulkUpsertRequestedStateChanges(payloads []common.T
 
 		newDockerComposeJSONBytes, err := json.Marshal(payload.NewDockerCompose)
 		if err != nil {
-			tx.Rollback()
+			_ = tx.Rollback()
 			return err
 		}
 
@@ -623,7 +623,7 @@ func (ast *AppStateDatabase) BulkUpsertRequestedStateChanges(payloads []common.T
 		)
 
 		if err != nil {
-			tx.Rollback()
+			_ = tx.Rollback()
 			return err
 		}
 	}
@@ -637,7 +637,7 @@ func (ast *AppStateDatabase) UpsertRequestedStateChange(payload common.Transitio
 		return err
 	}
 
-	defer upsertStatement.Close()
+	defer func() { _ = upsertStatement.Close() }()
 
 	// if the payload we received from the backend/database does not include a current state
 	// // TODO: test if this is still relevant --> I don't think so since we always send full state now
@@ -708,7 +708,7 @@ func (ast *AppStateDatabase) ClearAllLogHistory(appName string, appKey uint64, s
 		return err
 	}
 
-	defer updateStatement.Close()
+	defer func() { _ = updateStatement.Close() }()
 
 	_, err = updateStatement.Exec(string(logsBytes), appName, appKey, stage)
 	if err != nil {
@@ -733,26 +733,26 @@ func (ast *AppStateDatabase) UpsertLogHistory(appName string, appKey uint64, sta
 
 	upsertStatement, err := tx.Prepare(QueryUpsertLogHistoryEntry)
 	if err != nil {
-		tx.Rollback()
+		_ = tx.Rollback()
 		return err
 	}
 
 	_, err = upsertStatement.Exec(appName, appKey, stage, "APP", logsString)
 	if err != nil {
-		tx.Rollback()
+		_ = tx.Rollback()
 		return err
 	}
 
 	// since we don't have a logtype anymore, have to update all logtypes...
 	updateStatement, err := tx.Prepare(QueryUpdateLogHistoryEntries)
 	if err != nil {
-		tx.Rollback()
+		_ = tx.Rollback()
 		return err
 	}
 
 	_, err = updateStatement.Exec(logsString, appName, appKey, stage)
 	if err != nil {
-		tx.Rollback()
+		_ = tx.Rollback()
 		return err
 	}
 
@@ -807,7 +807,7 @@ func (ast *AppStateDatabase) updateDeviceState(newStatus messenger.DeviceStatus,
 		return err
 	}
 
-	defer selectStatement.Close()
+	defer func() { _ = selectStatement.Close() }()
 
 	rows, err := selectStatement.Query()
 	if err != nil {
@@ -908,7 +908,7 @@ func (ast *AppStateDatabase) DeleteAppState(appKey uint64, stage common.Stage) e
 	if err != nil {
 		return err
 	}
-	defer deleteStatement.Close()
+	defer func() { _ = deleteStatement.Close() }()
 
 	_, err = deleteStatement.Exec(appKey, stage)
 	if err != nil {
@@ -924,7 +924,7 @@ func (ast *AppStateDatabase) DeleteRequestedState(appKey uint64, stage common.St
 	if err != nil {
 		return err
 	}
-	defer deleteStatement.Close()
+	defer func() { _ = deleteStatement.Close() }()
 
 	_, err = deleteStatement.Exec(appKey, stage)
 	if err != nil {

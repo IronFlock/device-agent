@@ -33,7 +33,7 @@ import (
 // device.f_authenticate_userapp, which recomputes the same secret to verify
 // the CRA signature. Both sides HMAC over the UTF-8 bytes of the stored
 // base64 key string itself (no base64-decode round trip).
-const appCredMessagePrefix = "ironflock/app-cred/v1"
+const appCredMessagePrefix = "ironflock/app-cred/v1" //nolint:gosec // G101: a message prefix, not a credential
 
 // appCredentialAuthID builds the wire authid. The epoch travels inside it
 // because the router hands the authenticator exactly one secret back, so a

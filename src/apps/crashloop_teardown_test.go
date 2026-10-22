@@ -4,9 +4,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/docker/docker/api/types/container"
+
 	"reagent/common"
 
-	dockertypes "github.com/docker/docker/api/types"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
@@ -107,7 +108,7 @@ func TestCrashLoopWakeDropsStaleRetryAndRunsTheNewTeardown(t *testing.T) {
 	mt.EXPECT().GetState().Return(nil, nil).Maybe()
 	mc.EXPECT().
 		GetContainer(mock.Anything, captured.ContainerName.Prod).
-		Return(dockertypes.Container{}, notFoundErr()).
+		Return(container.Summary{}, notFoundErr()).
 		Once()
 	// The wake re-drives with a payload rebuilt from the requested-state row,
 	// whose registry image name is config-derived — not the hand-set fixture
@@ -181,7 +182,7 @@ func TestTeardownRequestWaitsForTheInFlightTransition(t *testing.T) {
 	mt.EXPECT().GetState().Return(nil, nil).Maybe()
 	mc.EXPECT().
 		GetContainer(mock.Anything, uninstall.ContainerName.Prod).
-		Return(dockertypes.Container{}, notFoundErr()).
+		Return(container.Summary{}, notFoundErr()).
 		Once()
 	mc.EXPECT().
 		RemoveImagesByName(mock.Anything, uninstall.RegistryImageName.Prod, mock.Anything).
@@ -256,7 +257,7 @@ func TestUninstallDuringDownloadRunsFullTeardown(t *testing.T) {
 	// ...and must then run the full non-compose PROD uninstall.
 	mc.EXPECT().
 		GetContainer(mock.Anything, uninstall.ContainerName.Prod).
-		Return(dockertypes.Container{}, notFoundErr()).
+		Return(container.Summary{}, notFoundErr()).
 		Once()
 	mc.EXPECT().
 		RemoveImagesByName(mock.Anything, uninstall.RegistryImageName.Prod, mock.Anything).
@@ -289,7 +290,7 @@ func TestUninstallDuringBuildRunsFullTeardown(t *testing.T) {
 	mc.EXPECT().CancelStream(mock.Anything).Return(nil).Once()
 	mc.EXPECT().
 		GetContainer(mock.Anything, uninstall.ContainerName.Dev).
-		Return(dockertypes.Container{}, notFoundErr()).
+		Return(container.Summary{}, notFoundErr()).
 		Once()
 	mc.EXPECT().
 		RemoveImagesByName(mock.Anything, uninstall.RegistryImageName.Dev, mock.Anything).

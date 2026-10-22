@@ -183,7 +183,7 @@ func (c proxyConfig) configured() bool {
 }
 
 // environmentEntries renders the REG_MULTI_SZ body for the service key.
-func (c proxyConfig) environmentEntries() []string {
+func (c proxyConfig) environmentEntries() []string { //nolint:unused // used by the Windows service installer (servicecmd_windows.go)
 	return []string{
 		"HTTP_PROXY=" + c.HTTP,
 		"HTTPS_PROXY=" + c.HTTPS,

@@ -223,12 +223,16 @@ func TestFrpcVerifiesTunnelServerCertificate(t *testing.T) {
 
 			// Same config, dialed at the listener. serverName stays
 			// app.ironflock.com, so what is verified is unchanged.
-			frpcConfig := *builder.yamlConfig
+			// A copy through YAML (the struct carries a mutex).
+			base, err := yaml.Marshal(builder.yamlConfig)
+			require.NoError(t, err)
+			frpcConfig := &FrpcYamlConfig{}
+			require.NoError(t, yaml.Unmarshal(base, frpcConfig))
 			frpcConfig.ServerAddr = "127.0.0.1"
 			frpcConfig.ServerPort = listener.Addr().(*net.TCPAddr).Port
 			frpcConfig.WebServer = nil
 			frpcConfig.Log = &LogConfig{To: "console", Level: "debug", MaxDays: 1}
-			data, err := yaml.Marshal(&frpcConfig)
+			data, err := yaml.Marshal(frpcConfig)
 			require.NoError(t, err)
 			require.NoError(t, os.WriteFile(builder.ConfigPath, data, 0o644))
 
@@ -508,4 +512,25 @@ func TestStartRebuildsTunnelCABundle(t *testing.T) {
 	require.NoError(t, m.Start())
 
 	assert.Contains(t, bundleSubjects(t, caPath), "ISRG Root X1")
+}
+
+// The frpc config carries the device's tunnel_proof, so it must not be
+// readable by other local users — also when an older agent left it 0644.
+func TestFrpcConfigIsOwnerOnly(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("unix permission bits are not meaningful on windows")
+	}
+	cloud := &config.ReswarmConfig{DeviceEndpointURL: "wss://cbw.ironflock.com/ws-re-dev", Environment: string(common.PRODUCTION), Secret: "s", DeviceKey: 7}
+	cfg := builderConfig(t, cloud)
+	builder := NewTunnelConfigBuilder(cfg)
+
+	info, err := os.Stat(builder.ConfigPath)
+	require.NoError(t, err)
+	assert.Equal(t, os.FileMode(0o600), info.Mode().Perm(), "new frpc config")
+
+	require.NoError(t, os.Chmod(builder.ConfigPath, 0o644))
+	builder.SaveConfig()
+	info, err = os.Stat(builder.ConfigPath)
+	require.NoError(t, err)
+	assert.Equal(t, os.FileMode(0o600), info.Mode().Perm(), "config left 0644 by an older agent")
 }

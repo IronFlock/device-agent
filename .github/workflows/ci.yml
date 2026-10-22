@@ -1,0 +1,119 @@
+# Gate (lint for Linux and Windows, unit tests under race + shuffle, cross-builds
+# of the agent with frpc built from source) from the shared IronFlock CI harness,
+# workflow lint, plus this repository's integration suite, coverage and native
+# Windows tests. `ci-ok` is the required check of the main-branch ruleset.
+#
+# Integration and coverage drive Docker and are environment-sensitive; they run
+# WITHOUT -race and self-skip when their resource (docker/dbus/frps) is absent.
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  gate:
+    uses: IronFlock/workflows/.github/workflows/go-gate.yml@v1
+    with:
+      working-directory: src
+      setup-recipe: build-frpc
+      # Supported edge platforms (macOS is a development platform only).
+      targets: |
+        linux/amd64
+        linux/arm64
+        linux/arm/7
+        linux/arm/6
+        windows/amd64
+      cross-build-command: scripts/build.sh src build "$TARGET"
+
+  workflows:
+    uses: IronFlock/workflows/.github/workflows/workflows-lint.yml@v1
+
+  integration:
+    runs-on: ubuntu-latest # GitHub-hosted ubuntu has Docker
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: src/go.mod
+          cache-dependency-path: |
+            src/go.sum
+            frp/go.sum
+      - uses: extractions/setup-just@53165ef7e734c5c07cb06b3c8e7b647c5aa16db3 # v4
+        with:
+          just-version: "1.59.0"
+      - run: just build-frpc
+      - name: integration suite (no race; self-skips frps/dbus)
+        run: cd src && go test -tags integration -count=1 ./...
+
+  coverage:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: src/go.mod
+          cache-dependency-path: |
+            src/go.sum
+            frp/go.sum
+      - uses: extractions/setup-just@53165ef7e734c5c07cb06b3c8e7b647c5aa16db3 # v4
+        with:
+          just-version: "1.59.0"
+      - run: just test-coverage-prod
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: coverage
+          path: src/coverage.out
+          if-no-files-found: warn
+
+  # Native Windows check for the Windows-service code paths (svc handler,
+  # installer CLI, self-update swap, ConPTY host terminal): the packages that
+  # carry windows build tags plus a full native build.
+  windows-unit:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: src/go.mod
+          cache-dependency-path: src/go.sum
+      - name: native build (all packages, windows tags active)
+        run: cd src && touch embedded/frpc_binary && go build ./...
+      - name: unit tests (service, self-update, codesign, tunnel, lifecycle, config, system, terminal)
+        run: cd src && go test -count=1 ./selfupdate/... ./codesign/... ./tunnel/... ./lifecycle/... ./config/... ./system/... ./terminal/... .
+
+  # The required check of the main-branch ruleset: green only when every job
+  # above succeeded (skipped or cancelled counts as failed).
+  ci-ok:
+    if: ${{ always() }}
+    needs: [gate, workflows, integration, coverage, windows-unit]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: all ci jobs succeeded
+        env:
+          RESULTS: ${{ join(needs.*.result, ' ') }}
+        run: |
+          echo "results: $RESULTS"
+          for r in $RESULTS; do [ "$r" = success ] || exit 1; done

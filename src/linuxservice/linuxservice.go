@@ -147,7 +147,7 @@ func WriteFileAtomic(path string, data []byte, mode os.FileMode) error {
 		err = os.Rename(tmp, path)
 	}
 	if err != nil {
-		os.Remove(tmp)
+		_ = os.Remove(tmp)
 		return err
 	}
 	if dir, err := os.Open(filepath.Dir(path)); err == nil {

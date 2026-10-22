@@ -50,7 +50,7 @@ func (fs *Filesystem) CancelFileTransfer(containerName string) {
 
 	fileTransfer.Canceled = true
 	if fileTransfer.File != nil {
-		fileTransfer.File.Close()
+		_ = fileTransfer.File.Close()
 	}
 }
 
@@ -60,7 +60,7 @@ func (fs *Filesystem) CleanupFailedTransfer(containerName string) {
 	fs.activeTransfersLock.Lock()
 	transfer := fs.activeTransfers[containerName]
 	if transfer != nil && transfer.File != nil {
-		transfer.File.Close()
+		_ = transfer.File.Close()
 	}
 	delete(fs.activeTransfers, containerName)
 	fs.activeTransfersLock.Unlock()
@@ -85,11 +85,11 @@ func (fs *Filesystem) Write(chunk FileChunk) error {
 
 		// Close any previous transfer file for the same container
 		if prev := fs.activeTransfers[chunk.ContainerName]; prev != nil && prev.File != nil {
-			prev.File.Close()
+			_ = prev.File.Close()
 		}
 
 		// O_TRUNC ensures old archive data is wiped atomically on open
-		f, err := os.OpenFile(filePath, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0644)
+		f, err := os.OpenFile(filePath, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0644) //nolint:gosec // G302: files a user transfers to the device for the device; same mode as before
 		if err != nil {
 			delete(fs.activeTransfers, chunk.ContainerName)
 			fs.activeTransfersLock.Unlock()
@@ -175,14 +175,14 @@ func decompressTgz(sourcePath string, targetPath string, targetFileName string) 
 		return err
 	}
 
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 
 	gzReader, err := gzip.NewReader(file)
 	if err != nil {
 		return err
 	}
 
-	defer gzReader.Close()
+	defer func() { _ = gzReader.Close() }()
 
 	tarReader := tar.NewReader(gzReader)
 
@@ -191,8 +191,8 @@ func decompressTgz(sourcePath string, targetPath string, targetFileName string) 
 	if err != nil {
 		return err
 	}
-	defer writer.Close()
+	defer func() { _ = writer.Close() }()
 
-	_, err = io.Copy(writer, tarReader)
+	_, err = io.Copy(writer, tarReader) //nolint:gosec // G110: the archive is a user-initiated transfer to this device; disk use is bounded by the device storage guard
 	return err
 }

@@ -91,7 +91,6 @@ func (so *StateObserver) superviseObserverSpawner() {
 
 			if recovering {
 				so.reconcileAfterDaemonRecovery()
-				recovering = false
 			}
 
 			err := <-spawnerErrC

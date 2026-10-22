@@ -11,12 +11,12 @@ import (
 	"path/filepath"
 	"reagent/common"
 	"reagent/config"
-	"reagent/messenger"
 	"reagent/trust"
 	"regexp"
 	"runtime"
 	"strconv"
 	"strings"
+	"sync"
 
 	"github.com/rs/zerolog/log"
 	"golang.org/x/net/http/httpproxy"
@@ -24,8 +24,7 @@ import (
 )
 
 type Frp struct {
-	Config      *config.Config
-	wampSession *messenger.WampSession
+	Config *config.Config
 }
 
 type TunnelConfig struct {
@@ -52,6 +51,13 @@ type TunnelConfig struct {
 }
 
 // YAML config structures matching frp v0.65.0 format
+// frpcConfigMu guards the frpc config's route fields (ServerPort,
+// Transport.Protocol/ProxyURL) and its marshalling in SaveConfig: the
+// capability probe reads the route while a client restart moves it
+// (useRoute). One agent runs one tunnel manager, so one lock suffices; it
+// lives outside the config struct because yaml reads that by reflection.
+var frpcConfigMu sync.Mutex
+
 type FrpcYamlConfig struct {
 	ServerAddr string     `yaml:"serverAddr"`
 	ServerPort int        `yaml:"serverPort"`
@@ -442,6 +448,8 @@ func initialize(cfg *config.Config) TunnelConfigBuilder {
 
 // route returns the route frpc's config currently carries.
 func (builder *TunnelConfigBuilder) route() tunnelRoute {
+	frpcConfigMu.Lock()
+	defer frpcConfigMu.Unlock()
 	route := tunnelRoute{Port: builder.yamlConfig.ServerPort}
 	if transport := builder.yamlConfig.Transport; transport != nil {
 		route.Protocol = transport.Protocol
@@ -454,9 +462,11 @@ func (builder *TunnelConfigBuilder) route() tunnelRoute {
 // frpc reads these settings only at startup — a reload applies proxies alone —
 // so a running client keeps its route until it is restarted.
 func (builder *TunnelConfigBuilder) useRoute(route tunnelRoute) {
+	frpcConfigMu.Lock()
 	builder.yamlConfig.ServerPort = route.Port
 	builder.yamlConfig.Transport.Protocol = route.Protocol
 	builder.yamlConfig.Transport.ProxyURL = route.ProxyURL
+	frpcConfigMu.Unlock()
 	builder.SaveConfig()
 }
 
@@ -800,13 +810,13 @@ func (builder *TunnelConfigBuilder) SetTunnelVariable(tunnelID string, key FrpcV
 				builder.yamlConfig.Proxies[i].SubDomain = value
 			case LOCAL_PORT:
 				var port int
-				fmt.Sscanf(value, "%d", &port)
+				_, _ = fmt.Sscanf(value, "%d", &port)
 				builder.yamlConfig.Proxies[i].LocalPort = port
 			case LOCAL_IP:
 				builder.yamlConfig.Proxies[i].LocalIP = value
 			case REMOTE_PORT:
 				var port int
-				fmt.Sscanf(value, "%d", &port)
+				_, _ = fmt.Sscanf(value, "%d", &port)
 				builder.yamlConfig.Proxies[i].RemotePort = port
 			}
 			return
@@ -878,7 +888,7 @@ func (builder *TunnelConfigBuilder) SetCommonVariable(key FrpcVariable, value st
 		builder.yamlConfig.ServerAddr = value
 	case SERVER_PORT:
 		var port int
-		fmt.Sscanf(value, "%d", &port)
+		_, _ = fmt.Sscanf(value, "%d", &port)
 		builder.yamlConfig.ServerPort = port
 	case ENALBE_TLS:
 		builder.yamlConfig.Transport.TLS.Enable = (value == "true")
@@ -886,7 +896,7 @@ func (builder *TunnelConfigBuilder) SetCommonVariable(key FrpcVariable, value st
 		builder.yamlConfig.WebServer.Addr = value
 	case ADMIN_PORT:
 		var port int
-		fmt.Sscanf(value, "%d", &port)
+		_, _ = fmt.Sscanf(value, "%d", &port)
 		builder.yamlConfig.WebServer.Port = port
 	default:
 		// Handle log and other settings
@@ -896,7 +906,7 @@ func (builder *TunnelConfigBuilder) SetCommonVariable(key FrpcVariable, value st
 			builder.yamlConfig.Log.Level = value
 		} else if key == "log_max_days" {
 			var days int
-			fmt.Sscanf(value, "%d", &days)
+			_, _ = fmt.Sscanf(value, "%d", &days)
 			builder.yamlConfig.Log.MaxDays = days
 		}
 	}
@@ -919,13 +929,22 @@ func (builder *TunnelConfigBuilder) SaveConfig() {
 	// Every config frpc reads must find the bundle it names, current.
 	builder.writeTunnelCA()
 
+	frpcConfigMu.Lock()
 	data, err := yaml.Marshal(builder.yamlConfig)
+	frpcConfigMu.Unlock()
 	if err != nil {
 		log.Error().Err(err).Msg("Failed to marshal frpc config to YAML")
 		return
 	}
 
-	err = os.WriteFile(builder.ConfigPath, data, 0644)
+	// 0600: the config carries the device's tunnel_proof, a static credential
+	// that authorizes tunnels in this device's name. Only frpc (root) reads it.
+	// WriteFile keeps the mode of an existing file, hence the explicit chmod
+	// for configs written by older agents with 0644.
+	err = os.WriteFile(builder.ConfigPath, data, 0600)
+	if err == nil {
+		err = os.Chmod(builder.ConfigPath, 0600)
+	}
 	if err != nil {
 		log.Error().Err(err).Msgf("Failed to write frpc config to %s", builder.ConfigPath)
 		return

@@ -20,7 +20,7 @@ type CrashLoop struct {
 }
 
 var (
-	jitterRand     = rand.New(rand.NewSource(time.Now().UnixNano()))
+	jitterRand     = rand.New(rand.NewSource(time.Now().UnixNano())) //nolint:gosec // G404: jitter for retry delays, not security relevant
 	jitterRandLock sync.Mutex
 )
 
@@ -150,7 +150,7 @@ func (clm *AppManager) crashLoopWake(crashTask *CrashLoop) {
 		}
 
 		carryPushOnlyFields(&rowPayload, crashTask.Payload)
-		clm.RequestAppState(rowPayload)
+		_ = clm.RequestAppState(rowPayload)
 		return
 	}
 

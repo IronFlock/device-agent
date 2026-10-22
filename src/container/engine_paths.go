@@ -261,7 +261,7 @@ func (c *Compose) engineComposeFile(ctx context.Context, dockerComposePath strin
 	enginePath := filepath.Join(composeDir, EngineComposeFileName)
 	current, err := os.ReadFile(enginePath)
 	if err != nil || string(current) != string(rewritten) {
-		err = os.WriteFile(enginePath, rewritten, 0644)
+		err = os.WriteFile(enginePath, rewritten, 0644) //nolint:gosec // G306: Docker engine configuration, no secrets, read by the Docker service
 		if err != nil {
 			log.Warn().Err(err).Msgf("could not write %s", enginePath)
 			return dockerComposePath

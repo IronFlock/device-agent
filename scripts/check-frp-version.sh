@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
-# Assert the FRP_VERSION pin agrees across every place it is declared in this
-# repo. frpc must be built/downloaded at one version; a drift silently ships a
-# client that can mismatch the frps server. REtunnel (Dockerfile, Justfile)
-# holds the server pin and MUST be kept equal by hand — this check cannot see
-# another repo.
+# Assert the frp version agrees across every place it is declared in this
+# repository: the frp/ module that builds frpc, the agent's runtime constant
+# (frpc update/extraction), and the Justfile. The tunnel repository holds the
+# server version (its frp/ module) and MUST be kept equal by hand — this check
+# cannot see another repository.
 set -euo pipefail
 
 # The recipe file is tracked as "Justfile"; resolve case-robustly so this works
@@ -18,17 +18,17 @@ else
 fi
 
 embedded=$(grep -oE 'FRP_VERSION = "[^"]+"' src/embedded/frpc.go | cut -d'"' -f2)
-buildsh=$(grep -oE 'FRP_VERSION="[^"]+"' scripts/build.sh | head -1 | cut -d'"' -f2)
+module=$(awk '$1 == "github.com/fatedier/frp" { sub(/^v/, "", $2); print $2 }' frp/go.mod)
 justf=$(grep -oE 'FRP_VERSION := "[^"]+"' "$justfile_path" | cut -d'"' -f2)
 
+echo "frp/go.mod:           $module"
 echo "src/embedded/frpc.go: $embedded"
-echo "scripts/build.sh:     $buildsh"
 echo "$justfile_path:             $justf"
 
-if [ "$embedded" != "$buildsh" ] || [ "$embedded" != "$justf" ]; then
-    echo "ERROR: FRP_VERSION pins disagree across the repo" >&2
+if [ -z "$module" ] || [ "$embedded" != "$module" ] || [ "$embedded" != "$justf" ]; then
+    echo "ERROR: frp versions disagree across the repo" >&2
     exit 1
 fi
 
-echo "OK: FRP_VERSION is $embedded everywhere in this repo"
-echo "REMINDER: REtunnel Dockerfile + Justfile must also be v$embedded"
+echo "OK: frp is $embedded everywhere in this repo"
+echo "REMINDER: the tunnel repository's frp/go.mod must also be v$embedded"

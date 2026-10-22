@@ -14,7 +14,6 @@ import (
 	"reagent/errdefs"
 	"runtime"
 	"strconv"
-	"strings"
 	"time"
 
 	"github.com/pkg/errors"
@@ -61,7 +60,7 @@ func ReadFileInTgz(tarPath string, fileToFind string) (*tar.Reader, error) {
 		return nil, err
 	}
 
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	gzf, err := gzip.NewReader(f)
 	if err != nil {
@@ -124,11 +123,6 @@ func GetTunnelBinaryPath(config *config.Config, binaryName string) string {
 	return filepath.Join(config.CommandLineArguments.AgentDir, binaryName)
 }
 
-func printCallBack(dp DownloadProgress) {
-	fmt.Printf("\r%s", strings.Repeat(" ", 35))
-	fmt.Printf("\rDownloading... %+v", dp)
-}
-
 // Downloads any data from a given URL to a given filePath. Progress is logged to CLI
 func DownloadURL(filePath string, url string, callback func(DownloadProgress)) error {
 	var currentLock *semaphore.Weighted
@@ -172,7 +166,7 @@ func DownloadURL(filePath string, url string, callback func(DownloadProgress)) e
 		return err
 	}
 
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	// A non-2xx body must never land on disk as the "binary": a 404 page has a
 	// Content-Length like any other response, and with the .sha256 sidecar
@@ -195,12 +189,12 @@ func DownloadURL(filePath string, url string, callback func(DownloadProgress)) e
 		return err
 	}
 
-	defer out.Close()
+	defer func() { _ = out.Close() }()
 
 	// copy the http body into the file
 	counter := &WriteCounter{callback: callback, Size: uint64(size), FilePath: filePath}
 	if _, err = io.Copy(out, io.TeeReader(resp.Body, counter)); err != nil {
-		out.Close() // Windows cannot remove an open file
+		_ = out.Close() // Windows cannot remove an open file
 		if removeErr := os.Remove(filePath); removeErr != nil {
 			log.Warn().Err(removeErr).Msgf("failed to remove partial download %s", filePath)
 		}

@@ -22,7 +22,8 @@ import (
 	"reagent/testutil/mocks"
 	"testing"
 
-	dockertypes "github.com/docker/docker/api/types"
+	dockercontainer "github.com/docker/docker/api/types/container"
+
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
@@ -44,7 +45,7 @@ func newSystem(cfg *config.Config) *system.System {
 func TestListContainersHandler(t *testing.T) {
 	t.Run("returns the container slice when privileged", func(t *testing.T) {
 		cont := mocks.NewContainer(t)
-		containers := []dockertypes.Container{
+		containers := []dockercontainer.Summary{
 			{ID: "abc123", Names: []string{"/app_one"}, Image: "img:1"},
 			{ID: "def456", Names: []string{"/app_two"}, Image: "img:2"},
 		}
@@ -60,7 +61,7 @@ func TestListContainersHandler(t *testing.T) {
 		require.NotNil(t, res)
 		require.Len(t, res.Arguments, 1)
 
-		got, ok := res.Arguments[0].([]dockertypes.Container)
+		got, ok := res.Arguments[0].([]dockercontainer.Summary)
 		require.True(t, ok)
 		assert.Equal(t, containers, got)
 	})

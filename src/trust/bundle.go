@@ -211,21 +211,21 @@ func writeFileAtomic(dir, name string, data []byte) (string, error) {
 	tmpName := tmp.Name()
 
 	if _, err := tmp.Write(data); err != nil {
-		tmp.Close()
-		os.Remove(tmpName)
+		_ = tmp.Close()
+		_ = os.Remove(tmpName)
 		return "", err
 	}
 	if err := tmp.Chmod(0o644); err != nil {
-		tmp.Close()
-		os.Remove(tmpName)
+		_ = tmp.Close()
+		_ = os.Remove(tmpName)
 		return "", err
 	}
 	if err := tmp.Close(); err != nil {
-		os.Remove(tmpName)
+		_ = os.Remove(tmpName)
 		return "", err
 	}
 	if err := os.Rename(tmpName, path); err != nil {
-		os.Remove(tmpName)
+		_ = os.Remove(tmpName)
 		return "", err
 	}
 	return path, nil
@@ -245,7 +245,7 @@ func endpointCADERs(endpointURL string) ([][]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 
 	state := conn.ConnectionState()
 	if len(state.VerifiedChains) > 0 && len(state.VerifiedChains[0]) > 1 {
@@ -334,7 +334,7 @@ func hostRootsFromFiles(bundles, dirs []string) ([][]byte, error) {
 	var ders [][]byte
 
 	for _, path := range bundles {
-		data, err := os.ReadFile(path)
+		data, err := os.ReadFile(path) //nolint:gosec // G703: paths of the platform's CA bundle locations
 		if err != nil {
 			continue
 		}
@@ -352,7 +352,7 @@ func hostRootsFromFiles(bundles, dirs []string) ([][]byte, error) {
 			if entry.IsDir() || isSameDirSymlink(dir, entry) {
 				continue
 			}
-			data, err := os.ReadFile(filepath.Join(dir, entry.Name()))
+			data, err := os.ReadFile(filepath.Join(dir, entry.Name())) //nolint:gosec // G703: paths of the platform's CA bundle locations
 			if err != nil {
 				continue
 			}

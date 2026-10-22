@@ -342,12 +342,12 @@ func silentFrpc(t *testing.T, m *FrpTunnelManager) {
 	t.Cleanup(func() { _ = m.Stop() })
 }
 
-func readFrpcYAML(t *testing.T, m *FrpTunnelManager) FrpcYamlConfig {
+func readFrpcYAML(t *testing.T, m *FrpTunnelManager) *FrpcYamlConfig {
 	t.Helper()
 	raw, err := os.ReadFile(m.configBuilder.ConfigPath)
 	require.NoError(t, err)
-	var written FrpcYamlConfig
-	require.NoError(t, yaml.Unmarshal(raw, &written))
+	written := &FrpcYamlConfig{}
+	require.NoError(t, yaml.Unmarshal(raw, written))
 	require.NotNil(t, written.Transport)
 	require.NotNil(t, written.Transport.TLS)
 	return written

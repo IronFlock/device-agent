@@ -1,88 +1,43 @@
-# CVE / dependency security screening for the reagent agent.
+# Security screening from the shared IronFlock CI harness: secrets, Go
+# dependencies (govulncheck on the code AND the embedded frpc via `just sarif`),
+# semgrep (IronFlock rules; gosec runs in `just lint`), Dockerfile
+# configuration, licences and SBOMs (`just sbom`). The agent ships as a bare
+# binary; its runtime image needs a prebuilt binary and is not scanned here.
+# See docs/SECURITY-SCANNING.md.
 #
-# Scope = the production artifact (the bare Go binary): our Go code + all module
-# dependencies + the embedded third-party frpc binary. The Docker images and the
-# edge host OS are intentionally out of scope (the agent ships as a bare binary
-# that runs directly on the device host). See docs/SECURITY-SCANNING.md.
-#
-# REPORT-ONLY: govulncheck SARIF is uploaded to the GitHub Security tab (Code
-# scanning) but nothing here fails the build. The weekly schedule re-scans
-# unchanged code so CVEs disclosed after the fact still surface.
+# Blocking: the `report` job fails on secrets, fixable high/critical
+# vulnerabilities, high misconfigurations, forbidden licences and semgrep
+# errors. Accepted findings live in security/vex.openvex.json,
+# .trivyignore.yaml and .gitleaks.toml, each with its reason.
 name: security
 
 on:
   pull_request:
+  push:
+    branches: [main]
   schedule:
-    # Mondays 06:17 UTC — catch CVEs newly disclosed against unchanged code.
+    # Mondays 06:17 UTC: catch CVEs newly disclosed against unchanged code.
     - cron: "17 6 * * 1"
   workflow_dispatch:
 
 permissions:
   contents: read
-  # Required to publish SARIF results to the Security tab (Code scanning).
-  # Note: on PRIVATE repos this needs GitHub Advanced Security; without it the
-  # upload steps no-op (continue-on-error) and the SARIF artifact + the log
-  # summary remain the fallback.
-  security-events: write
+
+concurrency:
+  group: security-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
-  govulncheck:
-    name: govulncheck (→ Security tab)
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v6
-      - uses: actions/setup-go@v6
-        with:
-          go-version-file: src/go.mod
-          cache-dependency-path: src/go.sum
-      - uses: extractions/setup-just@v4
-
-      # Generates build/sarif/govulncheck-{code,frpc}.sarif. `just sarif` runs
-      # `download-frpc` first (the source build pulls in //go:embed frpc_binary).
-      - name: Generate govulncheck SARIF
-        run: just sarif
-
-      - name: Summarize findings (log fallback)
-        if: always()
-        run: |
-          for f in build/sarif/*.sarif; do
-            echo "## $f"
-            echo "results: $(jq '[.runs[].results[]] | length' "$f")"
-            jq -r '.runs[].results[].ruleId' "$f" | sort -u | sed 's/^/  - /'
-          done
-
-      # Only the CODE SARIF goes to Code Scanning. The frpc binary SARIF has no
-      # source locations (Code Scanning requires one per result), so it is shipped
-      # as the log summary above + the artifact below, not the Security tab.
-      - name: Upload code SARIF → Security tab
-        if: always()
-        continue-on-error: true # no-op without Code scanning / GHAS
-        uses: github/codeql-action/upload-sarif@v4
-        with:
-          sarif_file: build/sarif/govulncheck-code.sarif
-          category: govulncheck-code
-
-      - name: Upload SARIF artifact (incl. frpc)
-        if: always()
-        uses: actions/upload-artifact@v7
-        with:
-          name: govulncheck-sarif
-          path: build/sarif/*.sarif
-          if-no-files-found: error
-
-  sbom:
-    name: SBOM (CycloneDX)
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v6
-      - uses: actions/setup-go@v6
-        with:
-          go-version-file: src/go.mod
-          cache-dependency-path: src/go.sum
-      - uses: extractions/setup-just@v4
-      - run: just sbom
-      - uses: actions/upload-artifact@v7
-        with:
-          name: sbom
-          path: build/sbom/*.cdx.json
-          if-no-files-found: error
+  security:
+    uses: IronFlock/workflows/.github/workflows/security.yml@v1
+    permissions:
+      contents: read
+      security-events: write
+    with:
+      working-directory: src
+      languages: go
+      semgrep-rulesets: ""
+      sarif-recipe: sarif
+      sbom-recipe: sbom
+      fail-on: secrets,vuln-critical,vuln-high,misconfig-high,license-forbidden,semgrep-error
+      code-scanning: false

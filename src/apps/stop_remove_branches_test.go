@@ -4,10 +4,11 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/docker/docker/api/types/container"
+
 	"reagent/common"
 	"reagent/testutil/builders"
 
-	dockertypes "github.com/docker/docker/api/types"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
@@ -32,7 +33,7 @@ func TestStopAppExtraBranches(t *testing.T) {
 
 		mc.EXPECT().
 			GetContainer(mock.Anything, payload.ContainerName.Dev).
-			Return(dockertypes.Container{ID: containerID}, nil).
+			Return(container.Summary{ID: containerID}, nil).
 			Once()
 		mc.EXPECT().
 			StopContainerByID(mock.Anything, containerID, mock.Anything).
@@ -77,7 +78,7 @@ func TestStopAppExtraBranches(t *testing.T) {
 		boom := errors.New("docker daemon down")
 		mc.EXPECT().
 			GetContainer(mock.Anything, payload.ContainerName.Prod).
-			Return(dockertypes.Container{}, boom).
+			Return(container.Summary{}, boom).
 			Once()
 
 		err := sm.stopApp(payload, app)
@@ -96,7 +97,7 @@ func TestStopAppExtraBranches(t *testing.T) {
 
 		mc.EXPECT().
 			GetContainer(mock.Anything, payload.ContainerName.Prod).
-			Return(dockertypes.Container{ID: containerID}, nil).
+			Return(container.Summary{ID: containerID}, nil).
 			Once()
 		mc.EXPECT().
 			StopContainerByID(mock.Anything, containerID, mock.Anything).
@@ -125,7 +126,7 @@ func TestStopAppExtraBranches(t *testing.T) {
 
 		mc.EXPECT().
 			GetContainer(mock.Anything, payload.ContainerName.Dev).
-			Return(dockertypes.Container{ID: containerID}, nil).
+			Return(container.Summary{ID: containerID}, nil).
 			Once()
 		mc.EXPECT().
 			StopContainerByID(mock.Anything, containerID, mock.Anything).
@@ -161,7 +162,7 @@ func TestRemoveAppExtraBranches(t *testing.T) {
 
 		mc.EXPECT().
 			GetContainer(mock.Anything, payload.ContainerName.Dev).
-			Return(dockertypes.Container{ID: containerID}, nil).
+			Return(container.Summary{ID: containerID}, nil).
 			Once()
 		mc.EXPECT().
 			RemoveContainerByID(mock.Anything, containerID, mock.Anything).
@@ -197,7 +198,7 @@ func TestRemoveAppExtraBranches(t *testing.T) {
 
 		mc.EXPECT().
 			GetContainer(mock.Anything, payload.ContainerName.Dev).
-			Return(dockertypes.Container{}, notFoundErr()).
+			Return(container.Summary{}, notFoundErr()).
 			Once()
 		mc.EXPECT().
 			RemoveImagesByName(mock.Anything, payload.RegistryImageName.Dev, mock.Anything).
@@ -224,7 +225,7 @@ func TestRemoveAppExtraBranches(t *testing.T) {
 
 		mc.EXPECT().
 			GetContainer(mock.Anything, payload.ContainerName.Prod).
-			Return(dockertypes.Container{ID: containerID}, nil).
+			Return(container.Summary{ID: containerID}, nil).
 			Once()
 		mc.EXPECT().
 			RemoveContainerByID(mock.Anything, containerID, mock.Anything).
@@ -251,7 +252,7 @@ func TestRemoveAppExtraBranches(t *testing.T) {
 		boom := errors.New("image removal failed")
 		mc.EXPECT().
 			GetContainer(mock.Anything, payload.ContainerName.Dev).
-			Return(dockertypes.Container{}, notFoundErr()).
+			Return(container.Summary{}, notFoundErr()).
 			Once()
 		mc.EXPECT().
 			RemoveImagesByName(mock.Anything, payload.RegistryImageName.Dev, mock.Anything).

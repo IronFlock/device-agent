@@ -554,8 +554,6 @@ func (e Env) disableMigrationUnit() {
 
 var newPaths = linuxservice.DefaultPaths()
 
-var legacyConfigFile = layout.LegacyAgentDir + "/device-config.flock"
-
 // in names a file of the new layout inside /opt/reagent, where it is created
 // so that the folder rename moves it into place.
 func in(name string) string { return filepath.Join(layout.LegacyAgentDir, name) }
@@ -1229,7 +1227,7 @@ func copyFile(src, dst string, mode os.FileMode) error {
 	if err != nil {
 		return err
 	}
-	defer in.Close()
+	defer func() { _ = in.Close() }()
 	tmp := dst + ".tmp"
 	out, err := os.OpenFile(tmp, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, mode)
 	if err != nil {
@@ -1249,7 +1247,7 @@ func copyFile(src, dst string, mode os.FileMode) error {
 		err = os.Rename(tmp, dst)
 	}
 	if err != nil {
-		os.Remove(tmp)
+		_ = os.Remove(tmp)
 	}
 	return err
 }

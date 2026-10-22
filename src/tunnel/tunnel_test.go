@@ -23,11 +23,11 @@ func init() {
 }
 
 // getTestAgentDir returns the appropriate agent directory for testing.
-// On Mac/Windows (development), it uses the embedded binary from download-frpc.
+// On Mac/Windows (development), it uses the embedded binary from `just build-frpc`.
 // On Linux (CI/production), it uses /opt/reagent.
 func getTestAgentDir() string {
 	if runtime.GOOS == "darwin" || runtime.GOOS == "windows" {
-		// For local development, use the embedded binary downloaded by `make download-frpc`
+		// For local development, use the embedded binary built by `just build-frpc`
 		// Find the src/embedded directory relative to this test file
 		_, filename, _, ok := runtime.Caller(0)
 		if !ok {

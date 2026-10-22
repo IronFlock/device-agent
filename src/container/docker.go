@@ -8,6 +8,10 @@ import (
 	"errors"
 	"fmt"
 
+	cerrdefs "github.com/containerd/errdefs"
+
+	dockerbuild "github.com/docker/docker/api/types/build"
+
 	"github.com/docker/docker/api/types/image"
 
 	"io"
@@ -23,7 +27,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/docker/docker/api/types"
 	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/api/types/events"
 	"github.com/docker/docker/api/types/filters"
@@ -195,19 +198,19 @@ func (docker *Docker) GetComposePublishedPorts(ctx context.Context, projectName 
 	return published, nil
 }
 
-func (docker *Docker) GetContainer(ctx context.Context, containerName string) (types.Container, error) {
+func (docker *Docker) GetContainer(ctx context.Context, containerName string) (container.Summary, error) {
 	filters := filters.NewArgs()
 	filters.Add("name", containerName)
 	containers, err := docker.client.ContainerList(ctx, container.ListOptions{All: true, Filters: filters})
 	if err != nil {
-		return types.Container{}, err
+		return container.Summary{}, err
 	}
 
 	if len(containers) > 0 {
 		return containers[0], nil
 	}
 
-	return types.Container{}, errdefs.ContainerNotFound(errors.New("container not found"))
+	return container.Summary{}, errdefs.ContainerNotFound(errors.New("container not found"))
 }
 
 func (docker *Docker) RemoveContainerByName(ctx context.Context, containerName string, options map[string]interface{}) error {
@@ -314,7 +317,7 @@ func (docker *Docker) GetImages(ctx context.Context, fullImageName string) ([]Im
 			Created:     image.Created,
 			Containers:  image.Containers,
 			SharedSize:  image.SharedSize,
-			VirtualSize: image.VirtualSize,
+			VirtualSize: image.Size, // Docker API >= 1.44 no longer sends VirtualSize; Size is the same total
 			ID:          image.ID,
 			Labels:      image.Labels,
 			Size:        image.Size,
@@ -351,7 +354,7 @@ func (docker *Docker) GetImage(ctx context.Context, fullImageName string, tag st
 		Created:     image.Created,
 		Containers:  image.Containers,
 		SharedSize:  image.SharedSize,
-		VirtualSize: image.VirtualSize,
+		VirtualSize: image.Size, // Docker API >= 1.44 no longer sends VirtualSize; Size is the same total
 		ID:          image.ID,
 		Labels:      image.Labels,
 		Size:        image.Size,
@@ -469,7 +472,7 @@ func (docker *Docker) ListImages(ctx context.Context, options map[string]interfa
 	if allKw != nil {
 		all, ok := allKw.(bool)
 		if !ok {
-			return nil, fmt.Errorf("Invalid type for 'all' option")
+			return nil, fmt.Errorf("invalid type for 'all' option")
 		}
 		rOptions.All = all
 	}
@@ -485,7 +488,7 @@ func (docker *Docker) ListImages(ctx context.Context, options map[string]interfa
 			Created:     image.Created,
 			Containers:  image.Containers,
 			SharedSize:  image.SharedSize,
-			VirtualSize: image.VirtualSize,
+			VirtualSize: image.Size, // Docker API >= 1.44 no longer sends VirtualSize; Size is the same total
 			ID:          image.ID,
 			Labels:      image.Labels,
 			Size:        image.Size,
@@ -497,14 +500,14 @@ func (docker *Docker) ListImages(ctx context.Context, options map[string]interfa
 	return imageResults, nil
 }
 
-func (c *Docker) dockerCommand(ctx context.Context, providedArgs ...string) (string, error) {
-	output, err := exec.CommandContext(ctx, "docker", providedArgs...).CombinedOutput()
-
-	return string(output), err
-}
-
+// Login runs `docker login` with the password on stdin: as an argument (-p)
+// it would be readable by every local user (ps, /proc/<pid>/cmdline) while
+// the command runs.
 func (c *Docker) Login(ctx context.Context, dockerRegistryURL string, username string, password string) (string, error) {
-	return c.dockerCommand(ctx, "login", dockerRegistryURL, "-u", username, "-p", password)
+	cmd := exec.CommandContext(ctx, "docker", "login", dockerRegistryURL, "-u", username, "--password-stdin") //nolint:gosec // G204: fixed docker CLI, registry and user from the platform's credentials
+	cmd.Stdin = strings.NewReader(password)
+	output, err := cmd.CombinedOutput()
+	return string(output), err
 }
 
 // A login that exceeds this deadline is SIGKILLed by CommandContext. A healthy
@@ -589,7 +592,7 @@ func (docker *Docker) Pull(ctx context.Context, imageName string, options PullOp
 		Password: options.AuthConfig.Password,
 	}
 
-	encodedJSON, err := json.Marshal(dockerAuthConfig)
+	encodedJSON, err := json.Marshal(dockerAuthConfig) //nolint:gosec // G117: registry auth header for the Docker API, never written to disk or logs
 	if err != nil {
 		return nil, err
 	}
@@ -598,7 +601,7 @@ func (docker *Docker) Pull(ctx context.Context, imageName string, options PullOp
 	reader, err := docker.client.ImagePull(ctx, imageName, image.PullOptions{RegistryAuth: authStr})
 	if err != nil {
 		if reader != nil {
-			reader.Close()
+			_ = reader.Close()
 		}
 
 		return nil, err
@@ -626,7 +629,7 @@ func (docker *Docker) Push(ctx context.Context, imageName string, options PushOp
 		Password: options.AuthConfig.Password,
 	}
 
-	encodedJSON, err := json.Marshal(dockerAuthConfig)
+	encodedJSON, err := json.Marshal(dockerAuthConfig) //nolint:gosec // G117: registry auth header for the Docker API, never written to disk or logs
 	if err != nil {
 		return nil, err
 	}
@@ -639,7 +642,7 @@ func (docker *Docker) Push(ctx context.Context, imageName string, options PushOp
 	reader, err := docker.client.ImagePush(ctx, imageName, pushOptions)
 	if err != nil {
 		if reader != nil {
-			reader.Close()
+			_ = reader.Close()
 		}
 
 		return nil, err
@@ -721,7 +724,7 @@ func (docker *Docker) Logs(ctx context.Context, containerName string, options co
 	reader, err := docker.client.ContainerLogs(ctx, containerName, containerOptions)
 	if err != nil {
 		if reader != nil {
-			reader.Close()
+			_ = reader.Close()
 		}
 
 		if strings.Contains(err.Error(), "No such container") {
@@ -886,7 +889,7 @@ func (docker *Docker) CreateContainer(ctx context.Context,
 	return resp.ID, nil
 }
 
-func (docker *Docker) GetContainers(ctx context.Context) ([]types.Container, error) {
+func (docker *Docker) GetContainers(ctx context.Context) ([]container.Summary, error) {
 	options := container.ListOptions{All: true}
 	return docker.client.ContainerList(ctx, options)
 }
@@ -894,7 +897,7 @@ func (docker *Docker) GetContainers(ctx context.Context) ([]types.Container, err
 func (docker *Docker) GetContainerState(ctx context.Context, containerName string) (ContainerState, error) {
 	res, err := docker.client.ContainerInspect(ctx, containerName)
 	if err != nil {
-		if client.IsErrNotFound(err) {
+		if cerrdefs.IsNotFound(err) {
 			return ContainerState{}, errdefs.ContainerNotFound(err)
 		}
 		return ContainerState{}, err
@@ -925,7 +928,7 @@ func (docker *Docker) GetContainerState(ctx context.Context, containerName strin
 func (docker *Docker) GetContainerPortBindings(ctx context.Context, containerName string) (map[string]uint64, error) {
 	res, err := docker.client.ContainerInspect(ctx, containerName)
 	if err != nil {
-		if client.IsErrNotFound(err) {
+		if cerrdefs.IsNotFound(err) {
 			return nil, errdefs.ContainerNotFound(err)
 		}
 		return nil, err
@@ -959,7 +962,7 @@ func (docker *Docker) GetContainerPortBindings(ctx context.Context, containerNam
 func (docker *Docker) GetContainerNetworkMode(ctx context.Context, containerName string) (string, error) {
 	res, err := docker.client.ContainerInspect(ctx, containerName)
 	if err != nil {
-		if client.IsErrNotFound(err) {
+		if cerrdefs.IsNotFound(err) {
 			return "", errdefs.ContainerNotFound(err)
 		}
 		return "", err
@@ -1112,7 +1115,7 @@ func (docker *Docker) RemoveImage(ctx context.Context, imageID string, options m
 	if forceKw != nil {
 		force, ok := forceKw.(bool)
 		if !ok {
-			return fmt.Errorf("Invalid type for 'force' option")
+			return fmt.Errorf("invalid type for 'force' option")
 		}
 		rOptions.Force = force
 	}
@@ -1120,7 +1123,7 @@ func (docker *Docker) RemoveImage(ctx context.Context, imageID string, options m
 	if pruneChildrenKw != nil {
 		pruneChildren, ok := pruneChildrenKw.(bool)
 		if !ok {
-			return fmt.Errorf("Invalid type for 'pruneChilderen' option")
+			return fmt.Errorf("invalid type for 'pruneChilderen' option")
 		}
 		rOptions.PruneChildren = pruneChildren
 	}
@@ -1233,7 +1236,7 @@ func (docker *Docker) Compose() *Compose {
 }
 
 // Build builds a Docker image using a tarfile as context
-func (docker *Docker) Build(ctx context.Context, compressedBuildFilesPath string, options types.ImageBuildOptions) (io.ReadCloser, error) {
+func (docker *Docker) Build(ctx context.Context, compressedBuildFilesPath string, options dockerbuild.ImageBuildOptions) (io.ReadCloser, error) {
 	dockerBuildContext, err := os.Open(compressedBuildFilesPath)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -1245,7 +1248,7 @@ func (docker *Docker) Build(ctx context.Context, compressedBuildFilesPath string
 	buildResponse, err := docker.client.ImageBuild(ctx, dockerBuildContext, options)
 	if err != nil {
 		if buildResponse.Body != nil {
-			buildResponse.Body.Close()
+			_ = buildResponse.Body.Close()
 		}
 
 		if strings.Contains(err.Error(), "the Dockerfile (Dockerfile) cannot be empty") {

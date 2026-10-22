@@ -43,8 +43,6 @@ type Compose struct {
 }
 
 type ComposeLog struct {
-	channel chan string
-	command *exec.Cmd
 }
 
 type ComposeBuildOptions struct {
@@ -347,7 +345,7 @@ func (c *Compose) startComposeCommand(ctx context.Context, dockerComposePath str
 		binary = "docker"
 	}
 
-	cmd := exec.CommandContext(ctx, binary, finalArgs...)
+	cmd := exec.CommandContext(ctx, binary, finalArgs...) //nolint:gosec // G204: fixed docker compose CLI; arguments are compose file paths and fixed flags, values as separate argv entries
 
 	var outputChan chan string
 	if streamed {
@@ -571,11 +569,7 @@ func composeStarted(statuses []ComposeStatus) (bool, error) {
 func IsComposeSupported() bool {
 	cmd := exec.Command("docker", "compose")
 	_, err := cmd.CombinedOutput()
-	if err != nil {
-		return false
-	}
-
-	return true
+	return err == nil
 }
 
 // Supported reports whether the docker compose CLI is available.
@@ -714,7 +708,7 @@ func (c *Compose) Logs(ctx context.Context, dockerComposePath string, query LogQ
 
 	args := append([]string{"compose", "-f", dockerComposePath}, query.ComposeArgs()...)
 
-	output, err := exec.CommandContext(ctx, binary, args...).CombinedOutput()
+	output, err := exec.CommandContext(ctx, binary, args...).CombinedOutput() //nolint:gosec // G204: fixed docker compose CLI; arguments are compose file paths and fixed flags, values as separate argv entries
 	if err != nil {
 		return nil, err
 	}
@@ -741,7 +735,7 @@ func (c *Compose) LogStream(dockerComposePath string) (chan string, error) {
 
 	// c.logStreamMapMutex.Unlock()
 
-	cmd := exec.Command("docker", "compose", "-f", dockerComposePath, "logs", "-f")
+	cmd := exec.Command("docker", "compose", "-f", dockerComposePath, "logs", "-f") //nolint:gosec // G204: fixed docker compose CLI; arguments are compose file paths and fixed flags, values as separate argv entries
 	cmdReader, err := cmd.StdoutPipe()
 	if err != nil {
 		return nil, err
@@ -819,7 +813,7 @@ func (c *Compose) Status(dockerComposePath string) ([]ComposeStatus, error) {
 
 	psArgs := append([]string{"compose"}, composeFileArgs(dockerComposePath)...)
 	psArgs = append(psArgs, "ps", "-a", "--format", "json")
-	cmd := exec.Command("docker", psArgs...)
+	cmd := exec.Command("docker", psArgs...) //nolint:gosec // G204: fixed docker compose CLI; arguments are compose file paths and fixed flags, values as separate argv entries
 	output, err := cmd.Output()
 	if err != nil {
 		// A failing compose command (e.g. the project does not exist yet) must

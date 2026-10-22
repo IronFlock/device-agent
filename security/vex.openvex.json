@@ -1,0 +1,33 @@
+{
+  "@context": "https://openvex.dev/ns/v0.2.0",
+  "@id": "https://github.com/IronFlock/device-agent/security/vex.openvex.json",
+  "author": "IronFlock",
+  "timestamp": "2026-10-22T00:00:00Z",
+  "version": 1,
+  "statements": [
+    {
+      "vulnerability": { "name": "GO-2026-4883", "aliases": ["CVE-2026-33997", "GHSA-pxq6-2prw-chj9"] },
+      "products": [{ "@id": "pkg:github/IronFlock/device-agent" }],
+      "status": "not_affected",
+      "justification": "vulnerable_code_not_in_execute_path",
+      "impact_statement": "Plugin privilege validation in the Docker daemon. The agent only uses the Docker API client (github.com/docker/docker/client); govulncheck reaches the module only through package initialisation. The fix exists only in the still-beta github.com/moby/moby/v2; migrate when it is stable (docs/SECURITY-SCANNING.md).",
+      "timestamp": "2026-10-22T00:00:00Z"
+    },
+    {
+      "vulnerability": { "name": "GO-2026-4887", "aliases": ["CVE-2026-34040", "GHSA-x744-4wpc-v9h2"] },
+      "products": [{ "@id": "pkg:github/IronFlock/device-agent" }],
+      "status": "not_affected",
+      "justification": "vulnerable_code_not_in_execute_path",
+      "impact_statement": "AuthZ plugin bypass in the Docker daemon's request handling. The agent only uses the Docker API client; govulncheck reaches the module only through package initialisation. The fix exists only in the still-beta github.com/moby/moby/v2; migrate when it is stable (docs/SECURITY-SCANNING.md).",
+      "timestamp": "2026-10-22T00:00:00Z"
+    },
+    {
+      "vulnerability": { "name": "GO-2026-5932" },
+      "products": [{ "@id": "pkg:github/IronFlock/device-agent" }],
+      "status": "not_affected",
+      "justification": "vulnerable_code_not_present",
+      "impact_statement": "golang.org/x/crypto/openpgp is not linked: frp does not import it. The embedded frpc is built stripped (like the upstream release), so govulncheck's binary mode cannot see which packages are linked and reports the whole module; an unstripped build from the same frp/ module shows the package as not reachable. Our own code: not reachable.",
+      "timestamp": "2026-10-22T00:00:00Z"
+    }
+  ]
+}
