@@ -198,7 +198,9 @@ if [[ "${#requests[@]}" -gt 0 && "$SIGNER" == kms ]]; then
     for request in "${requests[@]}"; do
         id=${request%% *}
         printf '%s' "${request#* }" | base64 -d > "$work/$id.message"
-        ${kms_env[@]+"${kms_env[@]}"} gcloud kms asymmetric-sign --quiet --version="$KMS_KEY_VERSION" --key="$KMS_KEY" \
+        # gcloud takes a full resource name only in --version; with --key as
+        # a path it asks for --location.
+        ${kms_env[@]+"${kms_env[@]}"} gcloud kms asymmetric-sign --quiet --version="$KMS_KEY/cryptoKeyVersions/$KMS_KEY_VERSION" \
             --input-file="$work/$id.message" --signature-file="$work/$id.raw" </dev/null
         # shellcheck disable=SC2086
         base64 < "$work/$id.raw" | tr -d '\n' | "$helper" sig-from-kms ${targets[id]} "${locals[id]}"
