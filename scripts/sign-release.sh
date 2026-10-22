@@ -1,36 +1,74 @@
 #!/usr/bin/env bash
-# Sign what agents are about to be offered, through OpenBao transit, right
-# before the version files flip. Run by `just promote` (and by
-# `just publish-version` / `just publish-latestVersions`), so promotion cannot
-# skip it; `just sign-release` runs it alone.
+# Sign what agents are about to be offered, right before the version files
+# flip. Run by the promote recipes (`promote-ci` in CI, `promote-bridge` and
+# the emergency `promote` by hand), so promotion cannot skip it;
+# `just sign-release` runs it alone.
 #
-# CI stages binaries WITHOUT signatures. The private key is the transit key
-# agent-update (ed25519, not exportable) and never leaves OpenBao. Signed here:
+# Two signers, neither key exportable (SIGNER):
+#   kms      Cloud KMS ironflock-release/agent-update (Ed25519). CI, after the
+#            bridge release: release.yml's promote job, which may use the key
+#            only as a tag run of device-agent's release workflow.
+#   openbao  OpenBao transit agent-update, through `kubectl exec` (needs the
+#            production cluster). The bridge release and emergencies only.
+#
+# CI stages binaries WITHOUT signatures. Signed here:
 #   - device-agent[.exe] of every version availableVersions.json names, all
 #     targets, in gs://ironflock-downloads/device-agent/;
 #   - frpc[.exe] of the FRP_VERSION this tree pins, in device-agent/frpc/;
-#   - the manifest: availableVersions.json plus issued_at, sealed into
-#     build/manifest.json (an updatesig envelope). `just publish-latestVersions`
-#     uploads it; 1.3.0+ agents trust no channel map without it.
+#   - the channel maps named in MANIFESTS: availableVersions.json plus
+#     issued_at, each sealed into build/<name> (an updatesig envelope) and
+#     signed as device-agent/<name>. `just publish-latestVersions` uploads
+#     them. manifest-v2.json is what agents read; manifest.json is frozen at
+#     the bridge release (only `promote-bridge` writes it).
 # --legacy <version> signs reagent[.exe] of that one version in the frozen
 # gs://re-agent tree instead (scripts/freeze-legacy.sh), and no manifest.
 #
 # For each object: download it, hash it here (the .sha256 sidecar is only
 # cross-checked, never trusted), build the message (`sign-update message`),
-# sign all messages in ONE kubectl exec session, turn each vault:vN:<sig> into
-# a .sig that must verify against the keys compiled into THIS tree, verify
-# every .sig once more, and only then upload. A published .sig that already
-# verifies is kept, so re-running is cheap and does not churn signatures.
+# sign it (openbao: all messages in ONE kubectl exec session, each
+# vault:vN:<sig> answer; kms: one asymmetric-sign call each), turn each
+# signature into a .sig that must verify against the keys compiled into THIS
+# tree, verify every .sig once more, and only then upload. A published .sig
+# that already verifies is kept, so re-running is cheap and does not churn
+# signatures (openbao: only one the OpenBao key made, so that the bridge
+# release verifies on agents that trust nothing else).
 #
-# Env: OPENBAO_KUBE_CONTEXT (default: gke_record-1283_europe-west1-b_ironflock-prod)
+# Env: SIGNER: kms or openbao (default: openbao)
+#      MANIFESTS: channel maps to seal (default: manifest-v2.json)
+#      KMS_KEY: the Cloud KMS key (default: the production key below)
+#      KMS_KEY_VERSION: its version (default: 1)
+#      KMS_CREDENTIALS: credential file for the KMS calls only (CI: the
+#        agent-signer identity; gsutil keeps the default credentials)
+#      OPENBAO_KUBE_CONTEXT (default: gke_record-1283_europe-west1-b_ironflock-prod)
 #      OPENBAO_TRANSIT_KEY_VERSION: sign with this key version (during a key
 #      rotation, until the fleet trusts the new one); default: the latest.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
 TRANSIT_KEY="agent-update"
+SIGNER="${SIGNER:-openbao}"
+KMS_KEY="${KMS_KEY:-projects/record-1283/locations/europe-west1/keyRings/ironflock-release/cryptoKeys/agent-update}"
+KMS_KEY_VERSION="${KMS_KEY_VERSION:-1}"
+MANIFESTS="${MANIFESTS:-manifest-v2.json}"
 MANIFEST_CONTEXT="device-agent-manifest:v1"
-MANIFEST_SUBJECT="device-agent/manifest.json"
+# The OpenBao key, as compiled into the agents before the bridge release. In
+# openbao mode an existing .sig is kept only if THIS key made it: the bridge
+# release must be verifiable by agents that trust nothing else.
+OPENBAO_PUBLIC_KEY="MKstV0PZ93scIuBhtM8DCq0SfbsZR9UU7P9E+621ftU="
+keep_key=()
+if [[ "$SIGNER" == openbao ]]; then
+    keep_key=(-public-key "$OPENBAO_PUBLIC_KEY")
+fi
+case "$SIGNER" in
+kms | openbao) ;;
+*) echo "SIGNER must be kms or openbao, not '$SIGNER'" >&2; exit 1 ;;
+esac
+for manifest_name in $MANIFESTS; do
+    case "$manifest_name" in
+    manifest.json | manifest-v2.json) ;;
+    *) echo "unknown manifest '$manifest_name' in MANIFESTS" >&2; exit 1 ;;
+    esac
+done
 
 if [[ "${1:-}" == "--legacy" ]]; then
     legacy=1
@@ -115,7 +153,7 @@ while IFS= read -r object; do
     # shellcheck disable=SC2086 # targets[n] is a flag list
     if gsutil -q stat "$object.sig" &&
         gsutil -q cp "$object.sig" "$local_copy.sig" &&
-        "$helper" verify ${targets[n]} "$local_copy" >/dev/null 2>&1; then
+        "$helper" verify ${keep_key[@]+"${keep_key[@]}"} ${targets[n]} "$local_copy" >/dev/null 2>&1; then
         echo "kept:   $object.sig (already verifies)"
     else
         rm -f "$local_copy.sig"
@@ -130,23 +168,42 @@ if [[ "$n" -eq 0 ]]; then
     exit 1
 fi
 
-# The manifest rides the same OpenBao session. Signed fresh every time: its
-# issued_at is the moment of promotion.
-manifest=-1
+# The channel maps ride the same signing session. Signed fresh every time:
+# their issued_at is the moment of promotion.
+manifest_ids=()
+manifest_names=()
 if [[ "$legacy" -eq 0 ]]; then
-    manifest=$n
-    mkdir -p "$work/$n"
-    jq -c --arg now "$(date -u +%Y-%m-%dT%H:%M:%SZ)" '{channels: ., issued_at: $now}' availableVersions.json \
-        > "$work/$n/manifest.payload.json"
-    objects[n]=""
-    locals[n]="$work/$n/manifest.payload.json"
-    targets[n]="-context $MANIFEST_CONTEXT -subject $MANIFEST_SUBJECT"
-    # shellcheck disable=SC2086
-    requests+=("$n $("$helper" message ${targets[n]} "${locals[n]}")")
-    n=$((n + 1))
+    issued_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+    for manifest_name in $MANIFESTS; do
+        mkdir -p "$work/$n"
+        jq -c --arg now "$issued_at" '{channels: ., issued_at: $now}' availableVersions.json \
+            > "$work/$n/manifest.payload.json"
+        objects[n]=""
+        locals[n]="$work/$n/manifest.payload.json"
+        targets[n]="-context $MANIFEST_CONTEXT -subject device-agent/$manifest_name"
+        # shellcheck disable=SC2086
+        requests+=("$n $("$helper" message ${targets[n]} "${locals[n]}")")
+        manifest_ids+=("$n")
+        manifest_names+=("$manifest_name")
+        n=$((n + 1))
+    done
 fi
 
-if [[ "${#requests[@]}" -gt 0 ]]; then
+if [[ "${#requests[@]}" -gt 0 && "$SIGNER" == kms ]]; then
+    echo "==> signing ${#requests[@]} object(s) with Cloud KMS $KMS_KEY v$KMS_KEY_VERSION"
+    kms_env=()
+    if [[ -n "${KMS_CREDENTIALS:-}" ]]; then
+        kms_env=(env "CLOUDSDK_AUTH_CREDENTIAL_FILE_OVERRIDE=$KMS_CREDENTIALS")
+    fi
+    for request in "${requests[@]}"; do
+        id=${request%% *}
+        printf '%s' "${request#* }" | base64 -d > "$work/$id.message"
+        ${kms_env[@]+"${kms_env[@]}"} gcloud kms asymmetric-sign --quiet --version="$KMS_KEY_VERSION" --key="$KMS_KEY" \
+            --input-file="$work/$id.message" --signature-file="$work/$id.raw" </dev/null
+        # shellcheck disable=SC2086
+        base64 < "$work/$id.raw" | tr -d '\n' | "$helper" sig-from-kms ${targets[id]} "${locals[id]}"
+    done
+elif [[ "${#requests[@]}" -gt 0 ]]; then
     echo "==> signing ${#requests[@]} object(s) with OpenBao transit key $TRANSIT_KEY${OPENBAO_TRANSIT_KEY_VERSION:+ v$OPENBAO_TRANSIT_KEY_VERSION}"
     printf '%s\n' "${requests[@]}" |
         scripts/openbao-admin.sh "$(cat scripts/openbao-transit-sign.sh)" "$TRANSIT_KEY" "${OPENBAO_TRANSIT_KEY_VERSION:-}" \
@@ -176,14 +233,16 @@ done
 
 for request in "${requests[@]}"; do
     i=${request%% *}
-    [[ "$i" -ne "$manifest" ]] || continue
+    [[ -n "${objects[i]}" ]] || continue
     gsutil -q -h "Cache-Control:public, max-age=0" cp "${locals[i]}.sig" "${objects[i]}.sig"
     echo "signed: ${objects[i]}.sig"
 done
 
-if [[ "$manifest" -ge 0 ]]; then
+for k in "${!manifest_ids[@]}"; do
+    i=${manifest_ids[k]}
+    name=${manifest_names[k]}
     mkdir -p build
-    "$helper" seal -context "$MANIFEST_CONTEXT" -subject "$MANIFEST_SUBJECT" "${locals[manifest]}" > build/manifest.json
-    echo "sealed: build/manifest.json ($(jq -c .channels "${locals[manifest]}")); publish-latestVersions uploads it"
-fi
-echo "==> $n object(s) signed for versions: $(echo $versions) and frpc $frp_version"
+    "$helper" seal -context "$MANIFEST_CONTEXT" -subject "device-agent/$name" "${locals[i]}" > "build/$name"
+    echo "sealed: build/$name ($(jq -c .channels "${locals[i]}")); publish-latestVersions uploads it"
+done
+echo "==> $n object(s) signed for versions: $(tr '\n' ' ' <<< "$versions")and frpc $frp_version"

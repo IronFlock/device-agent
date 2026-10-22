@@ -26,9 +26,14 @@ var currentTreeAgent = signedArtifact{
 
 func sealManifest(t *testing.T, priv ed25519.PrivateKey, channels map[string]string) []byte {
 	t.Helper()
+	return sealManifestAs(t, priv, agentManifestSubject, channels)
+}
+
+func sealManifestAs(t *testing.T, priv ed25519.PrivateKey, subject updatesig.Subject, channels map[string]string) []byte {
+	t.Helper()
 	payload, err := json.Marshal(agentManifest{Channels: channels, IssuedAt: "2026-10-18T12:00:00Z"})
 	require.NoError(t, err)
-	sig, err := updatesig.SignBytes(priv, agentManifestSubject, payload)
+	sig, err := updatesig.SignBytes(priv, subject, payload)
 	require.NoError(t, err)
 	file, err := updatesig.SealEnvelope(payload, sig)
 	require.NoError(t, err)
@@ -101,4 +106,71 @@ func TestMissingManifestFallsBackToTheLegacyTree(t *testing.T) {
 	require.NoError(t, err)
 	assert.True(t, result.DidUpdate)
 	assert.FileExists(t, legacy.installed(cfg))
+}
+
+// manifest-v2.json (signed in CI) wins over the frozen manifest.json.
+func TestManifestV2IsReadFirst(t *testing.T) {
+	pub, priv, err := ed25519.GenerateKey(rand.Reader)
+	require.NoError(t, err)
+	trustUpdateKey(t, pub)
+
+	origin := newUpdateOrigin(t)
+	origin.files["/"+agentTree+"/"+agentManifestV2Name] = sealManifestAs(t, priv, agentManifestV2Subject, map[string]string{"production": "1.4.0"})
+	origin.files["/"+agentTree+"/"+agentManifestName] = sealManifest(t, priv, map[string]string{"production": "1.3.5"})
+
+	sys, _ := newUpdateSystem(t, origin)
+	channels, source, err := sys.resolveAgentVersions()
+	require.NoError(t, err)
+	assert.False(t, source.legacy())
+	assert.Equal(t, "1.4.0", channels["production"])
+}
+
+// A mirror without manifest-v2.json (not synced yet) still serves the frozen
+// manifest.json, which keeps the agent on the bridge release.
+func TestMissingManifestV2FallsBackToManifest(t *testing.T) {
+	pub, priv, err := ed25519.GenerateKey(rand.Reader)
+	require.NoError(t, err)
+	trustUpdateKey(t, pub)
+
+	origin := newUpdateOrigin(t)
+	origin.files["/"+agentTree+"/"+agentManifestName] = sealManifest(t, priv, map[string]string{"production": "1.3.5"})
+
+	sys, _ := newUpdateSystem(t, origin)
+	channels, source, err := sys.resolveAgentVersions()
+	require.NoError(t, err)
+	assert.False(t, source.legacy())
+	assert.Equal(t, "1.3.5", channels["production"])
+}
+
+// A manifest-v2.json that does not verify is refused; it is never a reason to
+// read the older manifest.json.
+func TestBadManifestV2NeverFallsBack(t *testing.T) {
+	pub, priv, err := ed25519.GenerateKey(rand.Reader)
+	require.NoError(t, err)
+	trustUpdateKey(t, pub)
+	_, attacker, err := ed25519.GenerateKey(rand.Reader)
+	require.NoError(t, err)
+
+	origin := newUpdateOrigin(t)
+	origin.files["/"+agentTree+"/"+agentManifestV2Name] = sealManifestAs(t, attacker, agentManifestV2Subject, map[string]string{"production": "6.6.6"})
+	origin.files["/"+agentTree+"/"+agentManifestName] = sealManifest(t, priv, map[string]string{"production": "1.3.5"})
+
+	sys, _ := newUpdateSystem(t, origin)
+	_, _, err = sys.resolveAgentVersions()
+	require.ErrorIs(t, err, updatesig.ErrBadSignature)
+}
+
+// The frozen manifest.json, signed as device-agent/manifest.json, cannot be
+// served as manifest-v2.json: the subject is part of the signature.
+func TestManifestCannotStandInForManifestV2(t *testing.T) {
+	pub, priv, err := ed25519.GenerateKey(rand.Reader)
+	require.NoError(t, err)
+	trustUpdateKey(t, pub)
+
+	origin := newUpdateOrigin(t)
+	origin.files["/"+agentTree+"/"+agentManifestV2Name] = sealManifest(t, priv, map[string]string{"production": "1.3.5"})
+
+	sys, _ := newUpdateSystem(t, origin)
+	_, _, err = sys.resolveAgentVersions()
+	require.ErrorIs(t, err, updatesig.ErrBadSignature)
 }

@@ -76,9 +76,17 @@ func (sys *System) updateBaseURL() string {
 
 // Agent download trees below the update base.
 //
-//	<base>/device-agent/manifest.json                        signed channel map (updatesig.Envelope)
+//	<base>/device-agent/manifest-v2.json                     signed channel map (updatesig.Envelope),
+//	                                                         signed in CI with the Cloud KMS key
+//	<base>/device-agent/manifest.json                        the same, frozen at the bridge release
+//	                                                         (last one signed with the OpenBao key)
 //	<base>/device-agent/<os>/<arch>/<v>/device-agent[.exe]   (+ .sha256, .sig)
 //	<base>/device-agent/frpc/<os>/<arch>/<v>/frpc[.exe]      Windows only
+//
+// Agents read manifest-v2.json first. manifest.json stays frozen at the bridge
+// release: agents that trust only the OpenBao key (and device-init installs)
+// read it, land on the bridge release, which trusts both keys and reads
+// manifest-v2.json from then on.
 //
 // The legacy tree (re-agent/: availableVersions.json, binaries named reagent)
 // is frozen at the version that moves devices to the current layout. An agent
@@ -86,10 +94,11 @@ func (sys *System) updateBaseURL() string {
 // appliance whose mirror has not been updated yet. Every /dl base serves it
 // next to the current tree (the registry-proxy's /dl/re-agent route).
 const (
-	agentTree          = "device-agent"
-	legacyAgentTree    = "re-agent"
-	agentManifestName  = "manifest.json"
-	legacyManifestName = "availableVersions.json"
+	agentTree           = "device-agent"
+	legacyAgentTree     = "re-agent"
+	agentManifestName   = "manifest.json"
+	agentManifestV2Name = "manifest-v2.json"
+	legacyManifestName  = "availableVersions.json"
 )
 
 // agentSource is where agent binaries (and frpc) are downloaded from.
@@ -101,8 +110,23 @@ type agentSource struct {
 
 func (s agentSource) legacy() bool { return s.tree == legacyAgentTree }
 
-// agentManifestSubject is what device-agent/manifest.json is signed as.
-var agentManifestSubject = updatesig.Subject{Context: updatesig.ContextAgentManifest, Line: agentTree + "/" + agentManifestName}
+// agentManifestSubject and agentManifestV2Subject are what the two channel
+// maps are signed as. The subject line differs, so neither file can stand in
+// for the other.
+var (
+	agentManifestSubject   = updatesig.Subject{Context: updatesig.ContextAgentManifest, Line: agentTree + "/" + agentManifestName}
+	agentManifestV2Subject = updatesig.Subject{Context: updatesig.ContextAgentManifest, Line: agentTree + "/" + agentManifestV2Name}
+)
+
+// agentManifests are the current tree's channel maps, in the order an agent
+// reads them: the next one only when the previous does not exist (404).
+var agentManifests = []struct {
+	name    string
+	subject updatesig.Subject
+}{
+	{agentManifestV2Name, agentManifestV2Subject},
+	{agentManifestName, agentManifestSubject},
+}
 
 // agentManifest is the payload of device-agent/manifest.json.
 type agentManifest struct {
@@ -111,35 +135,39 @@ type agentManifest struct {
 }
 
 // resolveAgentVersions returns the channel → version map and the tree it came
-// from. The current tree's manifest must carry a valid signature; only when it
-// does not exist at all (404) does the agent fall back to the legacy tree's
-// unsigned availableVersions.json. A manifest that exists but does not verify
-// is an error, never a reason to fall back.
+// from. The current tree's manifests (manifest-v2.json, then manifest.json)
+// must carry a valid signature; the next one is read only when the previous
+// does not exist at all (404), and the legacy tree's unsigned
+// availableVersions.json only when neither exists. A manifest that exists but
+// does not verify is an error, never a reason to fall back.
 func (sys *System) resolveAgentVersions() (map[string]string, agentSource, error) {
 	base := sys.updateBaseURL()
 	current := agentSource{base: base, tree: agentTree, publishedName: "device-agent"}
 	legacy := agentSource{base: base, tree: legacyAgentTree, publishedName: "reagent"}
 
-	manifestURL := current.base + "/" + current.tree + "/" + agentManifestName
-	data, status, err := fetchSmall(manifestURL)
-	if err != nil {
-		return nil, agentSource{}, err
-	}
-	switch status {
-	case http.StatusOK:
-		channels, err := openAgentManifest(data)
+	for _, manifest := range agentManifests {
+		manifestURL := current.base + "/" + current.tree + "/" + manifest.name
+		data, status, err := fetchSmall(manifestURL)
 		if err != nil {
-			return nil, agentSource{}, fmt.Errorf("refusing %s: %w", manifestURL, err)
+			return nil, agentSource{}, err
 		}
-		return channels, current, nil
-	case http.StatusNotFound:
-		log.Debug().Msgf("no %s; reading the legacy update tree", manifestURL)
-	default:
-		return nil, agentSource{}, fmt.Errorf("%s returned status %d", manifestURL, status)
+		switch status {
+		case http.StatusOK:
+			channels, err := openAgentManifest(data, manifest.subject)
+			if err != nil {
+				return nil, agentSource{}, fmt.Errorf("refusing %s: %w", manifestURL, err)
+			}
+			return channels, current, nil
+		case http.StatusNotFound:
+			log.Debug().Msgf("no %s", manifestURL)
+		default:
+			return nil, agentSource{}, fmt.Errorf("%s returned status %d", manifestURL, status)
+		}
 	}
+	log.Debug().Msg("no agent manifest in the current tree; reading the legacy update tree")
 
 	legacyURL := legacy.base + "/" + legacy.tree + "/" + legacyManifestName
-	data, status, err = fetchSmall(legacyURL)
+	data, status, err := fetchSmall(legacyURL)
 	if err != nil {
 		return nil, agentSource{}, err
 	}
@@ -153,15 +181,15 @@ func (sys *System) resolveAgentVersions() (map[string]string, agentSource, error
 	return channels, legacy, nil
 }
 
-// openAgentManifest verifies a device-agent/manifest.json and returns its
+// openAgentManifest verifies a channel map signed as subject and returns its
 // channels. AGENT_UPDATE_ALLOW_UNSIGNED (for a broken signing key only)
 // accepts one that does not verify, with a warning.
-func openAgentManifest(data []byte) (map[string]string, error) {
+func openAgentManifest(data []byte, subject updatesig.Subject) (map[string]string, error) {
 	keys, err := trustedUpdateKeys()
 	if err != nil {
 		return nil, err
 	}
-	payload, keyID, err := updatesig.OpenEnvelope(keys, agentManifestSubject, data)
+	payload, keyID, err := updatesig.OpenEnvelope(keys, subject, data)
 	if err != nil {
 		if !updatesig.AllowUnsigned() {
 			return nil, err

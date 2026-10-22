@@ -24,7 +24,7 @@ running in containers on the device and retrieve their result and logs.
   - [Development](#development)
   - [Build, Publish and Release](#build-publish-and-release)
     - [Release via CI (tag push)](#release-via-ci-tag-push)
-    - [Promote a version (manual release)](#promote-a-version-manual-release)
+    - [Promote a version](#promote-a-version)
     - [Update signatures (Ed25519)](#update-signatures-ed25519)
     - [One-time CI setup (Workload Identity Federation)](#one-time-ci-setup-workload-identity-federation)
     - [Targets](#targets)
@@ -187,7 +187,7 @@ day after the failure at the earliest), without end, or when a user asks.
 - `device-agent migrate-layout status` prints the journal.
 - `gs://ironflock-downloads/device-agent/migration.json` with
   `{"enabled": false}` stops new migrations fleet-wide (absent: enabled).
-  It can only hold devices back, so it is not signed. `just promote` publishes
+  It can only hold devices back, so it is not signed. Every promotion publishes
   it as enabled when it is missing: the bucket is public by object name only,
   so a missing object answers 403, which the agent does not take as "absent".
 - Test hooks (the e2e in device-init): `IRONFLOCK_MIGRATE_FAULT=<step>` fails
@@ -285,7 +285,7 @@ If you encounter any privilege issues, please try removing the agent home direct
 
 ## Build, Publish and Release
 
-Building and publishing is done by **CI** (GitHub Actions). The pipeline is deliberately split into a CI-automated **build + publish** step and a **manual release (promotion)** step, so a version can be staged and verified before any device picks it up.
+Building, publishing and promoting is done by **CI** (GitHub Actions), from a tag on a commit merged into `main`. Only code whose pull-request checks passed reaches a device; nobody signs or promotes from a laptop, except the one-time bridge release and emergencies (see [Promote a version](#promote-a-version)).
 
 ### Release via CI (tag push)
 
@@ -294,9 +294,10 @@ Building and publishing is done by **CI** (GitHub Actions). The pipeline is deli
    Commit your own work first, with your own message — the release commit carries the version bump alone. This is the shared IronFlock release contract; see [`REDeployments/docs/RELEASE.md`](../deployments/docs/RELEASE.md).
 
    For a hand-managed version, bump `version.txt` yourself (see [Versioning](#versioning)) in a pull request; once it is merged, tag the merged commit `vX.Y.Z` and push the tag. The release workflow only accepts a tag on a commit that is part of `main` and matches `version.txt`.
-2. [`.github/workflows/release.yml`](.github/workflows/release.yml) then, for every entry in the [`targets`](targets) file: builds the binary, generates a CycloneDX SBOM, records a sigstore-signed **SBOM attestation** bound to the binary's digest, publishes the binary to `gs://ironflock-downloads/device-agent/<os>/<arch>/<version>/device-agent[.exe]`, and pushes the multi-arch agent images to Artifact Registry. It can also be run manually from the Actions tab (`workflow_dispatch`).
+2. [`.github/workflows/release.yml`](.github/workflows/release.yml) then, for every entry in the [`targets`](targets) file: builds the binary, generates a CycloneDX SBOM, records a sigstore-signed **SBOM attestation** bound to the binary's digest, publishes the binary to `gs://ironflock-downloads/device-agent/<os>/<arch>/<version>/device-agent[.exe]`, and pushes the multi-arch agent images to Artifact Registry. This **stages** the version: the binaries exist, unsigned, and no agent updates to it yet.
+3. Its `promote` job then signs and **promotes** the version (`just promote-ci`, see the next section): from this moment agents update to it. The channels are those in the tagged `availableVersions.json`, which `just release-patch` sets to the new version.
 
-This **stages** the version — the binaries and images now exist, but **agents will not update to it yet**. The agent decides what to install from the signed `device-agent/manifest.json` (see the next step).
+A manual run from the Actions tab (`workflow_dispatch`) is a dry run: it builds, but neither publishes nor promotes.
 
 Verify a published binary's provenance any time with:
 ```Shell
@@ -305,15 +306,27 @@ gh attestation verify device-agent-linux-amd64 --repo IronFlock/device-agent
 gh attestation verify reagent-linux-amd64 --owner IronFlock --signer-repo RecordEvolution/DeviceManagementAgent
 ```
 
-### Promote a version (manual release)
+### Promote a version
 
-Making a staged version **live** is a deliberate manual step. Update `availableVersions.json` for the target environment(s), then:
+Promotion signs every binary that `availableVersions.json` names, and the pinned frpc ([Update signatures](#update-signatures-ed25519)), republishes the [`latest` alias](#the-latest-alias), then publishes `version.txt`, `availableVersions.json` and the signed channel map. The release workflow's `promote` job does this for every tag:
 
 ```Shell
-just promote   # signs through OpenBao (sign-release), republishes the `latest` alias, then version.txt, availableVersions.json and manifest.json
+just promote-ci   # CI only: signs with Cloud KMS, publishes manifest-v2.json
 ```
 
-Agents (1.3.0+) read `gs://ironflock-downloads/device-agent/manifest.json`: an envelope `{"payload": <base64>, "signature": <.sig>}` whose payload is `{"channels": <availableVersions.json>, "issued_at": …}`, signed like a binary but with the context `device-agent-manifest:v1` and the line `device-agent/manifest.json`. A manifest that does not verify is refused, never routed around; only a 404 (an appliance mirror that does not serve the new tree yet) makes the agent fall back to the frozen legacy tree. The plain `availableVersions.json` next to it is for the flasher and older tooling. This publish **is** the release gate. (To promote only the version lists: `just publish-latestVersions`, which checks that the sealed `build/manifest.json` names what `availableVersions.json` says.)
+The job runs only on a pushed tag, and it refuses a version below the live `version.txt`: re-running an old release cannot roll the fleet back.
+
+Agents read the signed channel map `gs://ironflock-downloads/device-agent/manifest-v2.json`: an envelope `{"payload": <base64>, "signature": <.sig>}` whose payload is `{"channels": <availableVersions.json>, "issued_at": …}`, signed like a binary but with the context `device-agent-manifest:v1` and the line `device-agent/manifest-v2.json`. On a 404 (an appliance mirror or a bucket without it) they read `manifest.json`, and on a 404 there the frozen legacy tree. A map that does not verify is refused, never routed around. The plain `availableVersions.json` next to it is for the flasher and older tooling. This publish **is** the release gate.
+
+**The bridge release.** Agents up to 1.3.4 trust only the OpenBao key and read only `manifest.json`. The version in [`src/release/bridge-version.txt`](src/release/bridge-version.txt) is the first that trusts the Cloud KMS key too and reads `manifest-v2.json`. CI stages it but does not promote it; its promotion is the last one signed through OpenBao, by hand:
+
+```Shell
+just promote-bridge   # once: signs through OpenBao, publishes manifest.json AND manifest-v2.json
+```
+
+That freezes `manifest.json` at the bridge release: older agents and ironflock-init land on it, and the bridge release follows `manifest-v2.json` from then on. CI refuses to promote a later version until the bridge release is live.
+
+**Emergencies** (a rollback, Cloud KMS unavailable): set `availableVersions.json`, then `just promote`, which signs through OpenBao and publishes `manifest-v2.json`; every agent from the bridge release on trusts both keys. (To promote only the version lists: `just publish-latestVersions`, which checks that each sealed `build/<manifest>` names what `availableVersions.json` says.)
 
 #### The frozen legacy tree `gs://re-agent`
 
@@ -321,7 +334,7 @@ Agents before 1.3.0 only know `gs://re-agent/<os>/<arch>/<version>/reagent[.exe]
 
 #### The `latest` alias
 
-`just promote` first runs `just publish-latest-alias`, which server-side-copies every binary staged under the **`production`** version to a `latest` version segment:
+Every promotion first runs `just publish-latest-alias`, which server-side-copies every binary staged under the **`production`** version to a `latest` version segment:
 
 ```text
 gs://ironflock-downloads/device-agent/windows/amd64/<version>/device-agent.exe  ->  …/windows/amd64/latest/device-agent.exe
@@ -356,9 +369,14 @@ reagent-update:v1            (frpc: frpc-download:v1)
 
 joined by `\n`, no trailing newline. The agent builds the middle line from what it is downloading (the version it resolved, its own platform, the file name), so a server cannot pass an old signed release off as a new one, or one platform's binary as another's. Every server that hands out agent or frpc downloads, including an appliance's agent mirror, must serve the `.sig` at the same path as the `.sha256`.
 
-**Where the key lives.** The signing key is the OpenBao transit key `agent-update` (ed25519, `exportable=false`): no private key exists in GitHub or on a laptop. CI stages binaries **unsigned**; `just promote` signs them before anything goes live. The maintainer reaches OpenBao through kubectl only; [`scripts/openbao-admin.sh`](scripts/openbao-admin.sh) runs `bao` in `openbao-0` as role `admin` (context `OPENBAO_KUBE_CONTEXT`, default `gke_record-1283_europe-west1-b_ironflock-prod`).
+**Where the keys live.** Neither private key exists in GitHub or on a laptop, and neither can be exported:
 
-**One-time setup** (fresh installs of the ironflock chart create the mount and key themselves):
+- **Cloud KMS** `projects/record-1283/locations/europe-west1/keyRings/ironflock-release/cryptoKeys/agent-update` (Ed25519, key ID `4193db1f`) signs every release after the bridge release. Only the service account `agent-signer` may sign with it (`roles/cloudkms.signer` on this key alone), and only the `promote` job of a tag run of this repository's `release.yml` may act as that account (see [One-time CI setup](#one-time-ci-setup-workload-identity-federation)).
+- **OpenBao** transit key `agent-update` (ed25519, `exportable=false`, key ID `2b040fcf`) signed every release up to the bridge release, and `manifest.json`. It stays trusted, so that everything it signed keeps verifying, and it is the emergency signer. The maintainer reaches OpenBao through kubectl only; [`scripts/openbao-admin.sh`](scripts/openbao-admin.sh) runs `bao` in `openbao-0` as role `admin` (context `OPENBAO_KUBE_CONTEXT`, default `gke_record-1283_europe-west1-b_ironflock-prod`).
+
+Each key backs up the other: the fleet trusts both, so losing one means signing with the other while a release replaces it.
+
+**One-time setup of the OpenBao key** (fresh installs of the ironflock chart create the mount and key themselves):
 
 ```Shell
 scripts/openbao-admin.sh 'bao secrets enable transit'
@@ -366,13 +384,13 @@ scripts/openbao-admin.sh 'bao write -f transit/keys/agent-update type=ed25519 ex
 just agent-update-pubkeys    # paste the printed line(s) into AGENT_UPDATE_PUBLIC_KEYS
 ```
 
-**Signing** happens in `just promote` (also in `just publish-version` / `just publish-latestVersions`, so the manifest cannot flip unsigned), via `just sign-release` ([`scripts/sign-release.sh`](scripts/sign-release.sh)): for every version `availableVersions.json` names and for the pinned frpc it downloads each binary from GCS (the manifest payload it builds locally), hashes it locally, builds the message (`sign-update message`), signs all messages in one `kubectl exec` session (`transit/sign/agent-update`), converts each `vault:vN:…` answer into a `.sig`, verifies every `.sig` against the keys compiled into this tree, and only then uploads them. A published `.sig` that already verifies is kept. A staged version that is already signed is never restaged by `publish.sh`; a signed frpc is never overwritten by `publish-frpc.sh` (bump `FRP_VERSION` instead).
+**Signing** happens in every promotion (also in `just publish-version` / `just publish-latestVersions`, so the channel map cannot flip unsigned), via `just sign-release` ([`scripts/sign-release.sh`](scripts/sign-release.sh); `SIGNER=kms` or `openbao`, `MANIFESTS` names the channel maps to seal): for every version `availableVersions.json` names and for the pinned frpc it downloads each binary from GCS (the channel maps it builds locally), hashes it locally, builds the message (`sign-update message`), and signs it: Cloud KMS with one `gcloud kms asymmetric-sign` call per message (`sign-update sig-from-kms`), OpenBao with all messages in one `kubectl exec` session (`sign-update sig-from-openbao`). It verifies every `.sig` against the keys compiled into this tree, and only then uploads them. A published `.sig` that already verifies is kept (when signing through OpenBao: only one the OpenBao key made, so that the bridge release verifies on agents that trust nothing else). A staged version that is already signed is never restaged by `publish.sh`; a signed frpc is never overwritten by `publish-frpc.sh` (bump `FRP_VERSION` instead).
 
-**Rotation:** `scripts/openbao-admin.sh 'bao write -f transit/keys/agent-update/rotate'`, then keep signing with the old version (`OPENBAO_TRANSIT_KEY_VERSION=<old> just promote`) while a release that lists both lines from `just agent-update-pubkeys` reaches the fleet; then sign with the new version (no variable) and drop the old line in a later release. A new key version's public key only exists after the rotate, which is why signing stays pinned to the old one meanwhile.
+**Rotation:** create a new version of the key (Cloud KMS: `gcloud kms keys versions create`; OpenBao: `scripts/openbao-admin.sh 'bao write -f transit/keys/agent-update/rotate'`), add its public key line to `AGENT_UPDATE_PUBLIC_KEYS` (KMS: `gcloud kms keys versions get-public-key`, the raw 32 bytes after the DER prefix, base64; OpenBao: `just agent-update-pubkeys`) and keep signing with the old version (`KMS_KEY_VERSION` / `OPENBAO_TRANSIT_KEY_VERSION`) until a release that trusts both reaches the fleet; then sign with the new version and drop the old line in a later release.
 
-**Backup:** the key is in OpenBao's Raft storage, so the OpenBao snapshots plus the seal key cover it; there is nothing else to back up.
+**Backup:** Cloud KMS holds its key; the OpenBao key is in OpenBao's Raft storage, which the OpenBao snapshots plus the seal key cover. Since the fleet trusts both keys, either can stand in for the other.
 
-`AGENT_UPDATE_PUBLIC_KEYS` holds the production key's version 1 (key ID `2b040fcf`). Should it ever hold the `TODO-AGENT-UPDATE-PUBLIC-KEY` placeholder, `TestProductionUpdateKeysConfigured` fails and blocks the release gate (locally, `AGENT_SIGNING_KEY_PLACEHOLDER_OK=1` skips it). To check a published binary by hand: `cd src && go run ./cmd/sign-update verify -version <version> [-kind device-agent|reagent|frpc -os <os> -arch <arch>] <file>` (with `<file>.sig` next to it); the manifest: `go run ./cmd/sign-update open -context device-agent-manifest:v1 -subject device-agent/manifest.json manifest.json`. `sign-update keygen` / `sign` work with a local key file for development and tests only.
+`AGENT_UPDATE_PUBLIC_KEYS` holds the OpenBao key's version 1 (key ID `2b040fcf`) and the Cloud KMS key's version 1 (key ID `4193db1f`). Should it ever hold the `TODO-AGENT-UPDATE-PUBLIC-KEY` placeholder, `TestProductionUpdateKeysConfigured` fails and blocks the release gate (locally, `AGENT_SIGNING_KEY_PLACEHOLDER_OK=1` skips it). To check a published binary by hand: `cd src && go run ./cmd/sign-update verify -version <version> [-kind device-agent|reagent|frpc -os <os> -arch <arch>] <file>` (with `<file>.sig` next to it); a channel map: `go run ./cmd/sign-update open -context device-agent-manifest:v1 -subject device-agent/manifest-v2.json manifest-v2.json` (the same with `manifest.json`). `sign-update keygen` / `sign` work with a local key file for development and tests only.
 
 Emergency only (broken signing key): `AGENT_UPDATE_ALLOW_UNSIGNED=true` in the agent's service environment installs agent updates and frpc downloads whose signature is missing or invalid, with a warning each time. Releases published before signing existed have no `.sig`, so a verifying agent never installs them again.
 
@@ -407,6 +425,22 @@ gcloud iam service-accounts add-iam-policy-binding $SA --project=$PROJECT \
   --role=roles/iam.workloadIdentityUser \
   --member="principalSet://iam.googleapis.com/projects/${PROJNUM}/locations/global/workloadIdentityPools/${POOL}/attribute.repository_id/${REPO_ID}"
 ```
+
+**The signing identity** (Cloud KMS). The pool's provider maps `attribute.release` to `<repository_id>:release` only for a `v*` tag run of the repository's own `.github/workflows/release.yml` (or the shared release-image workflow); only that principal may act as `agent-signer`, and `agent-signer` may only sign with this key:
+
+```Shell
+gcloud kms keyrings create ironflock-release --location=europe-west1 --project=$PROJECT
+gcloud kms keys create agent-update --keyring=ironflock-release --location=europe-west1 --project=$PROJECT \
+  --purpose=asymmetric-signing --default-algorithm=ec-sign-ed25519 --protection-level=software
+gcloud iam service-accounts create agent-signer --project=$PROJECT --display-name="Agent update signer (CI, keyless)"
+gcloud kms keys add-iam-policy-binding agent-update --keyring=ironflock-release --location=europe-west1 --project=$PROJECT \
+  --member="serviceAccount:agent-signer@${PROJECT}.iam.gserviceaccount.com" --role=roles/cloudkms.signer
+gcloud iam service-accounts add-iam-policy-binding agent-signer@${PROJECT}.iam.gserviceaccount.com --project=$PROJECT \
+  --role=roles/iam.workloadIdentityUser \
+  --member="principalSet://iam.googleapis.com/projects/${PROJNUM}/locations/global/workloadIdentityPools/${POOL}/attribute.release/${REPO_ID}:release"
+```
+
+(Cloud HSM has no Ed25519; the key is software-protected, still non-exportable.)
 
 Then add two **organization variables** in `IronFlock` (Settings → Secrets and variables → Actions → Variables; the provider condition limits them to this repo anyway):
 
@@ -463,9 +497,9 @@ Once built the version of a binary can be verified with:
 CI (above) is the primary path. The original local recipes still work for ad-hoc builds and manual recovery, but require local `gcloud`/`docker` auth:
 
 - `just build-all-docker` — cross-compile every target inside the builder image into `build/`.
-- `just publish` — stage the `build/` binaries with their `.sha256` in the [ironflock-downloads](https://console.cloud.google.com/storage/browser/ironflock-downloads) bucket (unsigned; `just promote` signs them).
+- `just publish` — stage the `build/` binaries with their `.sha256` in the [ironflock-downloads](https://console.cloud.google.com/storage/browser/ironflock-downloads) bucket (unsigned; promotion signs them).
 - `just push-docker-image` — build + push the multi-arch agent images.
-- `just rollout` — **!!! USE WITH CAUTION !!!** build + publish + promote (which signs) (incl. `availableVersions.json`) in one local step; make sure `src/release/version.txt` and `availableVersions.json` are correct first.
+- `just rollout` — **!!! USE WITH CAUTION !!!** build + publish + the emergency `promote` (which signs through OpenBao) (incl. `availableVersions.json`) in one local step; make sure `src/release/version.txt` and `availableVersions.json` are correct first.
 
 
 ## Implementation

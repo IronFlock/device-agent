@@ -5,7 +5,7 @@
 #
 # The agent refuses an frpc without a valid frpc-download signature for exactly
 # <goos>/<goarch>/<FRP_VERSION>/frpc[.exe] (system.verifyRemoteSignature). The
-# .sig is added at promotion (scripts/sign-release.sh, OpenBao transit). Once
+# .sig is added at promotion (scripts/sign-release.sh). Once
 # that has happened the object is frozen: unlike the agent, frpc is published
 # again by every release under the same FRP_VERSION path, and new bytes under
 # the old .sig would make every verifying agent refuse it (and the appliance

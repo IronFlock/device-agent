@@ -5,8 +5,8 @@
 # (system.verifyRemoteChecksum) and the Windows service refuses to activate an
 # update that does not match.
 #
-# Staged binaries carry no .sig: agents refuse them until `just promote` signs
-# them through OpenBao (scripts/sign-release.sh). A local build/<binary>.sig
+# Staged binaries carry no .sig: agents refuse them until promotion signs them
+# (scripts/sign-release.sh). A local build/<binary>.sig
 # (a development signature) is uploaded too, but only if it verifies, against
 # this tree's AGENT_UPDATE_PUBLIC_KEYS, for the path it goes to.
 #

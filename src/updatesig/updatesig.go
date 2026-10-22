@@ -64,10 +64,18 @@ import (
 // 32-byte Ed25519 key, "#" starts a comment. A running agent trusts only the
 // keys compiled into ITSELF.
 //
-// The production key is the OpenBao transit key agent-update (ed25519, not
-// exportable): its private half never leaves OpenBao, and releases are signed
-// through it at promotion (scripts/sign-release.sh). `just agent-update-pubkeys`
-// prints the line of every key version, ready to paste here.
+// Two production keys, neither exportable:
+//   - Cloud KMS ironflock-release/agent-update (Ed25519): signs every release
+//     after the bridge release, in CI (release.yml, `just promote-ci`); only
+//     device-agent's release runs on a v* tag may use it.
+//   - OpenBao transit agent-update: signed every release up to and including
+//     the bridge release, and the frozen manifest.json. Kept trusted so that
+//     everything it signed keeps verifying; it signs nothing new except in an
+//     emergency (`just promote`).
+//
+// `just agent-update-pubkeys` prints the OpenBao key's lines; the KMS line comes
+// from `gcloud kms keys versions get-public-key` (see README "Update
+// signatures").
 //
 // Rotation, so that no agent ever meets a signature it cannot check:
 //  1. `bao write -f transit/keys/agent-update/rotate` creates version N+1;
@@ -84,6 +92,7 @@ import (
 // fails, so CI does not ship it.
 const AGENT_UPDATE_PUBLIC_KEYS = `
 MKstV0PZ93scIuBhtM8DCq0SfbsZR9UU7P9E+621ftU= # key 2b040fcf, OpenBao transit agent-update v1
+MxldkYMi2ksqzslq+qJaiwpSSNBT+kMKevmLG2uTU3I= # key 4193db1f, Cloud KMS ironflock-release/agent-update v1
 `
 
 // publicKeyPlaceholder marks AGENT_UPDATE_PUBLIC_KEYS as not yet configured.
