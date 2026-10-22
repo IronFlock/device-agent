@@ -6,11 +6,12 @@ import (
 	"testing"
 	"time"
 
+	dockercontainer "github.com/docker/docker/api/types/container"
+
 	"reagent/common"
 	containerpkg "reagent/container"
 	"reagent/messenger/topics"
 
-	dockertypes "github.com/docker/docker/api/types"
 	"github.com/docker/docker/api/types/events"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
@@ -109,7 +110,7 @@ func TestSpawnerSupervisorRecoversFromDaemonOutage(t *testing.T) {
 	mc.EXPECT().GetImages(mock.Anything, "").Return(nil, nil).Once()
 	mc.EXPECT().GetContainers(mock.Anything).
 		Run(func(ctx context.Context) { close(reconcileRan) }).
-		Return([]dockertypes.Container{}, nil).
+		Return([]dockercontainer.Summary{}, nil).
 		Once()
 
 	// Zero seeded apps: this just latches the supervisor and starts spawner #1.

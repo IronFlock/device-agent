@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"regexp"
 
 	"github.com/rs/zerolog/log"
 
@@ -186,6 +187,13 @@ func GetCliArguments() (*CommandLineArguments, error) {
 	return &cliArgs, nil
 }
 
+// retiredDeviceEndpoint matches the pre-router device endpoints
+// (devices.reswarm.io:8080, devices.record-evolution.com:8080). They are shut
+// down — and reswarm.io is no longer ours — so a .flock that still names one is
+// moved to the current endpoint, where the device authenticates with its
+// secret like every other device, instead of dialling a dead (or foreign) host.
+var retiredDeviceEndpoint = regexp.MustCompile(`devices.*\.(com|io):8080`)
+
 // SaveReswarmConfig writes the .flock atomically: the new content goes to a
 // temporary file beside the real one (symlinks resolved, so a link such as
 // /opt/reagent/device-config.flock -> /boot/<name>.flock stays a link), is
@@ -193,7 +201,7 @@ func GetCliArguments() (*CommandLineArguments, error) {
 // new file, never a truncated one — the .flock usually lives on the FAT /boot
 // partition of a device that can lose power at any moment (a car's AutoPi).
 func SaveReswarmConfig(path string, reswarmConfig *ReswarmConfig) error {
-	data, err := json.MarshalIndent(reswarmConfig, "", " ")
+	data, err := json.MarshalIndent(reswarmConfig, "", " ") //nolint:gosec // G117: writes the device .flock, whose purpose is to hold the device secret (0600 by default)
 	if err != nil {
 		return err
 	}
@@ -212,13 +220,13 @@ func SaveReswarmConfig(path string, reswarmConfig *ReswarmConfig) error {
 		return err
 	}
 	tmpName := tmp.Name()
-	defer os.Remove(tmpName) // gone already after a successful rename
+	defer func() { _ = os.Remove(tmpName) }() // gone already after a successful rename
 	if _, err := tmp.Write(data); err != nil {
-		tmp.Close()
+		_ = tmp.Close()
 		return err
 	}
 	if err := tmp.Sync(); err != nil {
-		tmp.Close()
+		_ = tmp.Close()
 		return err
 	}
 	if err := tmp.Close(); err != nil {
@@ -260,7 +268,8 @@ func LoadReswarmConfig(path string) (*ReswarmConfig, error) {
 		reswarmConfig.DockerRegistryURL = "registry.ironflock.com/"
 		migrated = true
 	}
-	if reswarmConfig.DeviceEndpointURL == "wss://cbw.record-evolution.com/ws-re-dev" {
+	if reswarmConfig.DeviceEndpointURL == "wss://cbw.record-evolution.com/ws-re-dev" ||
+		retiredDeviceEndpoint.MatchString(reswarmConfig.DeviceEndpointURL) {
 		reswarmConfig.DeviceEndpointURL = "wss://cbw.ironflock.com/ws-re-dev"
 		migrated = true
 	}

@@ -2,13 +2,11 @@ package messenger
 
 import (
 	"context"
-	"crypto/tls"
 	"errors"
 	"fmt"
 	"math/rand"
 	"os"
 	"path/filepath"
-	"regexp"
 	"runtime"
 	"runtime/debug"
 	"strings"
@@ -80,7 +78,7 @@ func dialBackoff(consecutiveFailures int) time.Duration {
 	}
 
 	spread := float64(delay) * reconnectBackoffJitter
-	return time.Duration(float64(delay) + (rand.Float64()*2-1)*spread)
+	return time.Duration(float64(delay) + (rand.Float64()*2-1)*spread) //nolint:gosec // G404: jitter for reconnect delays, not security relevant
 }
 
 // maxDuplicateSerialAttempts bounds how many consecutive reconnects may hit
@@ -213,8 +211,6 @@ type SocketConfig struct {
 // Used to inject a fake client in tests.
 type ClientProvider func(ctx context.Context, url string, cfg client.Config) (NexusClient, error)
 
-var legacyEndpointRegex = regexp.MustCompile(`devices.*\.(com|io):8080`)
-
 func createConnectConfig(cfg *config.Config, socketConfig *SocketConfig) (*client.Config, error) {
 	reswarmConfig := cfg.ReswarmConfig
 
@@ -228,17 +224,6 @@ func createConnectConfig(cfg *config.Config, socketConfig *SocketConfig) (*clien
 		},
 		Debug:  cfg.CommandLineArguments.DebugMessaging,
 		Logger: wampLogger{logger: &log.Logger},
-	}
-
-	if legacyEndpointRegex.Match([]byte(reswarmConfig.DeviceEndpointURL)) {
-		tlscert, err := tls.X509KeyPair([]byte(reswarmConfig.Authentication.Certificate), []byte(reswarmConfig.Authentication.Key))
-		if err != nil {
-			return nil, err
-		}
-		clientCfg.TlsCfg = &tls.Config{
-			Certificates:       []tls.Certificate{tlscert},
-			InsecureSkipVerify: true,
-		}
 	}
 
 	if socketConfig.PingPongTimeout != 0 {
@@ -676,8 +661,6 @@ func (s *WampSession) dial() (NexusClient, error) {
 			// watcher's Done() will fire and trigger another reconnect.
 			log.Debug().Err(regErr).Msg("connection-established Register failed (non-fatal)")
 		}
-		dupRegisterFailures = 0
-
 		log.Debug().Msgf("Successfully established a connection (duration: %s)", time.Since(requestStart))
 		return c, nil
 	}

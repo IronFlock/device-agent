@@ -151,8 +151,8 @@ func (pT *PseudoTerminal) Setup(config *config.Config, session messenger.Messeng
 			log.Warn().Msgf("terminal: gave up publishing TERMINAL_EOF for %s", pT.SessionID)
 		}
 
-		session.Unsubscribe(topics.Topic(writeTopic))
-		session.Unregister(topics.Topic(resizeTopic))
+		_ = session.Unsubscribe(topics.Topic(writeTopic))
+		_ = session.Unregister(topics.Topic(resizeTopic))
 
 		if readFinished {
 			close(pT.Output)

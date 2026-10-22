@@ -199,33 +199,6 @@ func TestErrNotConnected(t *testing.T) {
 }
 
 // =============================================================================
-// TestLegacyEndpointRegex - Tests for legacy endpoint matching
-// =============================================================================
-
-func TestLegacyEndpointRegex(t *testing.T) {
-	testCases := []struct {
-		name     string
-		url      string
-		expected bool
-	}{
-		{"matches devices.ironflock.com:8080", "devices.ironflock.com:8080", true},
-		{"matches devices.reswarm.io:8080", "devices.reswarm.io:8080", true},
-		{"matches devices.example.com:8080", "devices.example.com:8080", true},
-		{"does not match without port", "devices.ironflock.com", false},
-		{"does not match different port", "devices.ironflock.com:443", false},
-		{"does not match wss scheme", "wss://devices.ironflock.com:8080", true},
-		{"does not match new endpoints", "wss://devices.ironflock.com/ws", false},
-	}
-
-	for _, tc := range testCases {
-		t.Run(tc.name, func(t *testing.T) {
-			result := legacyEndpointRegex.Match([]byte(tc.url))
-			assert.Equal(t, tc.expected, result)
-		})
-	}
-}
-
-// =============================================================================
 // TestSocketConfig - Tests for socket configuration
 // =============================================================================
 

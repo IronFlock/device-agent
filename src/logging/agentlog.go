@@ -159,7 +159,7 @@ func QueryAgentLog(query AgentLogQuery) (AgentLogResult, error) {
 			kept = append(kept, rendered)
 		}
 
-		file.Close()
+		_ = file.Close()
 	}
 
 	lines, trimmed := trimToBytes(kept, MaxQueryBytes)

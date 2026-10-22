@@ -21,7 +21,7 @@ func (sm *StateMachine) recoverFailToPresentHandler(payload common.TransitionPay
 	removeContainerByIdContext, cancel := context.WithTimeout(context.Background(), time.Second*30)
 	defer cancel()
 	// remove any existing container to ensure environment variables are set
-	sm.Container.RemoveContainerByID(removeContainerByIdContext, containerToRemove, map[string]interface{}{"force": true})
+	_ = sm.Container.RemoveContainerByID(removeContainerByIdContext, containerToRemove, map[string]interface{}{"force": true})
 
 	if payload.Stage == common.DEV {
 		return sm.buildApp(payload, app)

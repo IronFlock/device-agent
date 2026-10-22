@@ -255,7 +255,7 @@ func (m *Manager) writeMarker(s *state) error {
 	}
 
 	tmpPath := m.markerPath() + ".tmp"
-	file, err := os.OpenFile(tmpPath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o644)
+	file, err := os.OpenFile(tmpPath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o644) //nolint:gosec // G302: staged agent binary, made executable before use; contents are verified by signature
 	if err != nil {
 		return err
 	}
@@ -700,7 +700,7 @@ func (m *Manager) InProbation(version string) bool {
 func (m *Manager) RecordConnected(at time.Time) {
 	path := filepath.Join(m.agentDir, lastConnectedName)
 	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, []byte(at.UTC().Format(time.RFC3339)+"\n"), 0o644); err != nil {
+	if err := os.WriteFile(tmp, []byte(at.UTC().Format(time.RFC3339)+"\n"), 0o644); err != nil { //nolint:gosec // G306: update timestamp, no secrets
 		return
 	}
 	_ = m.rename(tmp, path)

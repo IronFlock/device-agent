@@ -7,6 +7,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/docker/docker/api/types/container"
+
 	"reagent/common"
 	"reagent/config"
 	"reagent/logging"
@@ -16,7 +18,6 @@ import (
 	"reagent/testutil/fakes"
 	"reagent/testutil/mocks"
 
-	dockertypes "github.com/docker/docker/api/types"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
@@ -216,7 +217,7 @@ func TestCleanupOrphanedContainers(t *testing.T) {
 
 		mc.EXPECT().
 			GetContainers(mock.Anything).
-			Return([]dockertypes.Container{
+			Return([]container.Summary{
 				{ID: "kept-container-id", Names: []string{keptName}},
 				{ID: "orphan-container-id", Names: []string{orphanName}},
 				// A foreign container we don't manage -> ParseContainerName fails.
@@ -251,7 +252,7 @@ func TestCleanupOrphanedContainers(t *testing.T) {
 		orphanName := "/" + common.BuildContainerName(common.DEV, 7, "orphan")
 		mc.EXPECT().
 			GetContainers(mock.Anything).
-			Return([]dockertypes.Container{
+			Return([]container.Summary{
 				{ID: "orphan-id-xyz", Names: []string{orphanName}},
 			}, nil).
 			Once()
@@ -279,7 +280,7 @@ func TestCleanupOrphanedContainers(t *testing.T) {
 		orphanName := "/" + common.BuildContainerName(common.PROD, 99, "ghost")
 		mc.EXPECT().
 			GetContainers(mock.Anything).
-			Return([]dockertypes.Container{{ID: "orphan-id", Names: []string{orphanName}}}, nil).
+			Return([]container.Summary{{ID: "orphan-id", Names: []string{orphanName}}}, nil).
 			Once()
 		mc.EXPECT().
 			RemoveContainerByID(mock.Anything, "orphan-id", map[string]interface{}{"force": true}).
@@ -291,7 +292,7 @@ func TestCleanupOrphanedContainers(t *testing.T) {
 	t.Run("no containers is a clean no-op", func(t *testing.T) {
 		am, mc, _, _, _, _ := amHarness(t)
 
-		mc.EXPECT().GetContainers(mock.Anything).Return([]dockertypes.Container{}, nil).Once()
+		mc.EXPECT().GetContainers(mock.Anything).Return([]container.Summary{}, nil).Once()
 
 		err := am.CleanupOrphanedContainers()
 		require.NoError(t, err)
@@ -313,7 +314,7 @@ func TestCleanupOrphanedContainers(t *testing.T) {
 		// so any removal fails the test.
 		mc.EXPECT().
 			GetContainers(mock.Anything).
-			Return([]dockertypes.Container{
+			Return([]container.Summary{
 				{
 					ID:     "svc-nginx-id",
 					Names:  []string{"/" + project + "-nginx-1"},
@@ -340,7 +341,7 @@ func TestCleanupOrphanedContainers(t *testing.T) {
 
 		mc.EXPECT().
 			GetContainers(mock.Anything).
-			Return([]dockertypes.Container{
+			Return([]container.Summary{
 				{
 					ID:     "ghost-svc-id",
 					Names:  []string{"/" + ghost + "-web-1"},
@@ -365,7 +366,7 @@ func TestCleanupOrphanedContainers(t *testing.T) {
 		// panicked ParseComposeContainerName's unguarded index.
 		mc.EXPECT().
 			GetContainers(mock.Anything).
-			Return([]dockertypes.Container{
+			Return([]container.Summary{
 				{
 					ID:     "appliance-backend-id",
 					Names:  []string{"/ironflock-backend-1"},
@@ -417,11 +418,11 @@ func TestCleanupOrphanedAppsFromDatabase(t *testing.T) {
 		// RemoveContainerByID is never called. PROD skips image removal.
 		mc.EXPECT().
 			GetContainer(mock.Anything, common.BuildContainerName(common.PROD, 5, "stale-prod")).
-			Return(dockertypes.Container{}, notFoundErr()).
+			Return(container.Summary{}, notFoundErr()).
 			Once()
 		mc.EXPECT().
 			GetContainer(mock.Anything, common.BuildComposeContainerName(common.PROD, 5, "stale-prod")).
-			Return(dockertypes.Container{}, notFoundErr()).
+			Return(container.Summary{}, notFoundErr()).
 			Once()
 
 		err := am.CleanupOrphanedAppsFromDatabase([]common.TransitionPayload{})
@@ -446,7 +447,7 @@ func TestCleanupOrphanedAppsFromDatabase(t *testing.T) {
 		// Single container exists -> force remove.
 		mc.EXPECT().
 			GetContainer(mock.Anything, common.BuildContainerName(common.DEV, 8, "stale-dev")).
-			Return(dockertypes.Container{ID: containerID}, nil).
+			Return(container.Summary{ID: containerID}, nil).
 			Once()
 		mc.EXPECT().
 			RemoveContainerByID(mock.Anything, containerID, map[string]interface{}{"force": true}).
@@ -455,7 +456,7 @@ func TestCleanupOrphanedAppsFromDatabase(t *testing.T) {
 		// Compose container probe -> not found.
 		mc.EXPECT().
 			GetContainer(mock.Anything, common.BuildComposeContainerName(common.DEV, 8, "stale-dev")).
-			Return(dockertypes.Container{}, notFoundErr()).
+			Return(container.Summary{}, notFoundErr()).
 			Once()
 		// DEV apps get their image removed.
 		mc.EXPECT().

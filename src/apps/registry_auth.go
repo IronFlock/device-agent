@@ -267,7 +267,7 @@ func (sm *StateMachine) authConfigForImage(payload common.TransitionPayload, ima
 
 	authConfig, found := credentialForRegistryHost(payload.DockerCredentials, host)
 	if !found && logTopic != "" {
-		sm.LogManager.Write(logTopic, registryCredentialMissMessage(host))
+		_ = sm.LogManager.Write(logTopic, registryCredentialMissMessage(host))
 	}
 
 	return authConfig
@@ -306,7 +306,7 @@ func (sm *StateMachine) warnUncredentialedComposeRegistries(payload common.Trans
 
 		if _, found := credentialForRegistryHost(payload.DockerCredentials, host); !found {
 			warned[normalizedHost] = true
-			sm.LogManager.Write(logTopic, registryCredentialMissMessage(host))
+			_ = sm.LogManager.Write(logTopic, registryCredentialMissMessage(host))
 		}
 	}
 }

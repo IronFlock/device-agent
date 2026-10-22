@@ -185,7 +185,7 @@ func migrationEnabled(base string) (bool, error) {
 	if err != nil {
 		return false, fmt.Errorf("reading %s: %w", url, err)
 	}
-	defer body.Close()
+	defer func() { _ = body.Close() }()
 	switch status {
 	case http.StatusOK:
 	case http.StatusNotFound:

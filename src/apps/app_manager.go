@@ -462,7 +462,7 @@ func (am *AppManager) syncPortState(payload common.TransitionPayload, app *commo
 	// every crashloop retry, where an unconditional write logged "Remote port
 	// saved successfully" for an app that never started.
 	if !reflect.DeepEqual(newPorts, portRules) {
-		am.tunnelManager.SaveRemotePorts(payload)
+		_ = am.tunnelManager.SaveRemotePorts(payload)
 	}
 
 	// Live-update the bind-mounted env files ({NAME}.txt / {NAME}_CLOUD.txt)
@@ -475,7 +475,7 @@ func (am *AppManager) syncPortState(payload common.TransitionPayload, app *commo
 	// }
 
 	if tunnelsAvailable {
-		am.UpdateTunnelState()
+		_ = am.UpdateTunnelState()
 	}
 
 	return nil
@@ -941,7 +941,7 @@ func (am *AppManager) RequestAppState(payload common.TransitionPayload) error {
 				return err
 			}
 
-			am.UpdateTunnelState()
+			_ = am.UpdateTunnelState()
 
 			return nil
 		}
@@ -970,7 +970,7 @@ func (am *AppManager) RequestAppState(payload common.TransitionPayload) error {
 				return err
 			}
 
-			am.UpdateTunnelState()
+			_ = am.UpdateTunnelState()
 
 			return nil
 		}
@@ -1539,7 +1539,7 @@ func (am *AppManager) EnsureRemoteRequestedStates() error {
 
 		safe.Go(func() {
 			log.Debug().Str("app", payload.AppName).Msg("Requesting app state in goroutine")
-			am.RequestAppState(payload)
+			_ = am.RequestAppState(payload)
 		})
 	}
 

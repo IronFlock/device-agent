@@ -13,7 +13,8 @@ import (
 	"testing"
 	"time"
 
-	dtypes "github.com/docker/docker/api/types"
+	dockerbuild "github.com/docker/docker/api/types/build"
+
 	bcontainer "github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/api/types/filters"
 	"github.com/docker/docker/api/types/network"
@@ -109,7 +110,7 @@ func TestIntegrationDockerBuildAndImageOps(t *testing.T) {
 	buildCtx, cancel := context.WithTimeout(context.Background(), 180*time.Second)
 	defer cancel()
 
-	reader, err := docker.Build(buildCtx, tarPath, dtypes.ImageBuildOptions{
+	reader, err := docker.Build(buildCtx, tarPath, dockerbuild.ImageBuildOptions{
 		Tags:        []string{ref},
 		Remove:      true,
 		ForceRemove: true,

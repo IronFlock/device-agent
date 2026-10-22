@@ -8,6 +8,8 @@ import (
 	"testing"
 	"time"
 
+	dockercontainer "github.com/docker/docker/api/types/container"
+
 	"reagent/common"
 	"reagent/config"
 	containerpkg "reagent/container"
@@ -18,7 +20,6 @@ import (
 	"reagent/testutil/fakes"
 	"reagent/testutil/mocks"
 
-	dockertypes "github.com/docker/docker/api/types"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
@@ -161,7 +162,7 @@ func TestRunProdApp(t *testing.T) {
 		// createContainer: no existing container -> create a fresh one.
 		mc.EXPECT().
 			GetContainer(mock.Anything, payload.ContainerName.Prod).
-			Return(dockertypes.Container{}, notFoundErr()).
+			Return(dockercontainer.Summary{}, notFoundErr()).
 			Once()
 		mc.EXPECT().
 			CreateContainer(mock.Anything, mock.Anything, mock.Anything, mock.Anything, payload.ContainerName.Prod).
@@ -214,7 +215,7 @@ func TestRunProdApp(t *testing.T) {
 		// without calling CreateContainer.
 		mc.EXPECT().
 			GetContainer(mock.Anything, payload.ContainerName.Prod).
-			Return(dockertypes.Container{ID: containerID}, nil).
+			Return(dockercontainer.Summary{ID: containerID}, nil).
 			Once()
 		mc.EXPECT().
 			StartContainer(mock.Anything, containerID).
@@ -252,7 +253,7 @@ func TestRunProdApp(t *testing.T) {
 			Once()
 		mc.EXPECT().
 			GetContainer(mock.Anything, payload.ContainerName.Prod).
-			Return(dockertypes.Container{}, notFoundErr()).
+			Return(dockercontainer.Summary{}, notFoundErr()).
 			Once()
 		mc.EXPECT().
 			CreateContainer(mock.Anything, mock.Anything, mock.Anything, mock.Anything, payload.ContainerName.Prod).
@@ -295,7 +296,7 @@ func TestRunProdApp(t *testing.T) {
 		// createContainer is invoked twice (initial + nvidia-retry recreate).
 		mc.EXPECT().
 			GetContainer(mock.Anything, payload.ContainerName.Prod).
-			Return(dockertypes.Container{}, notFoundErr()).
+			Return(dockercontainer.Summary{}, notFoundErr()).
 			Twice()
 		mc.EXPECT().
 			CreateContainer(mock.Anything, mock.Anything, mock.Anything, mock.Anything, payload.ContainerName.Prod).
@@ -341,7 +342,7 @@ func TestRunProdApp(t *testing.T) {
 			Once()
 		mc.EXPECT().
 			GetContainer(mock.Anything, payload.ContainerName.Prod).
-			Return(dockertypes.Container{}, notFoundErr()).
+			Return(dockercontainer.Summary{}, notFoundErr()).
 			Once()
 		mc.EXPECT().
 			CreateContainer(mock.Anything, mock.Anything, mock.Anything, mock.Anything, payload.ContainerName.Prod).
@@ -394,7 +395,7 @@ func TestRunDevApp(t *testing.T) {
 		// Second GetContainer: inside createContainer -> not found -> create fresh.
 		mc.EXPECT().
 			GetContainer(mock.Anything, payload.ContainerName.Dev).
-			Return(dockertypes.Container{}, notFoundErr()).
+			Return(dockercontainer.Summary{}, notFoundErr()).
 			Twice()
 		mc.EXPECT().
 			CreateContainer(mock.Anything, mock.Anything, mock.Anything, mock.Anything, payload.ContainerName.Dev).
@@ -441,7 +442,7 @@ func TestRunDevApp(t *testing.T) {
 		// First GetContainer finds a stale container -> remove + wait-for-removed.
 		mc.EXPECT().
 			GetContainer(mock.Anything, payload.ContainerName.Dev).
-			Return(dockertypes.Container{ID: staleID}, nil).
+			Return(dockercontainer.Summary{ID: staleID}, nil).
 			Once()
 		mc.EXPECT().
 			RemoveContainerByID(mock.Anything, staleID, mock.Anything).
@@ -454,7 +455,7 @@ func TestRunDevApp(t *testing.T) {
 		// Second GetContainer (inside createContainer) -> not found -> create fresh.
 		mc.EXPECT().
 			GetContainer(mock.Anything, payload.ContainerName.Dev).
-			Return(dockertypes.Container{}, notFoundErr()).
+			Return(dockercontainer.Summary{}, notFoundErr()).
 			Once()
 		mc.EXPECT().
 			CreateContainer(mock.Anything, mock.Anything, mock.Anything, mock.Anything, payload.ContainerName.Dev).
@@ -676,7 +677,7 @@ func TestRemovedToRunningPullThenRun(t *testing.T) {
 			Once()
 		mc.EXPECT().
 			GetContainer(mock.Anything, payload.ContainerName.Prod).
-			Return(dockertypes.Container{}, notFoundErr()).
+			Return(dockercontainer.Summary{}, notFoundErr()).
 			Once()
 		mc.EXPECT().
 			CreateContainer(mock.Anything, mock.Anything, mock.Anything, mock.Anything, payload.ContainerName.Prod).
@@ -925,7 +926,7 @@ func TestStopAndBuildApp(t *testing.T) {
 		// stopDevApp (non-compose) path.
 		mc.EXPECT().
 			GetContainer(mock.Anything, payload.ContainerName.Dev).
-			Return(dockertypes.Container{ID: containerID}, nil).
+			Return(dockercontainer.Summary{ID: containerID}, nil).
 			Once()
 		mc.EXPECT().
 			StopContainerByID(mock.Anything, containerID, mock.Anything).
@@ -994,7 +995,7 @@ func TestRemoveAndPublishApp(t *testing.T) {
 		// removeDevApp path.
 		mc.EXPECT().
 			GetContainer(mock.Anything, payload.ContainerName.Dev).
-			Return(dockertypes.Container{ID: containerID}, nil).
+			Return(dockercontainer.Summary{ID: containerID}, nil).
 			Once()
 		mc.EXPECT().
 			RemoveContainerByID(mock.Anything, containerID, mock.Anything).

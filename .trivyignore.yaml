@@ -1,0 +1,24 @@
+# Accepted trivy findings (image, configuration, licences).
+# Every entry needs a `statement` with the reason and an `expired_at` date at
+# most 12 months ahead; the security summary lists entries that expire within
+# 30 days. Prefer security/vex.openvex.json for "not affected" vulnerabilities.
+vulnerabilities: []
+misconfigurations:
+  - id: DS-0002
+    paths:
+      - "docker/Dockerfile"
+    statement: >-
+      The agent runtime image runs the device management agent, which controls
+      the Docker engine, NetworkManager (D-Bus) and the host; it needs root.
+      Used for the local development stack and virtual devices.
+    expired_at: 2027-10-22
+  - id: DS-0002
+    paths:
+      - "Dockerfile"
+    statement: >-
+      Throwaway builder container for `just build-all-docker`: it only
+      cross-compiles into a bind-mounted build/ directory and never runs as a
+      service.
+    expired_at: 2027-10-22
+secrets: []
+licenses: []

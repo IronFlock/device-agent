@@ -262,10 +262,10 @@ obscurely.
 
 ## Development
 
-The agent embeds the frp client into the binary. For that to work locally you first have to download the frp client.
+The agent embeds the frp client into the binary. For that to work locally you first build frpc for your machine from the `frp/` module (the release builds it the same way for every target).
 
 ```Shell
-just download-frpc
+just build-frpc
 ```
 
 Once Go has been [downloaded and installed](https://go.dev/doc/install), users can run the project locally by running the following command :
@@ -289,11 +289,11 @@ Building and publishing is done by **CI** (GitHub Actions). The pipeline is deli
 
 ### Release via CI (tag push)
 
-1. `just release-patch` (or `release-minor` / `release-major`) — the whole local side in one command: refuses a dirty tree, bumps [`src/release/version.txt`](src/release/version.txt) + `availableVersions.json`, commits just those two files as `release reagent vX.Y.Z`, runs the lint gate, then tags `vX.Y.Z` and pushes.
+1. `just release-patch` (or `release-minor` / `release-major`) — the whole local side in one command, run from an up-to-date `main`: refuses a dirty tree, bumps [`src/release/version.txt`](src/release/version.txt) + `availableVersions.json`, and opens a pull request with just those two files (`release reagent vX.Y.Z`). `main` is protected — every change, the version bump included, merges only through a pull request whose required checks (`ci-ok`, `security / report`) passed — so GitHub merges the release PR automatically once they are green. The recipe then tags the merged commit `vX.Y.Z`, pushes the tag and waits for the release run.
 
    Commit your own work first, with your own message — the release commit carries the version bump alone. This is the shared IronFlock release contract; see [`REDeployments/docs/RELEASE.md`](../deployments/docs/RELEASE.md).
 
-   For a hand-managed version, `just bump-patch` (or editing `version.txt` yourself; see [Versioning](#versioning)) + your own commit + `just release` still works — `release` tags and pushes an already-committed version and requires a clean working tree.
+   For a hand-managed version, bump `version.txt` yourself (see [Versioning](#versioning)) in a pull request; once it is merged, tag the merged commit `vX.Y.Z` and push the tag. The release workflow only accepts a tag on a commit that is part of `main` and matches `version.txt`.
 2. [`.github/workflows/release.yml`](.github/workflows/release.yml) then, for every entry in the [`targets`](targets) file: builds the binary, generates a CycloneDX SBOM, records a sigstore-signed **SBOM attestation** bound to the binary's digest, publishes the binary to `gs://ironflock-downloads/device-agent/<os>/<arch>/<version>/device-agent[.exe]`, and pushes the multi-arch agent images to Artifact Registry. It can also be run manually from the Actions tab (`workflow_dispatch`).
 
 This **stages** the version — the binaries and images now exist, but **agents will not update to it yet**. The agent decides what to install from the signed `device-agent/manifest.json` (see the next step).

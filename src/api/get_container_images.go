@@ -8,7 +8,7 @@ import (
 	"time"
 )
 
-func (ex *External) getImagesHandler(ctx context.Context, response messenger.Result) (*messenger.InvokeResult, error) {
+func (ex *External) getImagesHandler(_ context.Context, response messenger.Result) (*messenger.InvokeResult, error) {
 	privileged, err := ex.Privilege.Check("READ", response.Details)
 	if err != nil {
 		return nil, err

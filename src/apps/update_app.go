@@ -101,7 +101,7 @@ func (sm *StateMachine) updateLegacyApp(payload common.TransitionPayload, app *c
 	reader, err := sm.Container.Pull(context.Background(), fullImageNameWithVersion, pullOptions)
 	if err != nil {
 		errorMessage := fmt.Sprintf("Error occured while trying to pull the image: %s", err.Error())
-		sm.LogManager.Write(payload.ContainerName.Prod, errorMessage)
+		_ = sm.LogManager.Write(payload.ContainerName.Prod, errorMessage)
 		return err
 	}
 
@@ -167,7 +167,7 @@ func (sm *StateMachine) updateLegacyApp(payload common.TransitionPayload, app *c
 		defer cancel()
 
 		log.Debug().Msgf("Removing Old Image %s:%s", payload.RegistryImageName.Prod, payload.PresentVersion)
-		sm.Container.RemoveImageByName(removeImageByNameContext, payload.RegistryImageName.Prod, payload.PresentVersion, map[string]interface{}{"force": true})
+		_ = sm.Container.RemoveImageByName(removeImageByNameContext, payload.RegistryImageName.Prod, payload.PresentVersion, map[string]interface{}{"force": true})
 	}
 
 	// The state validation will ensure it will reach it's requestedState again

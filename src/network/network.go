@@ -86,7 +86,7 @@ var ipv4regex = regexp.MustCompile(IPv4RegExp)
 func GetPrimaryLANIP() string {
 	conn, err := net.Dial("udp4", "8.8.8.8:80")
 	if err == nil {
-		defer conn.Close()
+		defer func() { _ = conn.Close() }()
 		if addr, ok := conn.LocalAddr().(*net.UDPAddr); ok && addr.IP != nil {
 			return addr.IP.String()
 		}

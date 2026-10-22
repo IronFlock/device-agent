@@ -70,7 +70,7 @@ func winVerifyTrust(path string) error {
 		RevocationChecks:                windows.WTD_REVOKE_NONE,
 		UnionChoice:                     windows.WTD_CHOICE_FILE,
 		StateAction:                     windows.WTD_STATEACTION_VERIFY,
-		FileOrCatalogOrBlobOrSgnrOrCert: unsafe.Pointer(&fileInfo),
+		FileOrCatalogOrBlobOrSgnrOrCert: unsafe.Pointer(&fileInfo), //nolint:gosec // G103: Win32 WinVerifyTrust / certificate API calls
 	}
 
 	action := windows.WINTRUST_ACTION_GENERIC_VERIFY_V2
@@ -119,7 +119,7 @@ func extractSignerCerts(path string) (*x509.Certificate, []*x509.Certificate, er
 	var certStore windows.Handle
 	err = windows.CryptQueryObject(
 		windows.CERT_QUERY_OBJECT_FILE,
-		unsafe.Pointer(obj),
+		unsafe.Pointer(obj), //nolint:gosec // G103: Win32 WinVerifyTrust / certificate API calls
 		windows.CERT_QUERY_CONTENT_FLAG_PKCS7_SIGNED_EMBED,
 		windows.CERT_QUERY_FORMAT_FLAG_BINARY,
 		0,
@@ -130,7 +130,7 @@ func extractSignerCerts(path string) (*x509.Certificate, []*x509.Certificate, er
 		// No embedded signature at all.
 		return nil, nil, ErrUnsigned
 	}
-	defer windows.CertCloseStore(certStore, 0)
+	defer func() { _ = windows.CertCloseStore(certStore, 0) }()
 
 	var certs []*x509.Certificate
 	var prev *windows.CertContext
@@ -139,7 +139,7 @@ func extractSignerCerts(path string) (*x509.Certificate, []*x509.Certificate, er
 		if ctx == nil || enumErr != nil {
 			break
 		}
-		der := unsafe.Slice(ctx.EncodedCert, ctx.Length)
+		der := unsafe.Slice(ctx.EncodedCert, ctx.Length) //nolint:gosec // G103: Win32 WinVerifyTrust / certificate API calls
 		buf := make([]byte, len(der))
 		copy(buf, der)
 		if c, perr := x509.ParseCertificate(buf); perr == nil {

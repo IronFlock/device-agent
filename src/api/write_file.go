@@ -82,7 +82,7 @@ func (ex *External) writeToFileHandler(ctx context.Context, response messenger.R
 	var message string
 	if fileChunk.Data == "BEGIN" {
 		safe.Go(func() {
-			ex.LogManager.ClearLogHistory(containerName)
+			_ = ex.LogManager.ClearLogHistory(containerName)
 		})
 
 		message = "Received first package on device!"
@@ -92,7 +92,7 @@ func (ex *External) writeToFileHandler(ctx context.Context, response messenger.R
 
 	if fileChunk.Data == "BEGIN" || fileChunk.Data == "END" {
 		safe.Go(func() {
-			ex.LogManager.Write(containerName, message)
+			_ = ex.LogManager.Write(containerName, message)
 		})
 
 		return &messenger.InvokeResult{}, nil
@@ -107,7 +107,7 @@ func (ex *External) writeToFileHandler(ctx context.Context, response messenger.R
 	safe.Go(func() {
 		percentage := float64(activeTransfer.Current) / float64(activeTransfer.Total) * 100
 		percentageString := fmt.Sprintf("%.3f%%", percentage)
-		ex.LogManager.PublishProgress(containerName, fileName, "Transfer Progress:", percentageString)
+		_ = ex.LogManager.PublishProgress(containerName, fileName, "Transfer Progress:", percentageString)
 	})
 
 	return &messenger.InvokeResult{}, nil

@@ -154,7 +154,7 @@ func ListDirectories(path string) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer folder.Close()
+	defer func() { _ = folder.Close() }()
 
 	subfolders, err := folder.Readdir(-1)
 	if err != nil {
@@ -279,7 +279,7 @@ func GetRandomFreePort() (port int, err error) {
 	if a, err = net.ResolveTCPAddr("tcp", "localhost:0"); err == nil {
 		var l *net.TCPListener
 		if l, err = net.ListenTCP("tcp", a); err == nil {
-			defer l.Close()
+			defer func() { _ = l.Close() }()
 			return l.Addr().(*net.TCPAddr).Port, nil
 		}
 	}
@@ -291,7 +291,7 @@ func GetFreePortFromStart(startPort int) (int, error) {
 		addr := fmt.Sprintf("127.0.0.1:%d", port)
 		listener, err := net.Listen("tcp", addr)
 		if err == nil {
-			defer listener.Close()
+			defer func() { _ = listener.Close() }()
 			return listener.Addr().(*net.TCPAddr).Port, nil
 		}
 	}

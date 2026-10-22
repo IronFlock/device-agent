@@ -11,7 +11,7 @@ import (
 )
 
 // singleInstanceMutex is held for the process lifetime; never closed.
-var singleInstanceMutex windows.Handle
+var singleInstanceMutex windows.Handle //nolint:unused // write-only on purpose: documents that the handle is held, never closed
 
 // errAgentAlreadyRunning is the operator-facing message shown when another
 // agent already holds the machine-wide lock — most often the installed
@@ -44,7 +44,7 @@ func acquireSingleInstanceLock() error {
 	case windows.ERROR_ALREADY_EXISTS:
 		// The mutex exists and we could open it — another instance owns it.
 		if handle != 0 {
-			windows.CloseHandle(handle)
+			_ = windows.CloseHandle(handle)
 		}
 		return errAgentAlreadyRunning()
 
@@ -62,7 +62,7 @@ func acquireSingleInstanceLock() error {
 		probe, oerr := windows.OpenMutex(windows.SYNCHRONIZE, false, name)
 		if oerr != windows.ERROR_FILE_NOT_FOUND {
 			if probe != 0 {
-				windows.CloseHandle(probe)
+				_ = windows.CloseHandle(probe)
 			}
 			return errAgentAlreadyRunning()
 		}
@@ -93,19 +93,19 @@ func setupProcessJobObject() {
 	_, err = windows.SetInformationJobObject(
 		job,
 		windows.JobObjectExtendedLimitInformation,
-		uintptr(unsafe.Pointer(&info)),
+		uintptr(unsafe.Pointer(&info)), //nolint:gosec // G103: Win32 API call
 		uint32(unsafe.Sizeof(info)),
 	)
 	if err != nil {
 		log.Error().Err(err).Msg("failed to configure job object for child process cleanup")
-		windows.CloseHandle(job)
+		_ = windows.CloseHandle(job)
 		return
 	}
 
 	err = windows.AssignProcessToJobObject(job, windows.CurrentProcess())
 	if err != nil {
 		log.Error().Err(err).Msg("failed to assign the agent to its job object")
-		windows.CloseHandle(job)
+		_ = windows.CloseHandle(job)
 		return
 	}
 	// The job handle is deliberately kept open for the process lifetime;

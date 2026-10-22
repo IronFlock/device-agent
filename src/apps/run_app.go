@@ -64,14 +64,14 @@ func (sm *StateMachine) runProdApp(payload common.TransitionPayload, app *common
 	// block and wait for running, if exited status then return as a failed state
 	select {
 	case err = <-errC:
-		sm.LogManager.Write(payload.ContainerName.Dev, fmt.Sprintf("The app failed to start, reason: %s", err.Error()))
+		_ = sm.LogManager.Write(payload.ContainerName.Dev, fmt.Sprintf("The app failed to start, reason: %s", err.Error()))
 		options := common.Dict{"follow": true, "stdout": true, "stderr": true}
 		ioReader, logsErr := sm.Container.Logs(context.Background(), containerID, options)
 		if logsErr != nil {
 			return logsErr
 		}
 
-		sm.LogManager.StreamBlocking(payload.ContainerName.Prod, common.APP, ioReader)
+		_ = sm.LogManager.StreamBlocking(payload.ContainerName.Prod, common.APP, ioReader)
 		return err
 	case <-runningSignal:
 		break
@@ -254,7 +254,7 @@ func (sm *StateMachine) composeUp(payload common.TransitionPayload, app *common.
 		}
 	}
 
-	sm.LogManager.Write(logTopic, fmt.Sprintf("The app failed to start, reason: %s", lastErr.Error()))
+	_ = sm.LogManager.Write(logTopic, fmt.Sprintf("The app failed to start, reason: %s", lastErr.Error()))
 
 	// Best effort: a failed `up` can leave part of the project behind, and the
 	// teardown error must not mask the reason the start failed.
@@ -334,7 +334,7 @@ func (sm *StateMachine) runDevComposeApp(payload common.TransitionPayload, app *
 				return cleanupErr
 			}
 
-			sm.LogManager.Write(payload.ContainerName.Dev, fmt.Sprintf("The app failed to start, reason: %s", err.Error()))
+			_ = sm.LogManager.Write(payload.ContainerName.Dev, fmt.Sprintf("The app failed to start, reason: %s", err.Error()))
 			return err
 		}
 		break
@@ -519,7 +519,7 @@ func (sm *StateMachine) runProdComposeApp(payload common.TransitionPayload, app 
 				return cleanupErr
 			}
 
-			sm.LogManager.Write(payload.ContainerName.Prod, fmt.Sprintf("The app failed to start, reason: %s", err.Error()))
+			_ = sm.LogManager.Write(payload.ContainerName.Prod, fmt.Sprintf("The app failed to start, reason: %s", err.Error()))
 			return err
 		}
 		break
@@ -621,14 +621,14 @@ func (sm *StateMachine) runDevApp(payload common.TransitionPayload, app *common.
 	// block and wait for running, if exited status then return as a failed state
 	select {
 	case err = <-errC:
-		sm.LogManager.Write(payload.ContainerName.Dev, fmt.Sprintf("The app failed to start, reason: %s", err.Error()))
+		_ = sm.LogManager.Write(payload.ContainerName.Dev, fmt.Sprintf("The app failed to start, reason: %s", err.Error()))
 		options := common.Dict{"follow": true, "stdout": true, "stderr": true}
 		ioReader, logsErr := sm.Container.Logs(context.Background(), newContainerID, options)
 		if logsErr != nil {
 			return logsErr
 		}
 
-		sm.LogManager.StreamBlocking(payload.ContainerName.Dev, common.APP, ioReader)
+		_ = sm.LogManager.StreamBlocking(payload.ContainerName.Dev, common.APP, ioReader)
 		return err
 	case <-runningSignal:
 		break
@@ -1111,14 +1111,14 @@ func (sm *StateMachine) createContainer(payload common.TransitionPayload, app *c
 		if err != nil {
 			if errdefs.IsImageNotFound(err) && app.Stage == common.DEV {
 				imageNotFoundMessage := "The image " + payload.RegistryImageName.Dev + " was not found on the device, try building the app again..."
-				sm.LogManager.Write(containerName, imageNotFoundMessage)
+				_ = sm.LogManager.Write(containerName, imageNotFoundMessage)
 			}
 			if strings.Contains(err.Error(), "nvidia") {
 				log.Debug().Msgf("Failed to launch container with NVIDIA Capabilities, retrying without... %s \n", err.Error())
 
 				removeContainerByIdContext, cancel := context.WithTimeout(context.Background(), time.Second*30)
 				defer cancel()
-				sm.Container.RemoveContainerByID(removeContainerByIdContext, containerID, map[string]interface{}{"force": true})
+				_ = sm.Container.RemoveContainerByID(removeContainerByIdContext, containerID, map[string]interface{}{"force": true})
 
 				// remove NVIDIA host configuration
 				hConfig.Runtime = ""
@@ -1183,7 +1183,7 @@ func (sm *StateMachine) startContainerOnce(payload common.TransitionPayload, app
 
 			removeContainerByIdContext, cancel := context.WithTimeout(context.Background(), time.Second*30)
 			defer cancel()
-			sm.Container.RemoveContainerByID(removeContainerByIdContext, containerID, map[string]interface{}{"force": true})
+			_ = sm.Container.RemoveContainerByID(removeContainerByIdContext, containerID, map[string]interface{}{"force": true})
 
 			// remove nvidia device request
 			hostConfig.DeviceRequests = []dockercontainer.DeviceRequest{}

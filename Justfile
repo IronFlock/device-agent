@@ -1,17 +1,15 @@
 # IronFlock device management agent (reagent). Run `just` to list recipes.
 
 ROOT_DIR := justfile_directory()
-FRP_VERSION := "0.71.0"
+FRP_VERSION := "0.71.1"
 MOCKERY_VERSION := "v3.7.1"
-GOVULNCHECK_VERSION := "v1.3.0"
-CYCLONEDX_GOMOD_VERSION := "v1.10.0"
+GOVULNCHECK_VERSION := "v1.9.0"
+CYCLONEDX_GOMOD_VERSION := "v1.12.0"
+GOLANGCI_LINT_VERSION := "v2.15.0"
 
-# Arch detection for local frpc download (cached). Linux/Darwin/x86_64/aarch64/arm64.
+# Host OS/arch for the local frpc build (src/embedded/frpc_binary).
 FRP_OS := if os() == "linux" { "linux" } else if os() == "macos" { "darwin" } else { "windows" }
 FRP_ARCH := if arch() == "x86_64" { "amd64" } else if arch() == "aarch64" { "arm64" } else if arch() == "arm64" { "arm64" } else { "amd64" }
-
-FRP_CACHE_DIR := ROOT_DIR / ".cache" / "frp"
-FRP_CACHED_BINARY := FRP_CACHE_DIR / ("frpc_" + FRP_VERSION + "_" + FRP_OS + "_" + FRP_ARCH)
 
 AGENT_IMAGE_NAME := "europe-docker.pkg.dev/record-1283/eu.gcr.io/device-agent"
 AGENT_IMAGE_VERSION := "v" + `cat src/release/version.txt`
@@ -28,16 +26,21 @@ RELEASE_TAG := "v" + VERSION
 default:
     @just --list
 
-# Run unit tests (integration-tagged tests excluded; needs frpc — see src/TESTING.md).
-test: download-frpc
+# Unit tests as CI runs them: race detector, random order, no test cache
+# (integration-tagged tests excluded; needs frpc — see src/TESTING.md).
+test: build-frpc
+    cd src && go test -race -shuffle=on -count=1 ./...
+
+# Unit tests, fast (-short, no race detector) for quick iteration.
+test-short: build-frpc
     cd src && go test -short ./...
 
 # Run integration tests (need external resources: frps server, docker daemon, dbus).
-test-integration: download-frpc
+test-integration: build-frpc
     cd src && go test -tags integration ./...
 
 # Run unit tests with an HTML coverage report at src/coverage.html.
-test-coverage: download-frpc
+test-coverage: build-frpc
     #!/usr/bin/env bash
     set -euo pipefail
     cd src
@@ -48,7 +51,7 @@ test-coverage: download-frpc
 # Integration tests self-skip when their resource (docker/dbus/frps) is absent,
 # so this is safe to run anywhere; it just covers more where they exist.
 # Coverage INCLUDING integration-tagged tests.
-test-coverage-integration: download-frpc
+test-coverage-integration: build-frpc
     #!/usr/bin/env bash
     set -euo pipefail
     cd src
@@ -60,7 +63,7 @@ test-coverage-integration: download-frpc
 # (testutil), and tooling (embedded, benchmark) from the denominator, and
 # includes integration tests — you do not unit-test generated code or your mocks.
 # Production-scoped coverage (the meaningful number).
-test-coverage-prod: download-frpc
+test-coverage-prod: build-frpc
     #!/usr/bin/env bash
     set -euo pipefail
     cd src
@@ -84,13 +87,12 @@ coverage-badge: test-coverage
     curl -s "https://img.shields.io/badge/coverage-${COVERAGE}%25-${COLOR}" > ../assets/coverage-badge.svg
     echo "Badge saved to assets/coverage-badge.svg"
 
-# Run unit tests with the race detector.
-test-race: download-frpc
-    cd src && go test -short -race ./...
-
 # go vet excludes the generated networkmanager bindings (benign codegen vet note).
-# Static checks: gofmt, go mod tidy, go vet, and a full compile.
-lint: download-frpc
+# Static checks (read-only): gofmt, go mod tidy, go vet, a full compile,
+# golangci-lint (standard linters + gosec, src/.golangci.yml) for Linux AND
+# Windows (the service, self-update and Authenticode code is Windows-only),
+# and the frp version pins / frp/ module.
+lint: build-frpc
     #!/usr/bin/env bash
     set -euo pipefail
     cd src
@@ -103,6 +105,13 @@ lint: download-frpc
     go vet -tags integration $(go list ./... | grep -v '/networkmanager')
     echo "==> go build"
     go build ./...
+    echo "==> golangci-lint (linux, windows)"
+    GOBIN="{{ROOT_DIR}}/.cache/bin" go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@{{GOLANGCI_LINT_VERSION}}
+    GOOS=linux "{{ROOT_DIR}}/.cache/bin/golangci-lint" run ./...
+    GOOS=windows "{{ROOT_DIR}}/.cache/bin/golangci-lint" run ./...
+    echo "==> frp versions and frp/ module"
+    cd .. && scripts/check-frp-version.sh
+    (cd frp && go mod tidy -diff)
     echo "==> lint OK"
 
 # Runs EVERYTHING: lint, then unit tests under the race detector + randomized
@@ -139,11 +148,11 @@ vuln-go:
 
 # Flags CVEs in frp itself + its bundled deps; remediate by bumping FRP_VERSION.
 # Scan the embedded third-party frpc binary (not tracked in go.mod) for CVEs.
-vuln-frpc: download-frpc
+vuln-frpc: build-frpc
     go run golang.org/x/vuln/cmd/govulncheck@{{GOVULNCHECK_VERSION}} -mode=binary src/embedded/frpc_binary
 
 # Generate CycloneDX SBOMs (Go module graph + the frpc binary) into build/sbom/.
-sbom: download-frpc
+sbom: build-frpc
     #!/usr/bin/env bash
     set -euo pipefail
     mkdir -p build/sbom
@@ -159,7 +168,7 @@ sbom-bin BINARY:
 
 # Uploaded to the GitHub Security tab by CI; SARIF exits 0 even with findings.
 # Generate govulncheck SARIF reports into build/sarif/ for GitHub code scanning.
-sarif: download-frpc
+sarif: build-frpc
     #!/usr/bin/env bash
     set -euo pipefail
     mkdir -p build/sarif
@@ -182,7 +191,7 @@ sarif: download-frpc
 # Scans are inlined (not `just vuln-go`) so a "vulns found" non-zero exit doesn't
 # print a confusing "Recipe failed" line; the pinned version stays single-sourced.
 # Full CVE screening (report-only — never fails). Runs all scans + SBOMs.
-security: download-frpc
+security: build-frpc
     #!/usr/bin/env bash
     set +e
     echo "==> govulncheck: Go code + dependencies"
@@ -204,23 +213,11 @@ vuln-binaries:
         go run golang.org/x/vuln/cmd/govulncheck@{{GOVULNCHECK_VERSION}} -mode=binary "$bin"
     done
 
-# Download frpc binary for local development (with caching)
-download-frpc:
-    #!/usr/bin/env bash
-    set -euo pipefail
-    mkdir -p src/embedded {{FRP_CACHE_DIR}}
-    if [ -f "{{FRP_CACHED_BINARY}}" ]; then
-        echo "Using cached frpc v{{FRP_VERSION}} for {{FRP_OS}}/{{FRP_ARCH}}"
-        cp "{{FRP_CACHED_BINARY}}" src/embedded/frpc_binary
-    else
-        echo "Downloading frpc v{{FRP_VERSION}} for {{FRP_OS}}/{{FRP_ARCH}}..."
-        curl -L "https://github.com/fatedier/frp/releases/download/v{{FRP_VERSION}}/frp_{{FRP_VERSION}}_{{FRP_OS}}_{{FRP_ARCH}}.tar.gz" -o "{{FRP_CACHE_DIR}}/frp.tar.gz"
-        tar -xzf "{{FRP_CACHE_DIR}}/frp.tar.gz" -C "{{FRP_CACHE_DIR}}"
-        cp "{{FRP_CACHE_DIR}}/frp_{{FRP_VERSION}}_{{FRP_OS}}_{{FRP_ARCH}}/frpc" "{{FRP_CACHED_BINARY}}"
-        cp "{{FRP_CACHED_BINARY}}" src/embedded/frpc_binary
-        rm -rf "{{FRP_CACHE_DIR}}/frp.tar.gz" "{{FRP_CACHE_DIR}}/frp_{{FRP_VERSION}}_{{FRP_OS}}_{{FRP_ARCH}}"
-        echo "Downloaded and cached frpc to {{FRP_CACHED_BINARY}}"
-    fi
+# Build frpc for this host from the frp/ module into src/embedded/frpc_binary
+# (the //go:embed source), as scripts/build.sh does per release target. Go's
+# build cache keeps repeated runs quick.
+build-frpc:
+    scripts/build-frpc.sh {{FRP_OS}} {{FRP_ARCH}} src/embedded/frpc_binary
 
 # Refresh all Go module dependencies. Re-pins the nexus fork
 # (github.com/ironflock/nexus/v3, branch main) to its current tip and bumps
@@ -232,17 +229,16 @@ update-dependencies:
 run:
     cd src && sudo go run -ldflags="-linkmode=external" . -config test-config.flock -prettyLogging -env=local
 
-run_mac: download-frpc
+run_mac: build-frpc
     cd src && sudo DOCKER_HOST=unix://${HOME}/Library/Containers/com.docker.docker/Data/docker.raw.sock go run -ldflags="-linkmode=external" . -config test-config.flock -prettyLogging -env=local -nmw=false
 
 # Builds all docker images for all targets in targets files
 build-all-docker: clean
-    @mkdir -p {{FRP_CACHE_DIR}}
     docker build --platform linux/amd64 . -t agent-builder
-    docker run --name agent_builder -v {{ROOT_DIR}}/build:/app/reagent/build -v {{ROOT_DIR}}/.cache/frp:/app/reagent/.cache/frp agent-builder
+    docker run --name agent_builder -v {{ROOT_DIR}}/build:/app/reagent/build agent-builder
 
 # Used on its own only for a manual release; `just release-patch` and friends
-# call this for you. Follow with `just release` to tag + trigger the CI build.
+# call this for you (a manual bump still has to go through a pull request).
 # Formats src with gofmt, then bumps the patch version in src/release/version.txt.
 bump-patch:
     #!/usr/bin/env bash
@@ -258,10 +254,10 @@ bump-patch:
     next="${major}.${minor}.$((patch + 1))"
     printf '%s' "$next" > src/release/version.txt
     jq --arg v "$next" 'map_values($v)' availableVersions.json > availableVersions.json.tmp && mv availableVersions.json.tmp availableVersions.json
-    echo "Bumped $current -> $next (all channels in availableVersions.json set to $next). Commit it and run: just release"
+    echo "Bumped $current -> $next (all channels in availableVersions.json set to $next). Open a pull request with it; tag the merged commit to release."
 
 # Used on its own only for a manual release; `just release-patch` and friends
-# call this for you. Follow with `just release` to tag + trigger the CI build.
+# call this for you (a manual bump still has to go through a pull request).
 # Bump the minor version in src/release/version.txt (resets patch) and commit it.
 bump-minor:
     #!/usr/bin/env bash
@@ -276,10 +272,10 @@ bump-minor:
     next="${major}.$((minor + 1)).0"
     printf '%s' "$next" > src/release/version.txt
     jq --arg v "$next" 'map_values($v)' availableVersions.json > availableVersions.json.tmp && mv availableVersions.json.tmp availableVersions.json
-    echo "Bumped $current -> $next (all channels in availableVersions.json set to $next). Commit it and run: just release"
+    echo "Bumped $current -> $next (all channels in availableVersions.json set to $next). Open a pull request with it; tag the merged commit to release."
 
 # Used on its own only for a manual release; `just release-patch` and friends
-# call this for you. Follow with `just release` to tag + trigger the CI build.
+# call this for you (a manual bump still has to go through a pull request).
 # Bump the major version in src/release/version.txt (resets minor and patch) and commit it.
 bump-major:
     #!/usr/bin/env bash
@@ -294,17 +290,15 @@ bump-major:
     next="$((major + 1)).0.0"
     printf '%s' "$next" > src/release/version.txt
     jq --arg v "$next" 'map_values($v)' availableVersions.json > availableVersions.json.tmp && mv availableVersions.json.tmp availableVersions.json
-    echo "Bumped $current -> $next (all channels in availableVersions.json set to $next). Commit it and run: just release"
+    echo "Bumped $current -> $next (all channels in availableVersions.json set to $next). Open a pull request with it; tag the merged commit to release."
 
 # ------------------------------------------------------------------ release --
 # Release contract — see REDeployments/docs/RELEASE.md
 #
-#   just release-patch = _require-clean -> bump-patch -> _release-commit -> release
+#   just release-patch = _require-clean -> bump-patch -> _release-pr -> _await-release
 #
-# This repo does not build its image locally: pushing the `v*` tag is what
-# triggers release.yml, which builds and publishes. That is also why commit and
-# tag are SPLIT here, unlike every other project — the tag must not be created
-# until the local lint gate in `release` has passed (see its comment below).
+# This repo does not build anything locally: the tag on the merged release
+# commit triggers release.yml, which builds and stages the version.
 #
 # The steps run as sub-`just` processes, never as Just dependencies: just
 # evaluates variables once at parse time, so VERSION would still hold the
@@ -327,54 +321,88 @@ _require-clean:
         exit 1
     fi
 
-# Commit the version bump alone — explicit file list, never `git add -A`.
-# Does NOT tag: `release` runs next and tags after its lint gate passes.
-_release-commit:
+# main is protected (changes only through pull requests with green checks):
+#   just release-patch = _require-clean -> bump-patch -> _release-pr -> _await-release
+# `_release-pr` opens a PR with the version bump, GitHub merges it (squash) once
+# ci-ok and security / report are green, and the merged commit is tagged. The
+# tag runs .github/workflows/release.yml, which stages the version (binaries,
+# SBOM attestations, images) unsigned; `just promote` signs and publishes it.
+# Version bump through a pull request (main is protected): branch, commit only
+# the version files, open the PR, merge it automatically (squash) once the
+# required checks pass, then tag the merged commit on main and push the tag.
+_release-pr:
     #!/usr/bin/env bash
     set -euo pipefail
-    cd {{ROOT_DIR}}
+    tag="{{RELEASE_TAG}}"
+    branch="release/${tag}"
+    title="release {{RELEASE_NAME}} v{{VERSION}}"
+    git fetch --quiet origin main
+    if [ "$(git rev-parse --abbrev-ref HEAD)" != main ] || [ "$(git rev-parse HEAD)" != "$(git rev-parse origin/main)" ]; then
+        echo "release: run from an up-to-date main (git switch main && git pull --ff-only)" >&2
+        git checkout -- {{VERSION_FILES}}
+        exit 1
+    fi
+    git switch -c "$branch"
     git add -- {{VERSION_FILES}}
-    git commit -m "release {{RELEASE_NAME}} v{{VERSION}}"
+    git commit -m "$title"
+    git push -u origin "$branch"
+    gh pr create --base main --head "$branch" --title "$title" \
+        --body "Version bump only, opened by \`just release-patch\`. Merged automatically once the required checks pass; the tag on the merged commit publishes the image."
+    gh pr merge "$branch" --squash --auto --delete-branch
+    echo "==> waiting for the required checks and the merge of ${branch}"
+    sha=""
+    for _ in $(seq 1 120); do
+        read -r state sha <<<"$(gh pr view "$branch" --json state,mergeCommit --jq '"\(.state) \(.mergeCommit.oid // "")"')"
+        case "$state" in
+            MERGED) break ;;
+            CLOSED) echo "release PR ${branch} was closed without merging" >&2; exit 1 ;;
+        esac
+        sleep 20
+    done
+    [ "${state:-}" = MERGED ] && [ -n "$sha" ] || { echo "release PR ${branch} not merged after 40 min: gh pr checks ${branch}" >&2; exit 1; }
+    git switch main
+    git pull --ff-only
+    git branch -D "$branch" 2>/dev/null || true
+    git tag -a "$tag" -m "$title" "$sha"
+    git push origin "$tag"
+    echo "==> tagged ${tag} on ${sha}"
+
+# Wait for the CI release run of the tag; fails if it fails.
+_await-release:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    tag="{{RELEASE_TAG}}"
+    sha=$(git rev-parse "${tag}^{commit}")
+    echo "==> waiting for the CI release of ${tag}"
+    run=""
+    for _ in $(seq 1 30); do
+        run=$(gh run list --workflow release.yml --commit "$sha" --json databaseId,event \
+              --jq 'map(select(.event == "push")) | .[0].databaseId // empty')
+        [ -n "$run" ] && break
+        sleep 5
+    done
+    [ -n "$run" ] || { echo "no release run for ${tag} appeared; check GitHub Actions" >&2; exit 1; }
+    gh run watch "$run" --exit-status --interval 20 >/dev/null || {
+        echo "release run $run for ${tag} failed: gh run view $run --log-failed" >&2; exit 1; }
+    echo "==> ${tag} staged by CI (run $run) — unsigned; agents pick it up only after: just promote"
 
 release-patch:
     just _require-clean
     just bump-patch
-    just _release-commit
-    just release
+    just _release-pr
+    just _await-release
 
 release-minor:
     just _require-clean
     just bump-minor
-    just _release-commit
-    just release
+    just _release-pr
+    just _await-release
 
 release-major:
     just _require-clean
     just bump-major
-    just _release-commit
-    just release
-
-# Requires a clean working tree; promote afterwards with `just promote`.
-# Tag the current commit as v<version.txt> and push (triggers build/publish CI).
-# Runs the lint gate locally FIRST: release.yml requires gate.yml to pass before
-# publishing, but the tag is already pushed by then — a lint failure would leave a
-# broken v<version> tag on origin to clean up. Catch it here, before the push.
-release: _require-clean
-    #!/usr/bin/env bash
-    set -euo pipefail
-    cd {{ROOT_DIR}}
-    version=$(tr -d '[:space:]' < src/release/version.txt)
-    if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-        echo "src/release/version.txt is not MAJOR.MINOR.PATCH: '$version'" >&2
-        exit 1
-    fi
-    echo "==> running lint gate locally before pushing the release tag..."
-    {{just_executable()}} lint
-    scripts/check-frp-version.sh
-    git tag -a "v${version}" -m "release v${version}"
-    git push origin "$(git rev-parse --abbrev-ref HEAD)"
-    git push origin "v${version}"
-    echo "Pushed v${version}; the release workflow will build + publish. Adjust availableVersions.json and promote with: just promote"
+    just _release-pr
+    just _await-release
 
 # Do everything in one step
 rollout: build-all-docker publish promote

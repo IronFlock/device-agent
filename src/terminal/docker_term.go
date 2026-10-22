@@ -4,7 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io/ioutil"
+	"io"
 	"net"
 	"reagent/common"
 	"reagent/container"
@@ -31,7 +31,6 @@ type TerminalSession struct {
 	WriteTopic    string
 	ResizeTopic   string
 	once          sync.Once
-	stateLock     sync.Mutex
 
 	// unwatchedSince is when the reaper found no one subscribed to the
 	// output, first since it last found someone; zero while someone watches.
@@ -113,9 +112,9 @@ func (tm *TerminalManager) getShell(containerName string) (string, error) {
 		return "", err
 	}
 
-	defer hijackedResponse.Conn.Close()
+	defer func() { _ = hijackedResponse.Conn.Close() }()
 
-	result, err := ioutil.ReadAll(hijackedResponse.Reader)
+	result, err := io.ReadAll(hijackedResponse.Reader)
 	if err != nil {
 		return "", err
 	}
@@ -226,7 +225,7 @@ func (tm *TerminalManager) initTerminalMessagingChannels(termSess *TerminalSessi
 
 				_, err := termSess.Session.Conn.Write([]byte(incomingData))
 				if err != nil {
-					termSess.Session.Conn.Close() // will close both read and write
+					_ = termSess.Session.Conn.Close() // will close both read and write
 					termSess.errorChan <- err
 					break exit
 				}
@@ -335,7 +334,7 @@ func (tm *TerminalManager) cleanupSession(session *TerminalSession) {
 	safe.Go(func() {
 		// is ok if this errors
 		payload := []interface{}{[]byte("TERMINAL_EOF")}
-		tm.Messenger.Publish(dataTopic, payload, kwargs, options)
+		_ = tm.Messenger.Publish(dataTopic, payload, kwargs, options)
 	})
 
 	// The session has ended either way: a registration the router kept only
@@ -385,10 +384,10 @@ const (
 // cleanup.
 func hangUp(conn net.Conn) {
 	safe.Go(func() {
-		defer conn.Close()
+		defer func() { _ = conn.Close() }()
 
 		deadline := time.Now().Add(hangUpGrace)
-		conn.SetWriteDeadline(deadline)
+		_ = conn.SetWriteDeadline(deadline)
 
 		if _, err := conn.Write([]byte{0x03}); err != nil {
 			return

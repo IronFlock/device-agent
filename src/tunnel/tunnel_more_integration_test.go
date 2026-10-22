@@ -79,7 +79,7 @@ func requireFrpsReachable(t *testing.T) {
 	// frpc binary must be available where setupTunnel() expects it.
 	frpcBinary := filepath.Join(getTestAgentDir(), "frpc")
 	if _, err := os.Stat(frpcBinary); err != nil {
-		t.Skipf("skipping: frpc binary not found at %s (run `just download-frpc`): %v", frpcBinary, err)
+		t.Skipf("skipping: frpc binary not found at %s (run `just build-frpc`): %v", frpcBinary, err)
 	}
 
 	// The generated config logs to a fixed path; if we can't open it for append,

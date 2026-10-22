@@ -35,7 +35,7 @@ func (ex *External) updateReagent(ctx context.Context, response messenger.Result
 
 		serialNumber := ex.Config.ReswarmConfig.SerialNumber
 		topic := common.BuildAgentUpdateProgress(serialNumber)
-		ex.LogMessenger.Publish(topics.Topic(topic), []interface{}{progress}, nil, nil)
+		_ = ex.LogMessenger.Publish(topics.Topic(topic), []interface{}{progress}, nil, nil)
 	}
 
 	updateResult, err := ex.System.UpdateSystem(progressCallback, true)

@@ -10,10 +10,15 @@ that runs directly on each edge device's host OS. So the screen targets exactly
 what ships:
 
 - ✅ **Our Go code + all module dependencies** — `go.mod` closure, including the
-  `RecordEvolution/nexus` fork pulled in via `replace`.
-- ✅ **The embedded `frpc` binary** — a third-party Go binary (`src/embedded/frpc_binary`,
-  pinned by `FRP_VERSION`) compiled into the agent. It is **not** in `go.mod`, so a
-  module scan alone misses it.
+  nexus fork (`github.com/ironflock/nexus/v3`).
+- ✅ **The embedded `frpc` binary** — built from source by the `frp/` module
+  (`scripts/build-frpc.sh`, for every release target) and embedded into the agent
+  (`src/embedded/frpc_binary`). `frp/go.mod` pins the frp version (= `FRP_VERSION`,
+  checked by `scripts/check-frp-version.sh`) and raises `golang.org/x/net` and
+  `x/crypto` above frp's own requirements. It is **not** in the agent's `go.mod`, so it
+  is scanned separately in binary mode. Stripped like the upstream binary (size matters
+  on devices), so binary mode reports whole modules; the one resulting false positive
+  (`x/crypto/openpgp`, not linked) is recorded in `security/vex.openvex.json`.
 
 Out of scope (deliberately):
 
@@ -49,7 +54,7 @@ Both run via `go run` and are version-pinned in the `Justfile` (`GOVULNCHECK_VER
 ## Running it
 
 ```bash
-just security      # everything below, report-only (never fails)
+just security      # everything below, locally and report-only (CI blocks)
 
 just vuln-go       # our Go code + module deps (exit 3 = reachable vulns found)
 just vuln-frpc     # the embedded frpc binary (frp itself + its bundled deps)
@@ -59,25 +64,32 @@ just vuln-binaries # optional: scan each cross-compiled build/reagent-* artifact
 ```
 
 `govulncheck` exits **3** when it finds reachable vulnerabilities — that's expected
-while we're report-only. `just security` wraps the scans and always exits 0.
+locally. `just security` wraps the scans and always exits 0; the blocking decision
+is CI's `security / report` job.
 
 ## CI
 
-`.github/workflows/security.yml` runs the scans on every PR, on push to `master`,
-and **weekly** (`schedule`) — the weekly run matters because CVEs are disclosed
-against code long after it's written, so a frozen codebase still needs periodic
-re-scanning. It is **report-only**: nothing here fails the build.
+Both workflows call the shared IronFlock CI harness
+([IronFlock/workflows](https://github.com/IronFlock/workflows), `@v1`).
 
-- **Code scanning (Security tab):** `just sarif` emits govulncheck SARIF for the
-  code and the frpc binary, which is uploaded via `github/codeql-action/upload-sarif`
-  under two categories (`govulncheck-code`, `govulncheck-frpc`). Findings then show
-  up under the repo's **Security → Code scanning** tab.
-- **Fallbacks:** the job also prints a finding summary to the log and uploads the
-  raw SARIF + the CycloneDX SBOMs as workflow artifacts.
+| Check | What it runs | When |
+|---|---|---|
+| `ci / gate` | `just lint` (gofmt, `go mod tidy -diff`, go vet, build, golangci-lint incl. gosec for Linux **and** Windows, frp version pins), `just test` (race + shuffle, no cache), cross-builds of the agent with frpc for linux/amd64, arm64, arm/7, arm/6 and windows/amd64 | every PR, push to `main` |
+| `ci / workflows` | actionlint, zizmor, pinned actions | every PR, push to `main` |
+| `ci / integration`, `ci / coverage`, `ci / windows-unit` | Docker/D-Bus/frps integration suite, production-scoped coverage, native Windows tests | every PR, push to `main` |
+| `security / security` | gitleaks, `just sarif` (govulncheck on the code and the embedded frpc), semgrep (IronFlock rules), trivy config (Dockerfiles), licences, `just sbom` | every PR, push to `main`, Mondays 06:17 UTC |
 
-> The Security-tab upload needs Code scanning enabled — i.e. a public repo or, for a
-> private repo, **GitHub Advanced Security**. Without it the upload steps no-op
-> (`continue-on-error`) and you rely on the log summary + the SARIF/SBOM artifacts.
+`ci-ok` (all ci jobs green) and `security / report` are the required checks of the
+ruleset on `main`: nothing merges unless both pass. The weekly run matters because
+CVEs are disclosed against code long after it is written.
+
+**Blocking.** The `report` job fails on secrets, fixable high/critical
+vulnerabilities, high misconfigurations, forbidden licences and semgrep errors.
+Accepted findings carry a reason and an expiry and are reviewed in the PR that adds
+them: `security/vex.openvex.json` (not-affected vulnerabilities, valid 12 months),
+`.trivyignore.yaml` (`expired_at` required; the root user of the agent images),
+`.gitleaks.toml` (test vectors and the local-dev demo device, each scoped to its
+lines), and `//nolint:gosec // <reason>` at the code site.
 
 ## Signed SBOM attestation (release provenance)
 
@@ -98,9 +110,15 @@ as long as releases go through CI (tag push) rather than a local `just rollout`.
 
 ## Remediation status
 
+- **2026-10-22:** Go **1.27.3** (GO-2026-6809), `x/net` v0.61.0, `x/crypto` v0.58.0, and
+  frpc **0.71.1 built from source** instead of the downloaded release binary (the
+  downloaded 0.71.0 carried 26 reachable findings from its older Go and `x/*`
+  dependencies; the source build has none). govulncheck: our code 0 reachable apart
+  from the two accepted moby findings below; frpc 0 apart from the stripping false
+  positive.
 - **Go standard-library CVEs** (the bulk of our findings — `crypto/tls`, `crypto/x509`,
-  `net/url`, `net/http`, …) are fixed by the **Go toolchain**. We pin **`toolchain go1.27.1`**
-  in `src/go.mod` (and `golang:1.27-alpine` in the builder `Dockerfile`); CI's `setup-go`
+  `net/url`, `net/http`, …) are fixed by the **Go toolchain**. `src/go.mod`'s `go` line
+  and the builder `Dockerfile` (`golang:1.27.3-alpine`) pin it; CI's `setup-go`
   reads `go.mod`. Bump the toolchain as new ones are disclosed — this is not a one-time
   fix. On **2026-09-11** the pin moved `go1.26.4` → `go1.27.1`, clearing 6 stdlib CVEs
   (`net/url`, `crypto/tls` ×2, `net/http` ×2, `encoding/asn1`) that had been disclosed
@@ -111,8 +129,9 @@ as long as releases go through CI (tag push) rather than a local `just rollout`.
   Together with the toolchain bump this took govulncheck from **9 reachable / 8 module**
   findings to **2 reachable / 4 module** — and every remaining one has no fix available
   (see below).
-- **frpc binary CVEs** — remediated by bumping **`FRP_VERSION`** to a newer release (kept in
-  sync across `Justfile`, `scripts/build.sh`, and `src/embedded/frpc.go`).
+- **frpc CVEs** — remediated in `frp/go.mod`: bump `x/net`/`x/crypto` there at once, or
+  frp itself (then also `FRP_VERSION` in the `Justfile` and `src/embedded/frpc.go`, and
+  the tunnel repository's server version).
 
 ### Accepted findings (not actionable)
 
@@ -142,9 +161,8 @@ is nothing left that a dependency bump can clear. Five are in `github.com/docker
 
 Revisit when `github.com/moby/moby/v2` reaches a stable release (then migrate the SDK import).
 
-## Roadmap: report-only → gating
+## Roadmap
 
-We start **report-only** to establish a clean baseline without blocking everyone.
-Once the baseline is addressed, tighten by failing on fixable findings — e.g. drop
-`continue-on-error` in CI, or add `-mode=binary` gating, and track accepted/unfixable
-items in a suppression file. (Dependabot auto-update PRs are a possible follow-up.)
+1. ~~Report-only → gating~~ — blocking since 2026-10-22.
+2. Migrate the Docker SDK to `github.com/moby/moby/v2` once it is stable; then drop the
+   two moby VEX statements.

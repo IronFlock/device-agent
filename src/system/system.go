@@ -192,7 +192,7 @@ func fetchSmall(url string) ([]byte, int, error) {
 	if err != nil {
 		return nil, 0, err
 	}
-	defer body.Close()
+	defer func() { _ = body.Close() }()
 	data, err := io.ReadAll(io.LimitReader(body, 64<<10))
 	if err != nil {
 		return nil, status, err
@@ -302,7 +302,7 @@ func (sys *System) downloadBinary(base, tree, fileName, localName string, versio
 		log.Warn().Err(err).Msgf("signature verification failed for %s (proceeding: pre-cutover)", agentURL)
 	}
 
-	err = os.Chmod(tmpFilePath, 0755)
+	err = os.Chmod(tmpFilePath, 0755) //nolint:gosec // G302: downloaded binary, must be executable; contents are verified by signature
 	if err != nil {
 		log.Error().Err(err).Msgf("Failed to set permissions for %s binary", fileName)
 		return err
@@ -331,7 +331,7 @@ func verifyRemoteChecksum(filePath string, binaryURL string) error {
 		log.Warn().Err(err).Msgf("could not fetch checksum manifest %s, skipping verification", manifestURL)
 		return nil
 	}
-	defer body.Close()
+	defer func() { _ = body.Close() }()
 
 	if statusCode == http.StatusNotFound {
 		log.Warn().Msgf("no checksum manifest published at %s, skipping verification", manifestURL)
@@ -358,7 +358,7 @@ func verifyRemoteChecksum(filePath string, binaryURL string) error {
 	if err != nil {
 		return err
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 
 	hasher := sha256.New()
 	_, err = io.Copy(hasher, file)
@@ -427,7 +427,7 @@ func fetchAndVerifySignature(filePath string, binaryURL string, target updatesig
 	if err != nil {
 		return "", fmt.Errorf("could not fetch update signature %s: %w", signatureURL, err)
 	}
-	defer body.Close()
+	defer func() { _ = body.Close() }()
 
 	if statusCode == http.StatusNotFound {
 		return "", fmt.Errorf("%w: nothing published at %s", updatesig.ErrMissingSignature, signatureURL)
@@ -689,7 +689,7 @@ func (system *System) GetFrpCurrentVersion() (string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second*5)
 	defer cancel()
 
-	cmd := exec.CommandContext(ctx, frpPath, "--version")
+	cmd := exec.CommandContext(ctx, frpPath, "--version") //nolint:gosec // G204: frpc binary installed by the agent itself
 	stdout, err := cmd.Output()
 	if err != nil {
 		return "", err

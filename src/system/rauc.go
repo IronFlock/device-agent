@@ -67,7 +67,7 @@ func NewRaucDBus() (raucDBus, error) {
 	raucbus.object = raucbus.conn.Object(raucDBusInterface, raucDBusObjectPath)
 
 	// subscribe DBus object to "Complete" signal
-	raucbus.conn.AddMatchSignal(
+	_ = raucbus.conn.AddMatchSignal(
 		dbus.WithMatchInterface(raucDBusMethodBase),
 		dbus.WithMatchMember("Completed"),
 		dbus.WithMatchObjectPath(raucbus.object.Path()))
@@ -84,7 +84,7 @@ func raucInstallBundle(bundlePath string, progressCallback func(operationName st
 	if err != nil {
 		return errors.New("failed to set up new RAUC DBus instance")
 	}
-	defer raucbus.conn.Close()
+	defer func() { _ = raucbus.conn.Close() }()
 
 	// https://github.com/godbus/dbus/blob/v4.1.0/conn.go#L560
 	completedChannel := make(chan *dbus.Signal, 60)
@@ -148,15 +148,6 @@ func raucReportProgress(raucbus *raucDBus, progressCallback func(operationName s
 		time.Sleep(200 * time.Millisecond)
 	}
 	log.Debug().Msg("raucInstallBundle: raucReportProgress: done")
-}
-
-func raucGetOperation(raucbus *raucDBus) (operation string, err error) {
-	oper, err := raucbus.object.GetProperty(raucDBusPropertyOperation)
-	if err != nil {
-		return "", err
-	}
-
-	return oper.String(), nil
 }
 
 func raucGetLastError(raucbus *raucDBus) (errormessage string, err error) {

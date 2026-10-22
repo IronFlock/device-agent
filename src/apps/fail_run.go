@@ -19,7 +19,7 @@ func (sm *StateMachine) recoverFailToRunningHandler(payload common.TransitionPay
 		removeContainerByIdContext, cancel := context.WithTimeout(context.Background(), time.Second*30)
 		defer cancel()
 		// remove any existing container to ensure environment variables are set
-		sm.Container.RemoveContainerByID(removeContainerByIdContext, containerToRemove, map[string]interface{}{"force": true})
+		_ = sm.Container.RemoveContainerByID(removeContainerByIdContext, containerToRemove, map[string]interface{}{"force": true})
 	}
 
 	return sm.runApp(payload, app)

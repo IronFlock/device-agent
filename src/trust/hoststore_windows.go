@@ -47,14 +47,14 @@ func hostRootDERs() ([][]byte, error) {
 				0,
 				0,
 				location|windows.CERT_STORE_READONLY_FLAG,
-				uintptr(unsafe.Pointer(name)),
+				uintptr(unsafe.Pointer(name)), //nolint:gosec // G103: Win32 certificate store API calls
 			)
 			if err != nil {
 				continue
 			}
 
 			ders = append(ders, enumerateStore(store)...)
-			windows.CertCloseStore(store, 0)
+			_ = windows.CertCloseStore(store, 0)
 		}
 	}
 
@@ -80,7 +80,7 @@ func enumerateStore(store windows.Handle) [][]byte {
 		}
 
 		der := make([]byte, certContext.Length)
-		copy(der, unsafe.Slice(certContext.EncodedCert, certContext.Length))
+		copy(der, unsafe.Slice(certContext.EncodedCert, certContext.Length)) //nolint:gosec // G103: Win32 certificate store API calls
 		ders = append(ders, der)
 	}
 }

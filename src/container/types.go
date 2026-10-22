@@ -9,7 +9,8 @@ import (
 	"reagent/config"
 	"time"
 
-	"github.com/docker/docker/api/types"
+	dockerbuild "github.com/docker/docker/api/types/build"
+
 	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/api/types/events"
 	"github.com/docker/docker/api/types/network"
@@ -74,14 +75,14 @@ type Container interface {
 	Login(ctx context.Context, serverAddress string, username string, password string) (string, error)
 	HandleRegistryLogins(credentials map[string]common.DockerCredential) error
 	ResizeExecContainer(ctx context.Context, execID string, dimension TtyDimension) error
-	Build(ctx context.Context, pathToTar string, options types.ImageBuildOptions) (io.ReadCloser, error)
+	Build(ctx context.Context, pathToTar string, options dockerbuild.ImageBuildOptions) (io.ReadCloser, error)
 	GetContainerState(ctx context.Context, containerName string) (ContainerState, error)
 	GetContainerPortBindings(ctx context.Context, containerName string) (map[string]uint64, error)
 	GetComposePublishedPorts(ctx context.Context, projectName string) (map[string]uint64, error)
 	GetContainerNetworkMode(ctx context.Context, containerName string) (string, error)
 	ListenForContainerEvents(ctx context.Context) (<-chan events.Message, <-chan error)
-	GetContainer(ctx context.Context, containerName string) (types.Container, error)
-	GetContainers(ctx context.Context) ([]types.Container, error)
+	GetContainer(ctx context.Context, containerName string) (container.Summary, error)
+	GetContainers(ctx context.Context) ([]container.Summary, error)
 	Logs(ctx context.Context, containerName string, options common.Dict) (io.ReadCloser, error)
 	ExecCommand(ctx context.Context, containerName string, cmd []string) (HijackedResponse, error)
 	ExecAttach(ctx context.Context, containerName string, shell string) (HijackedResponse, error)

@@ -29,11 +29,11 @@ func (sm *StateMachine) cancelBuild(payload common.TransitionPayload, app *commo
 
 	if payload.DockerCompose != nil {
 		compose := sm.Container.Compose()
-		compose.CancelBuild(buildID) // ignore error — build may have already finished
+		_ = compose.CancelBuild(buildID) // ignore error — build may have already finished
 		return sm.settleCanceledTransition(payload, app)
 	}
 
-	sm.Container.CancelStream(buildID)
+	_ = sm.Container.CancelStream(buildID)
 
 	return sm.settleCanceledTransition(payload, app)
 }
@@ -62,7 +62,7 @@ func (sm *StateMachine) cancelPull(payload common.TransitionPayload, app *common
 
 	pullID := common.BuildDockerPullID(payload.AppKey, payload.AppName)
 
-	sm.Container.CancelStream(pullID)
+	_ = sm.Container.CancelStream(pullID)
 
 	return sm.settleCanceledTransition(payload, app)
 }
@@ -70,7 +70,7 @@ func (sm *StateMachine) cancelPull(payload common.TransitionPayload, app *common
 func (sm *StateMachine) cancelPush(payload common.TransitionPayload, app *common.App) error {
 	pushID := common.BuildDockerPushID(payload.AppKey, payload.AppName)
 
-	sm.Container.CancelStream(pushID)
+	_ = sm.Container.CancelStream(pushID)
 
 	return sm.settleCanceledTransition(payload, app)
 }
@@ -98,12 +98,12 @@ func (sm *StateMachine) interruptActiveTransition(payload common.TransitionPaylo
 	sm.cancelComposeTransition(payload.Stage, payload.AppKey)
 
 	pullID := common.BuildDockerPullID(payload.AppKey, payload.AppName)
-	sm.Container.CancelStream(pullID)
+	_ = sm.Container.CancelStream(pullID)
 
 	if payload.Stage == common.DEV {
 		buildID := common.BuildDockerBuildID(payload.AppKey, payload.AppName)
-		sm.Container.Compose().CancelBuild(buildID) // ignore error — no build may be in flight
-		sm.Container.CancelStream(buildID)
+		_ = sm.Container.Compose().CancelBuild(buildID) // ignore error — no build may be in flight
+		_ = sm.Container.CancelStream(buildID)
 	}
 }
 

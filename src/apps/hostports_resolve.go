@@ -12,7 +12,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/docker/docker/api/types"
 	dockercontainer "github.com/docker/docker/api/types/container"
 	"github.com/docker/go-connections/nat"
 	"github.com/rs/zerolog/log"
@@ -325,13 +324,13 @@ func (sm *StateMachine) computePortBindings(payload common.TransitionPayload, po
 		hostPort, err := am.reserveLaunchHostPort(payload, rule, liveBindings)
 		if err != nil {
 			if reservedPort := reservedHostPortFor(payload.Stage, rule); reservedPort != 0 {
-				sm.LogManager.Write(containerName, reservedPortUnavailableLog(reservedPort, rule.Port, err))
+				_ = sm.LogManager.Write(containerName, reservedPortUnavailableLog(reservedPort, rule.Port, err))
 			}
 			return nil, nil, err
 		}
 
 		if payload.Stage == common.DEV && hostPort != rule.Port {
-			sm.LogManager.Write(containerName, fmt.Sprintf("Port %d is already in use by another app; port %d of %s is reachable on host port %d instead.", rule.Port, rule.Port, payload.AppName, hostPort))
+			_ = sm.LogManager.Write(containerName, fmt.Sprintf("Port %d is already in use by another app; port %d of %s is reachable on host port %d instead.", rule.Port, rule.Port, payload.AppName, hostPort))
 		}
 
 		containerPort, err := nat.NewPort(wireProtocol(rule.Protocol), strconv.FormatUint(rule.Port, 10))
@@ -453,7 +452,7 @@ func (sm *StateMachine) rewriteComposeHostPorts(payload common.TransitionPayload
 	for _, rule := range portRules {
 		if reservedPort := reservedHostPortFor(payload.Stage, rule); reservedPort != 0 && countComposeRuleMatches(dockerCompose, rule) > 1 {
 			ambiguityErr := fmt.Errorf("reserved host port %d for port %d is ambiguous: several compose services declare the port (ambiguous_compose_rule)", reservedPort, rule.Port)
-			sm.LogManager.Write(payload.ContainerName.Prod, reservedPortUnavailableLog(reservedPort, rule.Port, "several compose services declare the same port"))
+			_ = sm.LogManager.Write(payload.ContainerName.Prod, reservedPortUnavailableLog(reservedPort, rule.Port, "several compose services declare the same port"))
 			return ambiguityErr
 		}
 	}
@@ -513,7 +512,7 @@ func (sm *StateMachine) rewriteComposeHostPorts(payload common.TransitionPayload
 				// already publishes the entry on exactly the reserved port.
 				skipProbe := published[container.PublishedPortKey(serviceName, entry.ContainerPort, entry.Protocol)] == reservedPort
 				if pinErr := am.hostPorts.PinExact(key, reservedPort, skipProbe); pinErr != nil {
-					sm.LogManager.Write(payload.ContainerName.Prod, reservedPortUnavailableLog(reservedPort, matchingRule.Port, pinErr))
+					_ = sm.LogManager.Write(payload.ContainerName.Prod, reservedPortUnavailableLog(reservedPort, matchingRule.Port, pinErr))
 					return pinErr
 				}
 				hostPort = reservedPort
@@ -528,7 +527,7 @@ func (sm *StateMachine) rewriteComposeHostPorts(payload common.TransitionPayload
 				}
 
 				if payload.Stage == common.DEV && hostPort != entry.DeclaredPort() {
-					sm.LogManager.Write(payload.ContainerName.Dev, fmt.Sprintf("Port %d is already in use by another app; port %d of service %s is reachable on host port %d instead.", entry.DeclaredPort(), entry.ContainerPort, serviceName, hostPort))
+					_ = sm.LogManager.Write(payload.ContainerName.Dev, fmt.Sprintf("Port %d is already in use by another app; port %d of service %s is reachable on host port %d instead.", entry.DeclaredPort(), entry.ContainerPort, serviceName, hostPort))
 				}
 			}
 
@@ -544,7 +543,7 @@ func (sm *StateMachine) rewriteComposeHostPorts(payload common.TransitionPayload
 // containerNetworkConfigOutdated reports whether an existing container must
 // be recreated because its network mode or published ports no longer match
 // the desired host config.
-func (sm *StateMachine) containerNetworkConfigOutdated(cont types.Container, hConfig *dockercontainer.HostConfig, containerName string) bool {
+func (sm *StateMachine) containerNetworkConfigOutdated(cont dockercontainer.Summary, hConfig *dockercontainer.HostConfig, containerName string) bool {
 	if normalizeNetworkMode(cont.HostConfig.NetworkMode) != normalizeNetworkMode(string(hConfig.NetworkMode)) {
 		return true
 	}
@@ -596,7 +595,7 @@ func (am *AppManager) writeAppLog(containerName string, message string) {
 	if am.StateMachine == nil || am.StateMachine.LogManager == nil {
 		return
 	}
-	am.StateMachine.LogManager.Write(containerName, message)
+	_ = am.StateMachine.LogManager.Write(containerName, message)
 }
 
 // notePendingReservation writes the "takes effect on the next restart"

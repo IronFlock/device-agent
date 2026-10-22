@@ -49,7 +49,6 @@ linux/amd64
 linux/arm64
 linux/arm/7
 linux/arm/6
-linux/arm/5
 windows/amd64
 ```
 

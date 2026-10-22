@@ -7,11 +7,12 @@ import (
 	"testing"
 	"time"
 
+	dockercontainer "github.com/docker/docker/api/types/container"
+
 	"reagent/common"
 	containerpkg "reagent/container"
 	"reagent/testutil/builders"
 
-	dockertypes "github.com/docker/docker/api/types"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
@@ -148,7 +149,7 @@ func TestUninstallApp(t *testing.T) {
 		// removeProdApp path: no live container -> only image removal.
 		mc.EXPECT().
 			GetContainer(mock.Anything, payload.ContainerName.Prod).
-			Return(dockertypes.Container{}, notFoundErr()).
+			Return(dockercontainer.Summary{}, notFoundErr()).
 			Once()
 		mc.EXPECT().
 			RemoveImagesByName(mock.Anything, payload.RegistryImageName.Prod, mock.Anything).
@@ -182,7 +183,7 @@ func TestUninstallApp(t *testing.T) {
 		boom := errors.New("image removal failed")
 		mc.EXPECT().
 			GetContainer(mock.Anything, payload.ContainerName.Prod).
-			Return(dockertypes.Container{}, notFoundErr()).
+			Return(dockercontainer.Summary{}, notFoundErr()).
 			Once()
 		mc.EXPECT().
 			RemoveImagesByName(mock.Anything, payload.RegistryImageName.Prod, mock.Anything).
@@ -217,7 +218,7 @@ func TestUninstallApp(t *testing.T) {
 		// removeDevApp path: no live container -> only dev image removal.
 		mc.EXPECT().
 			GetContainer(mock.Anything, payload.ContainerName.Dev).
-			Return(dockertypes.Container{}, notFoundErr()).
+			Return(dockercontainer.Summary{}, notFoundErr()).
 			Once()
 		mc.EXPECT().
 			RemoveImagesByName(mock.Anything, payload.RegistryImageName.Dev, mock.Anything).
@@ -263,7 +264,7 @@ func TestRecoverFailToRunningHandler(t *testing.T) {
 			Once()
 		mc.EXPECT().
 			GetContainer(mock.Anything, payload.ContainerName.Prod).
-			Return(dockertypes.Container{}, notFoundErr()).
+			Return(dockercontainer.Summary{}, notFoundErr()).
 			Once()
 		mc.EXPECT().
 			CreateContainer(mock.Anything, mock.Anything, mock.Anything, mock.Anything, payload.ContainerName.Prod).
@@ -470,7 +471,7 @@ func TestUpdateApp(t *testing.T) {
 		// No existing container -> the remove/poll block is skipped.
 		mc.EXPECT().
 			GetContainer(mock.Anything, payload.ContainerName.Prod).
-			Return(dockertypes.Container{}, notFoundErr()).
+			Return(dockercontainer.Summary{}, notFoundErr()).
 			Once()
 		mc.EXPECT().HandleRegistryLogins(mock.Anything).Return(nil).Once()
 		mc.EXPECT().

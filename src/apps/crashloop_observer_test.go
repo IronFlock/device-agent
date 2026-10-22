@@ -4,10 +4,11 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/docker/docker/api/types/container"
+
 	"reagent/common"
 	"reagent/messenger/topics"
 
-	dockertypes "github.com/docker/docker/api/types"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
@@ -95,7 +96,7 @@ func TestObserverReDrivesWhenNoCrashLoopOwnsTheApp(t *testing.T) {
 	// found") ends the transition in FAILED without further calls.
 	mc.EXPECT().
 		GetContainer(mock.Anything, stop.ContainerName.Prod).
-		Return(dockertypes.Container{}, errors.New("daemon busy")).
+		Return(container.Summary{}, errors.New("daemon busy")).
 		Once()
 
 	stopObserving := am.StateObserver.driveCorrectedProdApp(app, common.RUNNING, stop.ContainerName.Prod)
@@ -124,7 +125,7 @@ func TestCompletedRetryClearsItsCrashLoop(t *testing.T) {
 	mt.EXPECT().GetState().Return(nil, nil).Maybe()
 	mc.EXPECT().
 		GetContainer(mock.Anything, uninstall.ContainerName.Prod).
-		Return(dockertypes.Container{}, notFoundErr()).
+		Return(container.Summary{}, notFoundErr()).
 		Once()
 	mc.EXPECT().
 		RemoveImagesByName(mock.Anything, mock.Anything, mock.Anything).

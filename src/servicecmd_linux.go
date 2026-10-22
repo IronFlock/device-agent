@@ -132,7 +132,7 @@ func linuxServiceUninstall() error {
 }
 
 func systemctl(args ...string) error {
-	cmd := exec.Command("systemctl", args...)
+	cmd := exec.Command("systemctl", args...) //nolint:gosec // G204: fixed systemctl invocations with unit names from the agent layout
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	if err := cmd.Run(); err != nil {
@@ -148,7 +148,7 @@ func copyFileAtomic(src, dst string, mode os.FileMode) error {
 	if err != nil {
 		return err
 	}
-	defer in.Close()
+	defer func() { _ = in.Close() }()
 
 	tmp := dst + ".tmp"
 	out, err := os.OpenFile(tmp, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, mode)
@@ -169,7 +169,7 @@ func copyFileAtomic(src, dst string, mode os.FileMode) error {
 		err = os.Rename(tmp, dst)
 	}
 	if err != nil {
-		os.Remove(tmp)
+		_ = os.Remove(tmp)
 		return err
 	}
 	if dir, err := os.Open(filepath.Dir(dst)); err == nil {

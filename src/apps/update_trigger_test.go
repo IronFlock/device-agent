@@ -4,6 +4,8 @@ import (
 	"testing"
 	"time"
 
+	dockercontainer "github.com/docker/docker/api/types/container"
+
 	"reagent/common"
 	containerpkg "reagent/container"
 	"reagent/errdefs"
@@ -11,7 +13,6 @@ import (
 	"reagent/testutil/fakes"
 	"reagent/testutil/mocks"
 
-	dockertypes "github.com/docker/docker/api/types"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
@@ -70,7 +71,7 @@ func updRequest(name string, requested common.AppState, present, newest string) 
 func updExpectPull(mc *mocks.Container, payload common.TransitionPayload, supersededVersion string) {
 	mc.EXPECT().
 		GetContainer(mock.Anything, payload.ContainerName.Prod).
-		Return(dockertypes.Container{}, notFoundErr()).
+		Return(dockercontainer.Summary{}, notFoundErr()).
 		Once()
 	mc.EXPECT().HandleRegistryLogins(mock.Anything).Return(nil).Once()
 	mc.EXPECT().
@@ -383,7 +384,7 @@ func TestDroppedUpdateIsRecoveredAfterTransitionCompletes(t *testing.T) {
 	// completion or looping. Reaching UPDATING/FAILED proves the update was
 	// re-driven; a stranded update would leave the app sitting in RUNNING.
 	mc.EXPECT().GetContainer(mock.Anything, mock.Anything).
-		Return(dockertypes.Container{}, notFoundErr()).Maybe()
+		Return(dockercontainer.Summary{}, notFoundErr()).Maybe()
 	mc.EXPECT().HandleRegistryLogins(mock.Anything).Return(nil).Maybe()
 	mc.EXPECT().Pull(mock.Anything, mock.Anything, mock.Anything).
 		Return(nil, assert.AnError).Maybe()
