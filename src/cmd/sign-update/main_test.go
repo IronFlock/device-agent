@@ -236,6 +236,51 @@ func TestSigFromOpenBao(t *testing.T) {
 	}
 }
 
+// kmsSign answers a `message` request like `gcloud kms asymmetric-sign` does
+// for an Ed25519 key, base64-encoded the way sign-release.sh hands it over.
+func kmsSign(t *testing.T, priv ed25519.PrivateKey, input string) string {
+	t.Helper()
+	signed, err := base64.StdEncoding.DecodeString(strings.TrimSpace(input))
+	require.NoError(t, err)
+	return base64.StdEncoding.EncodeToString(ed25519.Sign(priv, signed))
+}
+
+func TestSigFromKMS(t *testing.T) {
+	_, privateKey, _ := keygenForTest(t)
+	publicKey := privateKey.Public().(ed25519.PublicKey)
+	_, otherKey, _ := keygenForTest(t)
+	trustOnly(t, publicKey)
+
+	binary := writeTestBinary(t, "device-agent-linux-amd64", "agent build")
+	var stdout bytes.Buffer
+	require.NoError(t, run([]string{"message", "-version", "1.4.0", binary}, nil, &stdout))
+	input := stdout.String()
+
+	t.Run("a valid KMS signature becomes a .sig the agent accepts", func(t *testing.T) {
+		var out bytes.Buffer
+		require.NoError(t, run([]string{"sig-from-kms", "-version", "1.4.0", binary}, strings.NewReader(kmsSign(t, privateKey, input)+"\n"), &out))
+		assert.Contains(t, out.String(), "by Cloud KMS (key "+updatesig.KeyID(publicKey)+")")
+		require.NoError(t, run([]string{"verify", "-version", "1.4.0", binary}, nil, &out))
+		require.NoError(t, os.Remove(binary+".sig"))
+	})
+
+	for name, tc := range map[string]struct {
+		args   []string
+		answer string
+	}{
+		"signed by a key this build does not trust": {[]string{"-version", "1.4.0"}, kmsSign(t, otherKey, input)},
+		"signed for another version":                {[]string{"-version", "1.4.1"}, kmsSign(t, privateKey, input)},
+		"not a signature":                           {[]string{"-version", "1.4.0"}, "PERMISSION_DENIED: Permission 'cloudkms.cryptoKeyVersions.useToSign' denied"},
+		"an OpenBao answer":                         {[]string{"-version", "1.4.0"}, transitSign(t, privateKey, 1, input)},
+	} {
+		t.Run("refuses "+name, func(t *testing.T) {
+			args := append(append([]string{"sig-from-kms"}, tc.args...), binary)
+			assert.Error(t, run(args, strings.NewReader(tc.answer), &bytes.Buffer{}))
+			assert.NoFileExists(t, binary+".sig")
+		})
+	}
+}
+
 // The fixture is real `bao read -format=json transit/keys/agent-update`
 // output of an OpenBao 2.7.1 dev server after one rotation; the key IDs were
 // computed outside Go.

@@ -2,14 +2,17 @@
 # Artifact Registry) and record a signed SBOM attestation per binary.
 #
 # The binaries are staged WITHOUT the Ed25519 signature (.sig) agents require
-# before installing an update or frpc: that key lives only in IronFlock's
-# OpenBao (non-exportable transit key), and GitHub holds no signing material.
-# `just promote` signs them (scripts/sign-release.sh) before they go live.
+# before installing an update or frpc. GitHub holds no signing material: the
+# key is non-exportable in Cloud KMS, and only the `promote` job of a tag run
+# of this workflow may sign with it (scripts/sign-release.sh).
 #
-# This STAGES a version: binaries land at
-# gs://ironflock-downloads/device-agent/<os>/<arch>/<version>/ and images are
-# pushed, but agents do NOT pick it up until the version is promoted by the
-# MANUAL release step (`just promote` -> the signed manifest.json). See README
+# On a tag it stages the version (binaries at
+# gs://ironflock-downloads/device-agent/<os>/<arch>/<version>/, images pushed)
+# and then PROMOTES it (`promote` job, `just promote-ci`): every binary, the
+# pinned frpc and manifest-v2.json are signed with the Cloud KMS key
+# ironflock-release/agent-update, then the version files flip and agents
+# update. The bridge release (src/release/bridge-version.txt) is the exception:
+# it is promoted by hand through OpenBao (`just promote-bridge`). See README
 # "Build, Publish and Release".
 #
 # Trigger: the tag `vX.Y.Z` that `just release-patch` puts on the merged release
@@ -213,7 +216,79 @@ jobs:
         if: startsWith(github.ref, 'refs/tags/v')
         run: just push-docker-image
 
-      - name: Release reminder
-        if: startsWith(github.ref, 'refs/tags/v')
+  promote:
+    name: sign (Cloud KMS) + promote
+    needs: publish
+    # Only a pushed v* tag on main gets here (verify). Never a manual run, not
+    # even one started on a tag: that would re-promote an old version.
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # The bridge release is promoted by hand (OpenBao). Every later release
+      # needs the bridge live first, and never goes below the live version:
+      # re-running an old tag's release must not roll the fleet back.
+      - name: Bridge release, order, no rollback
+        id: bridge
         run: |
-          echo "::notice::Version staged UNSIGNED. Promote it manually with: just promote  (signs through OpenBao, then publishes version.txt, availableVersions.json and the signed manifest.json)"
+          version=$(tr -d '[:space:]' < src/release/version.txt)
+          bridge=$(tr -d '[:space:]' < src/release/bridge-version.txt)
+          if [ "$version" = "$bridge" ]; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            echo "::notice::$version is the bridge release: staged, NOT promoted. Promote it by hand with: just promote-bridge"
+            exit 0
+          fi
+          live=$(curl -fsS --retry 3 https://storage.googleapis.com/ironflock-downloads/device-agent/version.txt | tr -d '[:space:]')
+          at_least() { [ "$(printf '%s\n%s\n' "$1" "$2" | sort -V | tail -n 1)" = "$1" ]; }
+          if ! at_least "$live" "$bridge"; then
+            echo "::error::the bridge release $bridge is not live yet (live: $live). Promote it first: just promote-bridge"; exit 1
+          fi
+          if ! at_least "$version" "$live"; then
+            echo "::error::$version is older than the live $live: not promoted (roll back by hand: just promote)"; exit 1
+          fi
+          echo "skip=false" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        if: steps.bridge.outputs.skip == 'false'
+        with:
+          go-version-file: src/go.mod
+          cache: false
+      - uses: extractions/setup-just@53165ef7e734c5c07cb06b3c8e7b647c5aa16db3 # v4
+        if: steps.bridge.outputs.skip == 'false'
+        with:
+          just-version: "1.59.0"
+
+      # Signing identity: may only sign with the KMS key, and only from a tag
+      # run of this workflow (workload identity attribute release).
+      - name: Authenticate the signer (Cloud KMS only)
+        id: signer
+        if: steps.bridge.outputs.skip == 'false'
+        uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3
+        with:
+          workload_identity_provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: agent-signer@record-1283.iam.gserviceaccount.com
+      - name: Keep the signer credentials for the KMS calls only
+        if: steps.bridge.outputs.skip == 'false'
+        env:
+          SIGNER_CREDENTIALS: ${{ steps.signer.outputs.credentials_file_path }}
+        run: echo "KMS_CREDENTIALS=$SIGNER_CREDENTIALS" >> "$GITHUB_ENV"
+      # Publishing identity (the bucket), as in `publish`; default credentials.
+      - name: Authenticate the publisher
+        if: steps.bridge.outputs.skip == 'false'
+        uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3
+        with:
+          workload_identity_provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ vars.GCP_SERVICE_ACCOUNT }}
+      - uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db # v3.0.1
+        if: steps.bridge.outputs.skip == 'false'
+
+      - name: Sign with Cloud KMS and promote
+        if: steps.bridge.outputs.skip == 'false'
+        run: just promote-ci

@@ -326,7 +326,8 @@ _require-clean:
 # `_release-pr` opens a PR with the version bump, GitHub merges it (squash) once
 # ci-ok and security / report are green, and the merged commit is tagged. The
 # tag runs .github/workflows/release.yml, which stages the version (binaries,
-# SBOM attestations, images) unsigned; `just promote` signs and publishes it.
+# SBOM attestations, images), then signs and promotes it (`promote-ci`); the
+# bridge release is the exception (`promote-bridge`, by hand).
 # Version bump through a pull request (main is protected): branch, commit only
 # the version files, open the PR, merge it automatically (squash) once the
 # required checks pass, then tag the merged commit on main and push the tag.
@@ -384,7 +385,11 @@ _await-release:
     [ -n "$run" ] || { echo "no release run for ${tag} appeared; check GitHub Actions" >&2; exit 1; }
     gh run watch "$run" --exit-status --interval 20 >/dev/null || {
         echo "release run $run for ${tag} failed: gh run view $run --log-failed" >&2; exit 1; }
-    echo "==> ${tag} staged by CI (run $run) — unsigned; agents pick it up only after: just promote"
+    if [ "${tag#v}" = "$(tr -d '[:space:]' < src/release/bridge-version.txt)" ]; then
+        echo "==> ${tag} staged by CI (run $run), NOT promoted: it is the bridge release. Promote it with: just promote-bridge"
+    else
+        echo "==> ${tag} signed and promoted by CI (run $run): agents update to it now"
+    fi
 
 release-patch:
     just _require-clean
@@ -412,11 +417,26 @@ clean:
     rm -f build/*
     rm -f src/embedded/frpc_binary
 
-# Promote a staged version to live: sign it through OpenBao (sign-release, which
-# also seals build/manifest.json), republish the `latest` alias, then publish
-# version.txt, availableVersions.json and the signed manifest.json.
-# This is the manual release gate — agents read device-agent/manifest.json.
+# Promote a staged version to live: sign it (sign-release, which also seals
+# build/manifest-v2.json), republish the `latest` alias, then publish
+# version.txt, availableVersions.json and the signed manifest-v2.json.
+# Releases are promoted by CI (`promote-ci`, release.yml). This is the
+# emergency promotion by hand (a rollback, a broken KMS), signed through
+# OpenBao (needs the production cluster).
 promote: sign-release publish-latest-alias publish-version publish-latestVersions
+
+# What release.yml's promote job runs after the tag's binaries are staged: sign
+# through Cloud KMS (identity agent-signer, KMS_CREDENTIALS) and publish
+# manifest-v2.json. manifest.json stays frozen at the bridge release.
+promote-ci:
+    SIGNER=kms MANIFESTS=manifest-v2.json {{just_executable()}} sign-release publish-latest-alias publish-version publish-latestVersions
+
+# ONCE, for the bridge release: the last promotion signed through OpenBao. It
+# freezes manifest.json at this version (read by agents that trust only the
+# OpenBao key, and by device-init) and starts manifest-v2.json, which every
+# later release updates from CI.
+promote-bridge:
+    SIGNER=openbao MANIFESTS="manifest.json manifest-v2.json" {{just_executable()}} sign-release publish-latest-alias publish-version publish-latestVersions
 
 # Docs and manual (Windows) installs need a link that never goes stale — there is no installer
 # on Windows to resolve the channel versions for the user. Server-side copy, so the
@@ -435,10 +455,11 @@ promote: sign-release publish-latest-alias publish-version publish-latestVersion
 publish-latest-alias:
     scripts/publish-latest-alias.sh gs://ironflock-downloads/device-agent "$(jq -r '.production' availableVersions.json)"
 
-# Needs kubectl access to the production OpenBao (OPENBAO_KUBE_CONTEXT) and gsutil.
-# The private key never leaves OpenBao; see scripts/sign-release.sh and README
-# "Update signatures". `promote` runs this first, so a version cannot go live unsigned.
-# Sign every agent binary availableVersions.json names, the pinned frpc and the manifest, through OpenBao transit.
+# SIGNER=kms (Cloud KMS, CI) or openbao (default; kubectl access to the production
+# OpenBao, OPENBAO_KUBE_CONTEXT), plus gsutil. No private key leaves either; see
+# scripts/sign-release.sh and README "Update signatures". Every promote recipe runs
+# this first, so a version cannot go live unsigned.
+# Sign every agent binary availableVersions.json names, the pinned frpc and the channel maps in MANIFESTS.
 sign-release:
     scripts/sign-release.sh
 
@@ -447,7 +468,7 @@ sign-release:
 agent-update-pubkeys:
     scripts/openbao-admin.sh 'bao read -format=json transit/keys/agent-update' | (cd src && go run ./cmd/sign-update pubkey-from-openbao)
 
-# Stages them unsigned; `just promote` signs them (sign-release) before they go live.
+# Stages them unsigned; promotion signs them (sign-release) before they go live.
 # Publish the binaries from the build folder
 publish:
     scripts/publish.sh
@@ -455,19 +476,25 @@ publish:
 publish-version: sign-release
     gsutil -q -h "Cache-Control:public, max-age=0" cp "src/release/version.txt" gs://ironflock-downloads/device-agent/version.txt
 
-# manifest.json (signed, read by 1.3.0+ agents) must match availableVersions.json (unsigned,
-# kept for the flasher and older tooling) before either goes live.
+# Every channel map in MANIFESTS (signed; manifest-v2.json read by agents from the bridge
+# release on, manifest.json frozen at it) must match availableVersions.json (unsigned, kept
+# for the flasher and older tooling) before either goes live.
 publish-latestVersions: sign-release
     #!/usr/bin/env bash
     set -euo pipefail
     cd {{ROOT_DIR}}
-    channels=$(cd src && go run ./cmd/sign-update open -context device-agent-manifest:v1 -subject device-agent/manifest.json ../build/manifest.json | jq -cS .channels)
-    if [[ "$channels" != "$(jq -cS . availableVersions.json)" ]]; then
-        echo "build/manifest.json names $channels, availableVersions.json something else; run just sign-release" >&2
-        exit 1
-    fi
+    manifests="${MANIFESTS:-manifest-v2.json}"
+    for name in $manifests; do
+        channels=$(cd src && go run ./cmd/sign-update open -context device-agent-manifest:v1 -subject "device-agent/$name" "../build/$name" | jq -cS .channels)
+        if [[ "$channels" != "$(jq -cS . availableVersions.json)" ]]; then
+            echo "build/$name names $channels, availableVersions.json something else; run just sign-release" >&2
+            exit 1
+        fi
+    done
     gsutil -q -h "Cache-Control:public, max-age=0" cp availableVersions.json gs://ironflock-downloads/device-agent/availableVersions.json
-    gsutil -q -h "Cache-Control:public, max-age=0" cp build/manifest.json gs://ironflock-downloads/device-agent/manifest.json
+    for name in $manifests; do
+        gsutil -q -h "Cache-Control:public, max-age=0" cp "build/$name" "gs://ironflock-downloads/device-agent/$name"
+    done
     # The bucket is public by object name only, so a missing object answers 403, not 404:
     # agents would read an absent switch as "unknown" and never migrate. Always publish one.
     if ! gsutil -q stat gs://ironflock-downloads/device-agent/migration.json; then
@@ -475,7 +502,7 @@ publish-latestVersions: sign-release
         gsutil -q -h "Cache-Control:public, max-age=0" cp build/migration.json gs://ironflock-downloads/device-agent/migration.json
         echo "==> published device-agent/migration.json (enabled)"
     fi
-    echo "==> live: $channels"
+    echo "==> live: $(jq -cS . availableVersions.json) ($manifests)"
 
 # One-off, with the release that moves devices to the new layout (1.3.0): copy that
 # staged version into the frozen legacy tree gs://re-agent under the legacy names

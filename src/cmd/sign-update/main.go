@@ -10,6 +10,9 @@
 //	sig-from-openbao -version <v> [target flags] [-public-key <b64>] <binary>
 //	    reads OpenBao's "vault:v<N>:<base64>" from stdin and writes <binary>.sig,
 //	    but only once it verifies against the compiled-in keys
+//	sig-from-kms -version <v> [target flags] [-public-key <b64>] <binary>
+//	    the same for a Cloud KMS Ed25519 signature: the base64 of the 64 raw
+//	    bytes `gcloud kms asymmetric-sign` writes
 //	verify -version <v> [target flags] [-public-key <b64>] <binary>...
 //	    checks <binary>.sig against the compiled-in keys (or -public-key)
 //	pubkey-from-openbao
@@ -66,6 +69,7 @@ const usage = `usage (target flags: -version <v> [-kind device-agent|reagent|frp
        or -context <context> -subject <line> for a file that is not a binary):
   sign-update message <target flags> <binary>
   sign-update sig-from-openbao <target flags> [-public-key <base64>] <binary>  < vault:v<N>:<base64>
+  sign-update sig-from-kms <target flags> [-public-key <base64>] <binary>  < <base64 of the raw signature>
   sign-update verify <target flags> [-public-key <base64>] <binary>...
   sign-update seal -context <c> -subject <line> <payload>             (needs <payload>.sig)
   sign-update open -context <c> -subject <line> [-public-key <base64>] <envelope>
@@ -178,6 +182,8 @@ func run(args []string, stdin io.Reader, stdout io.Writer) error {
 	switch args[0] {
 	case "message":
 		return message(args[1:], stdout)
+	case "sig-from-kms":
+		return sigFromKMS(args[1:], stdin, stdout)
 	case "sig-from-openbao":
 		return sigFromOpenBao(args[1:], stdin, stdout)
 	case "verify":
@@ -450,6 +456,51 @@ func sigFromOpenBao(args []string, stdin io.Reader, stdout io.Writer) error {
 		return err
 	}
 	_, _ = fmt.Fprintf(stdout, "%s: signed as %s by transit key version %d (key %s) -> %s.sig\n", binary, target, keyVersion, keyID, binary)
+	return nil
+}
+
+// sigFromKMS turns a Cloud KMS Ed25519 signature for binary (the base64 of the
+// 64 raw bytes) into <binary>.sig, and writes it only if it verifies for the
+// target against the compiled-in keys (or -public-key).
+func sigFromKMS(args []string, stdin io.Reader, stdout io.Writer) error {
+	flags := flag.NewFlagSet("sig-from-kms", flag.ContinueOnError)
+	publicKey := flags.String("public-key", "", "base64 Ed25519 public key (default: the keys compiled into this build)")
+	targets := addTargetFlags(flags)
+	if err := flags.Parse(args); err != nil {
+		return err
+	}
+	if flags.NArg() != 1 {
+		return errors.New("sig-from-kms needs exactly one binary")
+	}
+	binary := flags.Arg(0)
+
+	target, err := targets.subjectFor(binary)
+	if err != nil {
+		return err
+	}
+	keys, err := verificationKeys(*publicKey)
+	if err != nil {
+		return err
+	}
+	text, err := io.ReadAll(io.LimitReader(stdin, 1024))
+	if err != nil {
+		return err
+	}
+	raw, err := base64.StdEncoding.DecodeString(strings.TrimSpace(string(text)))
+	if err != nil || len(raw) != ed25519.SignatureSize {
+		return fmt.Errorf("%s: not a Cloud KMS Ed25519 signature (base64 of 64 bytes)", binary)
+	}
+
+	signature := updatesig.EncodeSignature(raw)
+	keyID, err := verifyFile(keys, target, binary, signature)
+	if err != nil {
+		return fmt.Errorf("%s: the Cloud KMS signature does not verify: %w", binary, err)
+	}
+	err = os.WriteFile(binary+".sig", signature, 0o644) //nolint:gosec // G306: signatures are public
+	if err != nil {
+		return err
+	}
+	_, _ = fmt.Fprintf(stdout, "%s: signed as %s by Cloud KMS (key %s) -> %s.sig\n", binary, target, keyID, binary)
 	return nil
 }
 
