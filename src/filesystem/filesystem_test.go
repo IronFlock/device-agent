@@ -336,6 +336,41 @@ func TestInitDirectoriesIdempotent(t *testing.T) {
 	require.NoError(t, InitDirectories(cli), "InitDirectories should be idempotent")
 }
 
+// The dirs holding app secrets are private to the agent, also where an older
+// agent created them open; the apps dir (Docker's data-root on FlockOS) and
+// the shared dir are left as they are.
+func TestInitDirectoriesPrivateAppDirs(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX file modes")
+	}
+
+	root := t.TempDir()
+	cfg := testFsConfig(t)
+	cli := cfg.CommandLineArguments
+	cli.AppsDirectory = filepath.Join(root, "apps")
+	cli.AppsBuildDir = filepath.Join(root, "apps", "build")
+	cli.AppsComposeDir = filepath.Join(root, "apps", "compose")
+	cli.AppsSharedDir = filepath.Join(root, "apps", "shared")
+	cli.DownloadDir = filepath.Join(root, "downloads")
+
+	prodDir := filepath.Join(cli.AppsDirectory, "prod")
+	require.NoError(t, os.MkdirAll(prodDir, 0755))
+	require.NoError(t, os.Chmod(prodDir, 0755))
+
+	require.NoError(t, InitDirectories(cli))
+
+	for _, dir := range []string{cli.AppsBuildDir, cli.AppsComposeDir, prodDir, filepath.Join(cli.AppsDirectory, "dev")} {
+		info, err := os.Stat(dir)
+		require.NoError(t, err)
+		assert.Equalf(t, os.FileMode(0700), info.Mode().Perm(), "%s", dir)
+	}
+	for _, dir := range []string{cli.AppsDirectory, cli.AppsSharedDir} {
+		info, err := os.Stat(dir)
+		require.NoError(t, err)
+		assert.NotEqualf(t, os.FileMode(0700), info.Mode().Perm(), "%s", dir)
+	}
+}
+
 func TestExecuteAsScript(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("ExecuteAsScript shells out to /bin/bash")

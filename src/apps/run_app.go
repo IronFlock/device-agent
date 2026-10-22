@@ -679,10 +679,7 @@ const maxEnvVarSize = 20 * 1024 // 20KB - reasonable maximum for environment var
 
 func writeEnvironmentVariablesToFiles(appSpecificDirectory string, envVars []string) error {
 	envDir := appSpecificDirectory + "/env"
-	// 0700/0600: this directory now carries APP_AUTH_SECRET. Container
-	// isolation is the real boundary (each app has its own /data), but there
-	// is no reason for these to be world-readable on the host.
-	err := os.MkdirAll(envDir, 0700)
+	err := ensureEnvDir(envDir)
 	if err != nil {
 		return err
 	}
@@ -695,18 +692,10 @@ func writeEnvironmentVariablesToFiles(appSpecificDirectory string, envVars []str
 		varName := parts[0]
 		varValue := parts[1]
 
-		filePath := fmt.Sprintf("%s/%s.txt", envDir, varName)
-		err := os.WriteFile(filePath, []byte(varValue), 0600)
+		err := writeEnvValue(envDir, varName, varValue)
 		if err != nil {
 			return fmt.Errorf("failed to write env var %s to file: %w", varName, err)
 		}
-	}
-
-	// A previously injected DEVICE_SECRET file would otherwise linger in the
-	// bind mount forever — the agent no longer writes it, but old installs
-	// still have it, and it is the device's realm1 credential.
-	if err := os.Remove(fmt.Sprintf("%s/DEVICE_SECRET.txt", envDir)); err != nil && !os.IsNotExist(err) {
-		log.Debug().Err(err).Msg("could not remove stale DEVICE_SECRET env file")
 	}
 
 	return nil
@@ -728,14 +717,27 @@ func filterLargeEnvVars(envVars []string) []string {
 // can point it at a temp dir.
 var hostDBusDir = "/run/dbus"
 
+// appDataDirMode lets the app write its /data whatever user its container runs
+// as: the agent cannot know that user (an image's USER, a compose service's
+// user:, a remapped user namespace), and a root-owned 0755 dir would leave a
+// non-root container with a read-only /data. Other host users are kept out by
+// the private stage dirs (filesystem.InitDirectories). Only /data itself is
+// opened: what the app keeps in it is the app's, with the modes it chose.
+const appDataDirMode os.FileMode = 0777
+
 func computeMounts(stage common.Stage, appName string, config *config.Config) ([]mount.Mount, error) {
 	appSpecificDirectory := config.CommandLineArguments.AppsDirectory + "/" + strings.ToLower(string(stage)) + "/" + strings.ToLower(appName)
 
-	err := os.MkdirAll(appSpecificDirectory, os.ModePerm)
+	err := os.MkdirAll(appSpecificDirectory, appDataDirMode)
 	if err != nil {
 		if !os.IsExist(err) {
 			return nil, err
 		}
+	}
+	// MkdirAll applies the umask and leaves an existing dir alone: older
+	// agents created /data 0755.
+	if err := os.Chmod(appSpecificDirectory, appDataDirMode); err != nil {
+		return nil, err
 	}
 
 	mounts := []mount.Mount{

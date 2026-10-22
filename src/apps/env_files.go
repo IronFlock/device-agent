@@ -22,6 +22,57 @@ func appEnvFilesHostDir(cfg *config.Config, stage common.Stage, appName string) 
 	return filepath.Join(cfg.CommandLineArguments.AppsDirectory, strings.ToLower(string(stage)), strings.ToLower(appName), "env")
 }
 
+// The env mirror is readable by every user: an app's container may run as any
+// user, and the SDKs read the mirror file-first to pick up values that change
+// while the app runs. Other host users are kept out one level up, by the
+// private stage dirs (filesystem.InitDirectories).
+const (
+	envDirMode  os.FileMode = 0755
+	envFileMode os.FileMode = 0644
+)
+
+// ensureEnvDir creates the env mirror dir and opens up a dir and files that an
+// older agent made root-only (0700/0600): MkdirAll and WriteFile keep the mode
+// of what already exists, and a file the agent no longer rewrites would stay
+// unreadable for good.
+//
+// It first drops a DEVICE_SECRET.txt an older agent left behind: the device's
+// realm1 credential is no longer injected, and must not be opened up with the
+// rest.
+func ensureEnvDir(envDir string) error {
+	if err := os.MkdirAll(envDir, envDirMode); err != nil {
+		return err
+	}
+	if err := os.Remove(filepath.Join(envDir, "DEVICE_SECRET.txt")); err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	if err := os.Chmod(envDir, envDirMode); err != nil {
+		return err
+	}
+
+	entries, err := os.ReadDir(envDir)
+	if err != nil {
+		return err
+	}
+	for _, entry := range entries {
+		if entry.Type().IsRegular() {
+			if err := os.Chmod(filepath.Join(envDir, entry.Name()), envFileMode); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+// writeEnvValue writes {name}.txt; the Chmod undoes a restrictive umask.
+func writeEnvValue(envDir string, name string, value string) error {
+	filePath := filepath.Join(envDir, name+".txt")
+	if err := os.WriteFile(filePath, []byte(value), envFileMode); err != nil {
+		return err
+	}
+	return os.Chmod(filePath, envFileMode)
+}
+
 // refreshRemotePortEnvFiles live-updates the tunnel-port env files of an app:
 // {NAME}.txt (the tunnel's remote port) and {NAME}_CLOUD.txt (the
 // internet-facing cloud port of an instance tcp/udp tunnel) for every port
@@ -43,7 +94,7 @@ func refreshRemotePortEnvFiles(cfg *config.Config, stage common.Stage, appName s
 	}
 
 	if relevant {
-		if err := os.MkdirAll(envDir, os.ModePerm); err != nil {
+		if err := ensureEnvDir(envDir); err != nil {
 			log.Debug().Err(err).Str("dir", envDir).Msg("Failed to create env files dir")
 			return
 		}
@@ -61,12 +112,12 @@ func refreshRemotePortEnvFiles(cfg *config.Config, stage common.Stage, appName s
 
 		for _, name := range names {
 			if rule.RemotePort > 0 {
-				writeEnvFile(envDir, name, rule.RemotePort)
+				writeEnvFile(envDir, name, fmt.Sprintf("%d", rule.RemotePort))
 			}
 
 			cloudName := name + "_CLOUD"
 			if rule.CloudRemotePort > 0 {
-				writeEnvFile(envDir, cloudName, rule.CloudRemotePort)
+				writeEnvFile(envDir, cloudName, fmt.Sprintf("%d", rule.CloudRemotePort))
 			} else {
 				removeEnvFile(envDir, cloudName)
 			}
@@ -74,11 +125,9 @@ func refreshRemotePortEnvFiles(cfg *config.Config, stage common.Stage, appName s
 	}
 }
 
-func writeEnvFile(envDir string, name string, port uint64) {
-	filePath := filepath.Join(envDir, name+".txt")
-	err := os.WriteFile(filePath, []byte(fmt.Sprintf("%d", port)), 0644)
-	if err != nil {
-		log.Debug().Err(err).Str("file", filePath).Msg("Failed to write env file")
+func writeEnvFile(envDir string, name string, value string) {
+	if err := writeEnvValue(envDir, name, value); err != nil {
+		log.Debug().Err(err).Str("dir", envDir).Str("name", name).Msg("Failed to write env file")
 	}
 }
 
@@ -91,8 +140,7 @@ func removeEnvFile(envDir string, name string) {
 }
 
 // refreshAppCredentialEnvFiles live-updates an app's per-app WAMP credential
-// files (APP_AUTH_ID.txt / APP_AUTH_SECRET.txt) in the /data/env bind mount,
-// and clears any DEVICE_SECRET.txt an older agent left behind.
+// files (APP_AUTH_ID.txt / APP_AUTH_SECRET.txt) in the /data/env bind mount.
 //
 // The bind mount is the ONLY channel that reaches a container without
 // recreating it — an env-var change alone never triggers a recreate
@@ -112,22 +160,11 @@ func refreshAppCredentialEnvFiles(cfg *config.Config, appCredKey string, payload
 		return
 	}
 
-	if err := os.MkdirAll(envDir, 0700); err != nil {
+	if err := ensureEnvDir(envDir); err != nil {
 		log.Debug().Err(err).Str("dir", envDir).Msg("Failed to create env files dir")
 		return
 	}
 
-	writeSecretEnvFile(envDir, "APP_AUTH_ID", authID)
-	writeSecretEnvFile(envDir, "APP_AUTH_SECRET", secret)
-
-	// The device's realm1 credential is no longer injected; drop the stale
-	// file so an upgraded agent stops leaking it into the container.
-	removeEnvFile(envDir, "DEVICE_SECRET")
-}
-
-func writeSecretEnvFile(envDir string, name string, value string) {
-	filePath := filepath.Join(envDir, name+".txt")
-	if err := os.WriteFile(filePath, []byte(value), 0600); err != nil {
-		log.Debug().Err(err).Str("file", filePath).Msg("Failed to write env file")
-	}
+	writeEnvFile(envDir, "APP_AUTH_ID", authID)
+	writeEnvFile(envDir, "APP_AUTH_SECRET", secret)
 }
