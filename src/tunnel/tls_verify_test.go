@@ -223,12 +223,16 @@ func TestFrpcVerifiesTunnelServerCertificate(t *testing.T) {
 
 			// Same config, dialed at the listener. serverName stays
 			// app.ironflock.com, so what is verified is unchanged.
-			frpcConfig := *builder.yamlConfig
+			// A copy through YAML (the struct carries a mutex).
+			base, err := yaml.Marshal(builder.yamlConfig)
+			require.NoError(t, err)
+			frpcConfig := &FrpcYamlConfig{}
+			require.NoError(t, yaml.Unmarshal(base, frpcConfig))
 			frpcConfig.ServerAddr = "127.0.0.1"
 			frpcConfig.ServerPort = listener.Addr().(*net.TCPAddr).Port
 			frpcConfig.WebServer = nil
 			frpcConfig.Log = &LogConfig{To: "console", Level: "debug", MaxDays: 1}
-			data, err := yaml.Marshal(&frpcConfig)
+			data, err := yaml.Marshal(frpcConfig)
 			require.NoError(t, err)
 			require.NoError(t, os.WriteFile(builder.ConfigPath, data, 0o644))
 

@@ -16,6 +16,7 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"sync"
 
 	"github.com/rs/zerolog/log"
 	"golang.org/x/net/http/httpproxy"
@@ -50,6 +51,13 @@ type TunnelConfig struct {
 }
 
 // YAML config structures matching frp v0.65.0 format
+// frpcConfigMu guards the frpc config's route fields (ServerPort,
+// Transport.Protocol/ProxyURL) and its marshalling in SaveConfig: the
+// capability probe reads the route while a client restart moves it
+// (useRoute). One agent runs one tunnel manager, so one lock suffices; it
+// lives outside the config struct because yaml reads that by reflection.
+var frpcConfigMu sync.Mutex
+
 type FrpcYamlConfig struct {
 	ServerAddr string     `yaml:"serverAddr"`
 	ServerPort int        `yaml:"serverPort"`
@@ -440,6 +448,8 @@ func initialize(cfg *config.Config) TunnelConfigBuilder {
 
 // route returns the route frpc's config currently carries.
 func (builder *TunnelConfigBuilder) route() tunnelRoute {
+	frpcConfigMu.Lock()
+	defer frpcConfigMu.Unlock()
 	route := tunnelRoute{Port: builder.yamlConfig.ServerPort}
 	if transport := builder.yamlConfig.Transport; transport != nil {
 		route.Protocol = transport.Protocol
@@ -452,9 +462,11 @@ func (builder *TunnelConfigBuilder) route() tunnelRoute {
 // frpc reads these settings only at startup — a reload applies proxies alone —
 // so a running client keeps its route until it is restarted.
 func (builder *TunnelConfigBuilder) useRoute(route tunnelRoute) {
+	frpcConfigMu.Lock()
 	builder.yamlConfig.ServerPort = route.Port
 	builder.yamlConfig.Transport.Protocol = route.Protocol
 	builder.yamlConfig.Transport.ProxyURL = route.ProxyURL
+	frpcConfigMu.Unlock()
 	builder.SaveConfig()
 }
 
@@ -917,7 +929,9 @@ func (builder *TunnelConfigBuilder) SaveConfig() {
 	// Every config frpc reads must find the bundle it names, current.
 	builder.writeTunnelCA()
 
+	frpcConfigMu.Lock()
 	data, err := yaml.Marshal(builder.yamlConfig)
+	frpcConfigMu.Unlock()
 	if err != nil {
 		log.Error().Err(err).Msg("Failed to marshal frpc config to YAML")
 		return

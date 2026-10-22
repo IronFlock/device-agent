@@ -119,15 +119,17 @@ func TestSpawnerSupervisorRecoversFromDaemonOutage(t *testing.T) {
 	// Daemon outage: the docker client delivers exactly one error per stream.
 	errC1 <- errors.New("unexpected EOF")
 
+	// Generous waits: under -race on a CI runner the reconcile (SQLite with a
+	// 2.5 s busy timeout) has taken longer than 3 s.
 	select {
 	case <-secondListen:
-	case <-time.After(3 * time.Second):
+	case <-time.After(10 * time.Second):
 		t.Fatal("the event spawner was not restarted after the stream died")
 	}
 
 	select {
 	case <-reconcileRan:
-	case <-time.After(3 * time.Second):
+	case <-time.After(10 * time.Second):
 		t.Fatal("the daemon-recovery reconcile did not run after the spawner restart")
 	}
 

@@ -8,9 +8,9 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
-	"path/filepath"
 	"reagent/common"
 	"reagent/config"
+	"reagent/filesystem"
 	"reagent/messenger"
 	"runtime"
 	"sync/atomic"
@@ -130,7 +130,7 @@ func TestBecomingAvailableClearsLastErr(t *testing.T) {
 // a permanent crash-loop.
 func TestEnsureFrpcBinaryReacquiresWhenMissing(t *testing.T) {
 	m := newCapabilityTestManager(t)
-	frpcPath := filepath.Join(m.config.CommandLineArguments.AgentDir, "frpc")
+	frpcPath := filesystem.GetTunnelBinaryPath(m.config, "frpc") // frpc.exe on Windows
 
 	called := false
 	m.SetReacquireFrpc(func() error {
@@ -145,7 +145,7 @@ func TestEnsureFrpcBinaryReacquiresWhenMissing(t *testing.T) {
 
 func TestEnsureFrpcBinaryNoopWhenPresent(t *testing.T) {
 	m := newCapabilityTestManager(t)
-	frpcPath := filepath.Join(m.config.CommandLineArguments.AgentDir, "frpc")
+	frpcPath := filesystem.GetTunnelBinaryPath(m.config, "frpc") // frpc.exe on Windows
 	require.NoError(t, os.WriteFile(frpcPath, []byte("binary"), 0755))
 
 	m.SetReacquireFrpc(func() error {
@@ -318,7 +318,7 @@ func TestStartStaysCapableWhenLoginAckNeverArrivesButFrpsIsUp(t *testing.T) {
 
 	// frpc that runs happily but says nothing on stdout — the production case.
 	fake := "#!/bin/sh\nsleep 2\n"
-	frpcPath := filepath.Join(m.config.CommandLineArguments.AgentDir, "frpc")
+	frpcPath := filesystem.GetTunnelBinaryPath(m.config, "frpc") // frpc.exe on Windows
 	require.NoError(t, os.WriteFile(frpcPath, []byte(fake), 0o755))
 	t.Cleanup(func() { _ = m.Stop() })
 
@@ -342,7 +342,7 @@ func TestStartReportsUnavailableWhenFrpsIsDown(t *testing.T) {
 	unreachableFrps(t, m)
 
 	fake := "#!/bin/sh\necho '[E] connect to server error: connection refused'\nsleep 2\n"
-	frpcPath := filepath.Join(m.config.CommandLineArguments.AgentDir, "frpc")
+	frpcPath := filesystem.GetTunnelBinaryPath(m.config, "frpc") // frpc.exe on Windows
 	require.NoError(t, os.WriteFile(frpcPath, []byte(fake), 0o755))
 	t.Cleanup(func() { _ = m.Stop() })
 
@@ -393,7 +393,7 @@ func TestSuperviseStartRepicksAdminPortAfterPreLoginExit(t *testing.T) {
 	m := newCapabilityTestManager(t)
 
 	fake := "#!/bin/sh\necho 'listen tcp 127.0.0.1:42567: bind: address already in use'\nexit 1\n"
-	frpcPath := filepath.Join(m.config.CommandLineArguments.AgentDir, "frpc")
+	frpcPath := filesystem.GetTunnelBinaryPath(m.config, "frpc") // frpc.exe on Windows
 	require.NoError(t, os.WriteFile(frpcPath, []byte(fake), 0o755))
 
 	initialPort, err := m.configBuilder.GetAdminPort()
