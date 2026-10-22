@@ -3,7 +3,10 @@ package tunnel
 import (
 	"errors"
 	"fmt"
+	"io"
 	"net"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"reagent/common"
@@ -28,6 +31,11 @@ func newCapabilityTestManager(t *testing.T) *FrpTunnelManager {
 	}
 	m, err := NewFrpTunnelManager(messenger.NewOffline(cfg), cfg)
 	require.NoError(t, err)
+	// One route: these tests repoint the server at loopback listeners and judge
+	// that one frps. Left with the cloud's second route, a dead listener would
+	// send the probe on to 127.0.0.1:443 and whatever happens to listen there.
+	// Falling back between routes has its own tests (route_test.go).
+	m.configBuilder.routes = nil
 	return m
 }
 
@@ -205,6 +213,28 @@ func reachableFrps(t *testing.T, m *FrpTunnelManager) {
 	m.configBuilder.yamlConfig.ServerAddr = "127.0.0.1"
 	m.configBuilder.yamlConfig.ServerPort = ln.Addr().(*net.TCPAddr).Port
 	plainProbe(m)
+	fakeAdminAPI(t, m)
+}
+
+// fakeAdminAPI gives the manager an frpc admin API on loopback that reports no
+// proxies. A test that turns the device available needs one: the state publish
+// that follows asks the admin API and, finding it refused, takes frpc for dead
+// and restarts it — a loop that outlives the test and writes into its TempDir
+// while that is being removed ("TempDir RemoveAll cleanup: directory not
+// empty"). Cleanup parks the manager unavailable, so the monitors a Start left
+// running stop asking.
+//
+// The API is deliberately never closed. The publish starts in the background
+// the moment the device turns available, and may already be past its
+// "available?" check when the test returns; closing the API under it is what
+// still triggered the restart, about once in a thousand runs.
+func fakeAdminAPI(t *testing.T, m *FrpTunnelManager) {
+	t.Helper()
+	adminAPI := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = io.WriteString(w, "{}")
+	}))
+	m.configBuilder.yamlConfig.WebServer.Port = adminAPI.Listener.Addr().(*net.TCPAddr).Port
+	t.Cleanup(func() { m.MarkUnavailable("test finished") })
 }
 
 // plainProbe drops certificate verification from the manager's config, so the
@@ -227,6 +257,7 @@ func unreachableFrps(t *testing.T, m *FrpTunnelManager) {
 	m.configBuilder.yamlConfig.ServerAddr = "127.0.0.1"
 	m.configBuilder.yamlConfig.ServerPort = port
 	plainProbe(m)
+	fakeAdminAPI(t, m) // TestUnavailableRecoversOnceFrpsComesUp turns it available
 }
 
 // The capability verdict comes from dialling frps, because frpc logs to a file

@@ -417,6 +417,7 @@ func TestProbeCapabilityReportsUntrustedTunnelServer(t *testing.T) {
 		m.configBuilder.yamlConfig.ServerAddr = "127.0.0.1"
 		m.configBuilder.yamlConfig.ServerPort = listener.Addr().(*net.TCPAddr).Port
 		m.clientAlive.Store(true)
+		fakeAdminAPI(t, m)
 
 		m.probeCapability()
 		return m.Capability()

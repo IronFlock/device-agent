@@ -79,7 +79,8 @@ type Transport struct {
 	// Protocol selects frp's underlying transport. Empty means frp's default
 	// (tcp). "wss" (websocket over TLS) is used against domain-mode appliances,
 	// where the control connection rides the appliance's 443 ingress on frp's
-	// fixed /~!frp path instead of the raw frps port 7000.
+	// fixed /~!frp path instead of the raw frps port 7000, and by cloud devices
+	// that cannot reach 7000 (see tunnelRoute).
 	Protocol string `yaml:"protocol,omitempty"`
 	// ProxyURL routes the control connection through an HTTP CONNECT proxy.
 	// The agent resolves it for EVERY transport (resolveTunnelProxy) out of the
@@ -137,6 +138,39 @@ type TunnelConfigBuilder struct {
 	appConfig     *config.Config
 	ConfigPath    string
 	BaseTunnelURL string
+	// routes are the ways frpc may reach frps, most preferred first. The
+	// config carries one of them at a time (useRoute); only a cloud device has
+	// more than one (see initialize).
+	routes []tunnelRoute
+}
+
+// frpWebsocketPath is the fixed path frp serves its websocket transport on
+// (frp's netpkg.FrpWebsocketPath); frpc's wss transport requests exactly it.
+const frpWebsocketPath = "/~!frp"
+
+// tunnelRoute is one way for frpc's control connection to reach frps: the
+// port it dials, frp's transport on that port ("" for frp's default tcp+TLS,
+// "wss" for websocket over TLS on frpWebsocketPath) and the proxy it goes
+// through ("" to dial directly). The server address is the same for all of a
+// device's routes.
+type tunnelRoute struct {
+	Port     int
+	Protocol string
+	ProxyURL string
+}
+
+// String names the route for logs. It says whether a proxy is in the path but
+// never prints the proxy URL, which can carry credentials.
+func (route tunnelRoute) String() string {
+	protocol := route.Protocol
+	if protocol == "" {
+		protocol = "tcp"
+	}
+	name := fmt.Sprintf("%s/%d", protocol, route.Port)
+	if route.ProxyURL != "" {
+		name += " via proxy"
+	}
+	return name
 }
 
 type FrpcVariable string
@@ -218,7 +252,8 @@ func initialize(cfg *config.Config) TunnelConfigBuilder {
 	// frps. Ride that same port with frp's wss transport so a device needs no
 	// firewall or proxy exception beyond outbound 443. Plain-mode appliances
 	// (ws:// endpoint) and cloud devices (no appliance_domain) keep the classic
-	// tcp+TLS control connection on port 7000.
+	// tcp+TLS control connection on port 7000; a cloud device falls back to the
+	// same wss transport on 443 when 7000 is out of reach (see routes below).
 	//
 	// Resolved before the server address because a wss control connection must
 	// be addressed by name (SNI + the wildcard certificate) while a plain one
@@ -335,22 +370,48 @@ func initialize(cfg *config.Config) TunnelConfigBuilder {
 		frpcConfig.Metadatas = map[string]string{"tunnel_proof": proof}
 	}
 
+	route := tunnelRoute{Port: 7000}
 	if wssMode {
-		frpcConfig.ServerPort = 443
-		frpcConfig.Transport.Protocol = "wss"
+		route = tunnelRoute{Port: 443, Protocol: "wss"}
 	}
 
 	// For local development, use port 7400 to avoid conflicts with macOS
 	// services. host.docker.internal is the same dev stack seen from inside a
 	// containerized agent — the host publishes frps on 7400 there too.
 	if controlAddr == "localhost" || controlAddr == "127.0.0.1" || controlAddr == "host.docker.internal" {
-		frpcConfig.ServerPort = 7400
+		route.Port = 7400
 	}
 
 	// Resolved last, once the endpoint the control connection actually dials is
 	// final: both the wss branch and the dev-port rewrite above move it, and
 	// NO_PROXY matching is host- and port-sensitive.
-	frpcConfig.Transport.ProxyURL = resolveTunnelProxy(controlAddr, frpcConfig.ServerPort, wssMode)
+	route.ProxyURL = resolveTunnelProxy(controlAddr, route.Port, wssMode)
+	routes := []tunnelRoute{route}
+
+	// A cloud device also gets the cloud frps's websocket ingress on 443 as a
+	// second route, for networks that only let 443 out: a firewall that drops
+	// 7000, or a corporate proxy whose CONNECT ACL is 443-only (Squid's stock
+	// SSL_ports). The tunnel server relays frpWebsocketPath on its public 443
+	// listener to frps (REtunnel FRPS_WS_INGRESS), under the same certificate
+	// for the same name, so the route needs nothing new on either side — it
+	// is what a proxied appliance's cloud forwarder already uses. 7000 stays
+	// first: it keeps the extra relay hop out of every device's tunnel traffic
+	// where the network allows it. The wss route resolves its proxy the way
+	// wss mode does, from the full HTTPS_PROXY environment.
+	//
+	// "Cloud" is what tunnelTLSServerName verifies outside wss mode: never an
+	// appliance, never a local dev stack — those keep their one route.
+	if tunnelTLSServerName(cfg.ReswarmConfig, false, controlAddr) != "" {
+		routes = append(routes, tunnelRoute{
+			Port:     443,
+			Protocol: "wss",
+			ProxyURL: resolveTunnelProxy(controlAddr, 443, true),
+		})
+	}
+
+	frpcConfig.ServerPort = route.Port
+	frpcConfig.Transport.Protocol = route.Protocol
+	frpcConfig.Transport.ProxyURL = route.ProxyURL
 
 	// The CA bundle itself is (re)written by SaveConfig, next to frpc.yaml.
 	if serverName := tunnelTLSServerName(cfg.ReswarmConfig, wssMode, controlAddr); serverName != "" {
@@ -371,6 +432,7 @@ func initialize(cfg *config.Config) TunnelConfigBuilder {
 		appConfig:     cfg,
 		ConfigPath:    frpcConfigPath,
 		BaseTunnelURL: serverAddr,
+		routes:        routes,
 	}
 
 	configBuilder.SaveConfig()
@@ -378,12 +440,33 @@ func initialize(cfg *config.Config) TunnelConfigBuilder {
 	return configBuilder
 }
 
+// route returns the route frpc's config currently carries.
+func (builder *TunnelConfigBuilder) route() tunnelRoute {
+	route := tunnelRoute{Port: builder.yamlConfig.ServerPort}
+	if transport := builder.yamlConfig.Transport; transport != nil {
+		route.Protocol = transport.Protocol
+		route.ProxyURL = transport.ProxyURL
+	}
+	return route
+}
+
+// useRoute points frpc's control connection at route and saves the config.
+// frpc reads these settings only at startup — a reload applies proxies alone —
+// so a running client keeps its route until it is restarted.
+func (builder *TunnelConfigBuilder) useRoute(route tunnelRoute) {
+	builder.yamlConfig.ServerPort = route.Port
+	builder.yamlConfig.Transport.Protocol = route.Protocol
+	builder.yamlConfig.Transport.ProxyURL = route.ProxyURL
+	builder.SaveConfig()
+}
+
 // tunnelTLSServerName returns the name frpc must verify the frps certificate
 // against, or "" when the control connection stays unverified.
 //
 //   - cloud device: the frps behind app.<domain> presents a publicly trusted
 //     Let's Encrypt certificate for exactly the name dialed (serverAddr is
-//     derived from the device endpoint or the environment default).
+//     derived from the device endpoint or the environment default), on 7000
+//     and on the tunnel server's 443 websocket ingress alike.
 //   - domain-mode appliance (wss): the control connection rides the
 //     appliance's TLS ingress, which presents the operator's corporate-PKI
 //     certificate for the appliance domain. The device already trusts that CA

@@ -14,9 +14,11 @@ import (
 )
 
 // DefaultUpdateBaseURL is where agents fetch their updates when the .flock
-// names no update_url (cloud devices): the public download bucket, read
-// directly. Appliance-managed agents carry the appliance's /dl base instead.
-const DefaultUpdateBaseURL = "https://storage.googleapis.com/ironflock-downloads"
+// names no update_url: the registry-proxy's /dl routes, which stream the
+// public download buckets, so a device behind a firewall needs only IronFlock
+// hosts and never storage.googleapis.com. Appliance-managed agents carry the
+// appliance's own /dl base instead.
+const DefaultUpdateBaseURL = "https://instance-registry.ironflock.com/dl"
 
 // ReswarmConfig types for the .flock file
 type ReswarmConfig struct {
@@ -54,10 +56,9 @@ type ReswarmConfig struct {
 	DockerMainRepository string `json:"docker_main_repository"`
 	ApplianceDomain      string `json:"appliance_domain,omitempty"`
 	// UpdateURL, when set, overrides the --remoteUpdateURL base for OTA
-	// self-updates. Appliance-managed agents carry the appliance's
-	// registry-proxy /dl base here so their binary downloads route through
-	// instance-registry.ironflock.com instead of storage.googleapis.com.
-	// Cloud/field agents leave it empty and keep the default GCS bucket.
+	// self-updates. Appliance-managed agents carry the appliance's own /dl
+	// base here; the cloud backend hands out instance-registry.ironflock.com/dl
+	// (new .flock files and every heartbeat). Empty: DefaultUpdateBaseURL.
 	UpdateURL      string `json:"update_url,omitempty"`
 	ReswarmBaseURL string `json:"-"`
 }

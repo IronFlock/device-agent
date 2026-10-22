@@ -64,9 +64,9 @@ func New(config *config.Config, messenger messenger.Messenger) System {
 // ------------------------------------------------------------------------- //
 
 // updateBaseURL returns the base URL for OTA downloads. A per-device
-// update_url in the .flock config (set for appliance-managed agents) wins over
-// the --remoteUpdateURL flag default, so appliances pull through the
-// appliance's registry-proxy /dl routes instead of storage.googleapis.com.
+// update_url in the .flock config (the appliance's own /dl mirror, or the
+// cloud's instance-registry.ironflock.com/dl) wins over the --remoteUpdateURL
+// flag default, which is the same cloud /dl base.
 func (sys *System) updateBaseURL() string {
 	if sys.config.ReswarmConfig != nil && sys.config.ReswarmConfig.UpdateURL != "" {
 		return sys.config.ReswarmConfig.UpdateURL
@@ -83,15 +83,13 @@ func (sys *System) updateBaseURL() string {
 // The legacy tree (re-agent/: availableVersions.json, binaries named reagent)
 // is frozen at the version that moves devices to the current layout. An agent
 // reads it only when the current tree does not exist at its base: an
-// appliance whose mirror has not been updated yet.
+// appliance whose mirror has not been updated yet. Every /dl base serves it
+// next to the current tree (the registry-proxy's /dl/re-agent route).
 const (
 	agentTree          = "device-agent"
 	legacyAgentTree    = "re-agent"
 	agentManifestName  = "manifest.json"
 	legacyManifestName = "availableVersions.json"
-	// legacyUpdateBase is what the legacy tree sits below on GCS (bucket
-	// re-agent), where the current default base is the new bucket.
-	legacyUpdateBase = "https://storage.googleapis.com"
 )
 
 // agentSource is where agent binaries (and frpc) are downloaded from.
@@ -120,11 +118,7 @@ type agentManifest struct {
 func (sys *System) resolveAgentVersions() (map[string]string, agentSource, error) {
 	base := sys.updateBaseURL()
 	current := agentSource{base: base, tree: agentTree, publishedName: "device-agent"}
-	legacyBase := base
-	if base == config.DefaultUpdateBaseURL {
-		legacyBase = legacyUpdateBase
-	}
-	legacy := agentSource{base: legacyBase, tree: legacyAgentTree, publishedName: "reagent"}
+	legacy := agentSource{base: base, tree: legacyAgentTree, publishedName: "reagent"}
 
 	manifestURL := current.base + "/" + current.tree + "/" + agentManifestName
 	data, status, err := fetchSmall(manifestURL)

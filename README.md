@@ -81,7 +81,7 @@ Usage of ./device-agent:
   -profilingPort uint
        port of the profiling service (default 80)
   -remoteUpdateURL string
-    	bucket to be used to download updates (default "https://storage.googleapis.com/ironflock-downloads")
+    	download base for agent updates (the .flock update_url wins) (default "https://instance-registry.ironflock.com/dl")
   -respTimeout uint
        Sets the response timeout of the client in milliseconds (default 5000)
   -update

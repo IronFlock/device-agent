@@ -3,13 +3,16 @@ package tunnel
 import (
 	"bufio"
 	"context"
+	"crypto/rand"
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -31,6 +34,7 @@ import (
 
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
+	xproxy "golang.org/x/net/proxy"
 )
 
 type Protocol string
@@ -379,8 +383,8 @@ func (frpTm *FrpTunnelManager) Capability() (TunnelCapability, string) {
 	return TunnelCapability(frpTm.capability.Load()), frpTm.lastErr
 }
 
-// frpsReachable dials the frps control endpoint this device is configured to
-// tunnel through, and reports whether it accepts a connection.
+// frpsReachable reports whether the route frpc is configured for reaches frps
+// (see routeReachable).
 //
 // This is the agent's only trustworthy capability signal. Watching frpc's stdout
 // for "login to server success" does not work in production: frp.go points
@@ -400,53 +404,283 @@ func (frpTm *FrpTunnelManager) Capability() (TunnelCapability, string) {
 // without tunnels just as surely as a closed port, and "available" would hide
 // the reason.
 func (frpTm *FrpTunnelManager) frpsReachable() error {
-	yamlConfig := frpTm.configBuilder.yamlConfig
-	addr := net.JoinHostPort(yamlConfig.ServerAddr, strconv.Itoa(yamlConfig.ServerPort))
+	return frpTm.routeReachable(frpTm.configBuilder.route(), false)
+}
 
-	conn, err := net.DialTimeout("tcp", addr, frpsProbeTimeout)
+// routeReachable dials frps over route as frpc would and reports whether the
+// connection gets through: the route's proxy (dialTunnelServer), then TLS with
+// frpc's trust where frpc verifies, and on the wss route TLS in any case — it
+// is that transport.
+//
+// openWebsocket also asks a wss route for frp's websocket (requestFrpWebsocket)
+// — for deciding to move a client onto a route or keep it there, never for the
+// periodic capability probe. frps logs every connection that closes before
+// sending a byte as a WARNING, which would be one per device per minute.
+func (frpTm *FrpTunnelManager) routeReachable(route tunnelRoute, openWebsocket bool) error {
+	yamlConfig := frpTm.configBuilder.yamlConfig
+	addr := net.JoinHostPort(yamlConfig.ServerAddr, strconv.Itoa(route.Port))
+
+	conn, err := dialTunnelServer(addr, route.ProxyURL)
+	if errors.Is(err, errUnprobeableProxy) {
+		log.Debug().Err(err).Stringer("route", route).Msg("Cannot probe the tunnel server through this proxy; taking it as reachable")
+		return nil
+	}
 	if err != nil {
 		return err
 	}
 	defer conn.Close()
 
-	if yamlConfig.Transport == nil || yamlConfig.Transport.TLS == nil || yamlConfig.Transport.TLS.TrustedCaFile == "" {
-		return nil
+	caFile := ""
+	serverName := yamlConfig.ServerAddr // frpc's own fallback
+	if yamlConfig.Transport != nil && yamlConfig.Transport.TLS != nil {
+		caFile = yamlConfig.Transport.TLS.TrustedCaFile
+		if yamlConfig.Transport.TLS.ServerName != "" {
+			serverName = yamlConfig.Transport.TLS.ServerName
+		}
 	}
 
-	serverName := yamlConfig.Transport.TLS.ServerName
-	if serverName == "" {
-		serverName = yamlConfig.ServerAddr // frpc's own fallback
+	if route.Protocol != "wss" {
+		if caFile == "" {
+			return nil
+		}
+		_, err = verifyTunnelServer(conn, caFile, serverName)
+		return err
 	}
-	return verifyTunnelServer(conn, yamlConfig.Transport.TLS.TrustedCaFile, serverName)
+
+	tlsConn, err := verifyTunnelServer(conn, caFile, serverName)
+	if err != nil || !openWebsocket {
+		return err
+	}
+	return requestFrpWebsocket(tlsConn, serverName)
+}
+
+// errUnprobeableProxy marks a proxy scheme frpc can use but the probe cannot.
+var errUnprobeableProxy = errors.New("the tunnel probe cannot speak this proxy scheme")
+
+// dialTunnelServer connects to addr the way frpc's control connection does:
+// through proxyURL when there is one, directly otherwise. A direct dial while
+// frpc goes through a proxy answers a different question, and on the networks
+// the wss route exists for the proxy is the very thing refusing CONNECT to
+// 7000.
+//
+// It speaks the proxies frpc's dialer does (fatedier/golib net): http and
+// https with a CONNECT, and socks5. For the rest (ntlm) it dials nothing and
+// returns errUnprobeableProxy.
+func dialTunnelServer(addr, proxyURL string) (net.Conn, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), frpsProbeTimeout)
+	defer cancel()
+
+	if proxyURL == "" {
+		return (&net.Dialer{}).DialContext(ctx, "tcp", addr)
+	}
+
+	proxy, err := url.Parse(proxyURL)
+	if err != nil {
+		return nil, fmt.Errorf("tunnel proxy URL: %w", err)
+	}
+
+	switch proxy.Scheme {
+	case "http", "https":
+		return dialThroughHTTPProxy(ctx, proxy, addr)
+	case "socks5":
+		dialer, err := xproxy.FromURL(proxy, &net.Dialer{})
+		if err != nil {
+			return nil, err
+		}
+		contextDialer, ok := dialer.(xproxy.ContextDialer)
+		if !ok {
+			return nil, fmt.Errorf("%w: %s", errUnprobeableProxy, proxy.Scheme)
+		}
+		return contextDialer.DialContext(ctx, "tcp", addr)
+	default:
+		return nil, fmt.Errorf("%w: %s", errUnprobeableProxy, proxy.Scheme)
+	}
+}
+
+// dialThroughHTTPProxy opens a tunnel to addr through an HTTP CONNECT proxy —
+// over TLS to the proxy for an https URL, with basic credentials from the URL —
+// sending what golib's httpProxyAfterHook sends for frpc.
+func dialThroughHTTPProxy(ctx context.Context, proxy *url.URL, addr string) (net.Conn, error) {
+	conn, err := (&net.Dialer{}).DialContext(ctx, "tcp", proxy.Host)
+	if err != nil {
+		return nil, err
+	}
+	deadline, _ := ctx.Deadline()
+	_ = conn.SetDeadline(deadline)
+
+	if proxy.Scheme == "https" {
+		tlsConn := tls.Client(conn, &tls.Config{ServerName: proxy.Hostname()})
+		if err := tlsConn.HandshakeContext(ctx); err != nil {
+			conn.Close()
+			return nil, err
+		}
+		conn = tlsConn
+	}
+
+	request := &http.Request{
+		Method: http.MethodConnect,
+		URL:    &url.URL{Opaque: addr},
+		Host:   addr,
+		Header: http.Header{},
+	}
+	if proxy.User != nil {
+		password, _ := proxy.User.Password()
+		credentials := base64.StdEncoding.EncodeToString([]byte(proxy.User.Username() + ":" + password))
+		request.Header.Set("Proxy-Authorization", "Basic "+credentials)
+	}
+	// golib's, not Go's default: proxies filter on the user agent.
+	request.Header.Set("User-Agent", "Mozilla/5.0")
+
+	if err := request.Write(conn); err != nil {
+		conn.Close()
+		return nil, err
+	}
+	response, err := http.ReadResponse(bufio.NewReader(conn), request)
+	if err != nil {
+		conn.Close()
+		return nil, err
+	}
+	response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		conn.Close()
+		return nil, fmt.Errorf("proxy refused CONNECT to %s: %s", addr, response.Status)
+	}
+
+	_ = conn.SetDeadline(time.Time{})
+	return conn, nil
 }
 
 // verifyTunnelServer runs a TLS handshake on conn against the CA bundle at
-// caFile and serverName. A certificate the bundle does not vouch for comes
-// back as a *tls.CertificateVerificationError carrying the x509 reason, and
-// names the escape hatch: the usual cause in the field is a network that
-// intercepts TLS with a CA the device does not hold (on Windows, also a root
-// the platform installs only on demand and the exported store therefore
-// lacks).
-func verifyTunnelServer(conn net.Conn, caFile, serverName string) error {
-	bundle, err := os.ReadFile(caFile)
-	if err != nil {
-		return fmt.Errorf("tunnel CA bundle unreadable: %w", err)
-	}
-	pool := x509.NewCertPool()
-	if !pool.AppendCertsFromPEM(bundle) {
-		return fmt.Errorf("tunnel CA bundle %s holds no certificates", caFile)
+// caFile and serverName, and returns the TLS connection. A certificate the
+// bundle does not vouch for comes back as a *tls.CertificateVerificationError
+// carrying the x509 reason, and names the escape hatch: the usual cause in the
+// field is a network that intercepts TLS with a CA the device does not hold
+// (on Windows, also a root the platform installs only on demand and the
+// exported store therefore lacks).
+//
+// An empty caFile accepts any certificate, as frpc does without a
+// trustedCaFile; only the wss route handshakes then, since TLS is its
+// transport.
+func verifyTunnelServer(conn net.Conn, caFile, serverName string) (*tls.Conn, error) {
+	tlsConfig := &tls.Config{ServerName: serverName, InsecureSkipVerify: caFile == ""}
+	if caFile != "" {
+		bundle, err := os.ReadFile(caFile)
+		if err != nil {
+			return nil, fmt.Errorf("tunnel CA bundle unreadable: %w", err)
+		}
+		pool := x509.NewCertPool()
+		if !pool.AppendCertsFromPEM(bundle) {
+			return nil, fmt.Errorf("tunnel CA bundle %s holds no certificates", caFile)
+		}
+		tlsConfig.RootCAs = pool
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), frpsProbeTimeout)
 	defer cancel()
 
-	err = tls.Client(conn, &tls.Config{RootCAs: pool, ServerName: serverName}).HandshakeContext(ctx)
+	tlsConn := tls.Client(conn, tlsConfig)
+	err := tlsConn.HandshakeContext(ctx)
 	var certErr *tls.CertificateVerificationError
 	if errors.As(err, &certErr) {
-		return fmt.Errorf("tunnel server certificate for %s is not trusted (set %s=true in the agent's environment to skip verification): %w",
+		return nil, fmt.Errorf("tunnel server certificate for %s is not trusted (set %s=true in the agent's environment to skip verification): %w",
 			serverName, TUNNEL_TLS_INSECURE_SKIP_VERIFY, err)
 	}
-	return err
+	if err != nil {
+		return nil, err
+	}
+	return tlsConn, nil
+}
+
+// requestFrpWebsocket asks for frp's websocket endpoint on conn as frpc's wss
+// transport does once TLS is up, and requires the upgrade. TLS alone also
+// succeeds against a 443 that does not relay that path to frps (an ingress
+// switched off with FRPS_WS_INGRESS=false, or older than the relay), and
+// moving a device onto such a route would trade a dead port for a dead path.
+// Like the rest of the probe it stops short of frp's own login.
+func requestFrpWebsocket(conn net.Conn, host string) error {
+	key := make([]byte, 16)
+	if _, err := rand.Read(key); err != nil {
+		return err
+	}
+
+	request := &http.Request{
+		Method: http.MethodGet,
+		// RawPath keeps the "!" literal. Go would send Path alone as
+		// /~%21frp, and frps picks websocket connections out of its bindPort
+		// by the raw bytes "GET /~!frp" — anything else it hangs up on.
+		URL:    &url.URL{Scheme: "https", Host: host, Path: frpWebsocketPath, RawPath: frpWebsocketPath},
+		Host:   host,
+		Header: http.Header{},
+	}
+	request.Header.Set("Connection", "Upgrade")
+	request.Header.Set("Upgrade", "websocket")
+	request.Header.Set("Sec-WebSocket-Version", "13")
+	request.Header.Set("Sec-WebSocket-Key", base64.StdEncoding.EncodeToString(key))
+	// frps's websocket handler (golang.org/x/net/websocket) answers 403 to a
+	// request without an Origin; this is the one frpc sends.
+	request.Header.Set("Origin", "http://"+host)
+	// frpc sends none, and an inspecting proxy may filter on it; empty omits
+	// Go's default.
+	request.Header.Set("User-Agent", "")
+
+	_ = conn.SetDeadline(time.Now().Add(frpsProbeTimeout))
+	if err := request.Write(conn); err != nil {
+		return err
+	}
+	response, err := http.ReadResponse(bufio.NewReader(conn), request)
+	if err != nil {
+		return err
+	}
+	response.Body.Close()
+	if response.StatusCode != http.StatusSwitchingProtocols {
+		return fmt.Errorf("the tunnel server answered %q instead of opening frp's websocket at %s", response.Status, frpWebsocketPath)
+	}
+	return nil
+}
+
+// alternativeRoute returns the first of the device's other routes that reaches
+// frps, for when current does not. A device with one route (every appliance
+// and dev stack) has nothing to try and dials nothing here.
+func (frpTm *FrpTunnelManager) alternativeRoute(current tunnelRoute) (tunnelRoute, bool) {
+	for _, route := range frpTm.configBuilder.routes {
+		if route == current {
+			continue
+		}
+		err := frpTm.routeReachable(route, true)
+		if err == nil {
+			return route, true
+		}
+		log.Debug().Err(err).Stringer("route", route).Msg("The other tunnel route does not reach the tunnel server either")
+	}
+	return tunnelRoute{}, false
+}
+
+// selectRoute settles the route the client about to start will use. It keeps
+// the configured route while that one reaches frps and otherwise moves the
+// config to another that does; with none working it changes nothing, frpc
+// retries where it is and the capability probe reports why. Sticky on purpose:
+// a device that fell back to 443 stays there while 443 works instead of
+// flipping on every restart, and tries 7000 first again when the agent starts.
+// Callers must hold startMu.
+func (frpTm *FrpTunnelManager) selectRoute() {
+	if len(frpTm.configBuilder.routes) < 2 {
+		return
+	}
+
+	current := frpTm.configBuilder.route()
+	err := frpTm.routeReachable(current, true)
+	if err == nil {
+		return
+	}
+
+	route, ok := frpTm.alternativeRoute(current)
+	if !ok {
+		return
+	}
+
+	log.Warn().Err(err).Stringer("from", current).Stringer("to", route).
+		Msg("The tunnel server is out of reach on the configured route; moving the tunnel client to one that reaches it")
+	frpTm.configBuilder.useRoute(route)
 }
 
 // probeCapability sets the capability from a live reachability check. It is a
@@ -459,6 +693,20 @@ func (frpTm *FrpTunnelManager) probeCapability() {
 	}
 
 	err := frpTm.frpsReachable()
+	if err != nil {
+		// The network changed under a running client: its route no longer
+		// reaches frps but another one does. That is a restart, not a device
+		// unable to tunnel — frpc keeps the route it started with, and Start
+		// moves the config over (selectRoute).
+		current := frpTm.configBuilder.route()
+		if route, ok := frpTm.alternativeRoute(current); ok {
+			log.Info().Err(err).Stringer("from", current).Stringer("to", route).
+				Msg("The tunnel route in use no longer reaches the tunnel server; restarting the tunnel client")
+			safe.Go(frpTm.SuperviseStart)
+			return
+		}
+	}
+
 	var certErr *tls.CertificateVerificationError
 	if errors.As(err, &certErr) {
 		frpTm.setCapability(CapabilityUnavailable, err)
@@ -713,6 +961,9 @@ func (frpTm *FrpTunnelManager) Start() error {
 	frpTm.configBuilder.writeTunnelCA()
 
 	frpTm.setCapability(CapabilityStarting, nil)
+
+	// Before frpc reads the config: once running it cannot change routes.
+	frpTm.selectRoute()
 
 	frpcPath := filesystem.GetTunnelBinaryPath(frpTm.config, "frpc")
 

@@ -16,9 +16,10 @@ const applianceHostBoardModel = "appliance"
 // The appliance host's own agent (Board.Model == "appliance") is exempt: the
 // heartbeat value is the appliance's LAN address, unreachable on the host
 // itself once REGISTRY_BIND is loopback in domain mode, so it keeps the
-// installer-written http://localhost:<port>/dl. Cloud backends never send the
-// key, so cloud/field agents are untouched. updateBaseURL() precedence
-// (.flock update_url over --remoteUpdateURL) is unchanged.
+// installer-written http://localhost:<port>/dl. The cloud backend sends
+// instance-registry.ironflock.com/dl, so cloud agents move off any older base
+// in their .flock the same way. updateBaseURL() precedence (.flock update_url
+// over --remoteUpdateURL) is unchanged.
 func applyHandedOffUpdateURL(cfg *config.ReswarmConfig, v any) (changed bool, url string) {
 	url, ok := v.(string)
 	if !ok || url == "" || cfg == nil {

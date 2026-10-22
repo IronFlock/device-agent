@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"reagent/config"
 	"reagent/embedded"
 	"reagent/filesystem"
 	"reagent/testutil/builders"
@@ -141,11 +142,12 @@ func TestGetLatestVersion_Integration(t *testing.T) {
 	}
 
 	cfg := builders.DefaultTestConfig()
-	// The default test config leaves RemoteUpdateURL empty; point it at the real
-	// public bucket so this test genuinely exercises the network fetch when
-	// connectivity is available (and skips cleanly when it isn't).
+	// The default test config leaves RemoteUpdateURL empty; point it at the
+	// agents' real default (the cloud registry-proxy /dl) so this test genuinely
+	// exercises the network fetch and the manifest signature when connectivity
+	// is available (and skips cleanly when it isn't).
 	if cfg.CommandLineArguments.RemoteUpdateURL == "" {
-		cfg.CommandLineArguments.RemoteUpdateURL = "https://storage.googleapis.com"
+		cfg.CommandLineArguments.RemoteUpdateURL = config.DefaultUpdateBaseURL
 	}
 	sys := New(cfg, nil)
 
