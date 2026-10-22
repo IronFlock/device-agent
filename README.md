@@ -291,7 +291,7 @@ Building and publishing is done by **CI** (GitHub Actions). The pipeline is deli
 
 1. `just release-patch` (or `release-minor` / `release-major`) — the whole local side in one command: refuses a dirty tree, bumps [`src/release/version.txt`](src/release/version.txt) + `availableVersions.json`, commits just those two files as `release reagent vX.Y.Z`, runs the lint gate, then tags `vX.Y.Z` and pushes.
 
-   Commit your own work first, with your own message — the release commit carries the version bump alone. This is the shared IronFlock release contract; see [`REDeployments/docs/RELEASE.md`](../REDeployments/docs/RELEASE.md).
+   Commit your own work first, with your own message — the release commit carries the version bump alone. This is the shared IronFlock release contract; see [`REDeployments/docs/RELEASE.md`](../deployments/docs/RELEASE.md).
 
    For a hand-managed version, `just bump-patch` (or editing `version.txt` yourself; see [Versioning](#versioning)) + your own commit + `just release` still works — `release` tags and pushes an already-committed version and requires a clean working tree.
 2. [`.github/workflows/release.yml`](.github/workflows/release.yml) then, for every entry in the [`targets`](targets) file: builds the binary, generates a CycloneDX SBOM, records a sigstore-signed **SBOM attestation** bound to the binary's digest, publishes the binary to `gs://ironflock-downloads/device-agent/<os>/<arch>/<version>/device-agent[.exe]`, and pushes the multi-arch agent images to Artifact Registry. It can also be run manually from the Actions tab (`workflow_dispatch`).

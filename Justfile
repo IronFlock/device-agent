@@ -493,7 +493,7 @@ build-docker-image: build-docker-image-amd64
 # `:latest` so REDeployments/docker-compose.yml's `agent` service (which
 # normally pulls the multi-arch :latest from the registry) picks up the
 # local build instead. Recreate the running container with:
-#   (cd ../REDeployments && docker compose up -d --force-recreate agent)
+#   (cd ../deployments && docker compose up -d --force-recreate agent)
 # We invoke `docker build` directly (rather than `docker compose build`)
 # because the Dockerfile pins the docker-ce apt repo via TARGETARCH and
 # compose's hardcoded TARGETARCH=amd64 in the build args mismatches the
@@ -503,7 +503,7 @@ build-local:
     @just build-docker-image-{{FRP_ARCH}}
     docker tag {{AGENT_IMAGE_NAME}}:latest-{{FRP_ARCH}} {{AGENT_IMAGE_NAME}}:latest
     @echo "==> Tagged {{AGENT_IMAGE_NAME}}:latest from local linux/{{FRP_ARCH}} build."
-    @echo "    Restart with: (cd ../REDeployments && docker compose up -d --force-recreate agent)"
+    @echo "    Restart with: (cd ../deployments && docker compose up -d --force-recreate agent)"
 
 # Push multi-arch agent runtime image manifest
 push-docker-image: build-docker-image-amd64 build-docker-image-arm64
