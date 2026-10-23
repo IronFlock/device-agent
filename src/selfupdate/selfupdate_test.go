@@ -125,6 +125,25 @@ func TestActivateRefusesWrongProcessPath(t *testing.T) {
 	assert.Equal(t, "old-binary", fileContent(t, m.activePath()))
 }
 
+// A layout migration that could not move /opt/reagent links
+// /opt/ironflock/device-agent to it: the service starts the agent through the
+// link, and the kernel reports the running binary by its resolved path.
+func TestActivateThroughSymlinkedAgentDir(t *testing.T) {
+	m := newTestManagerWith(t, LinuxNames)
+	realDir, err := filepath.EvalSymlinks(m.agentDir)
+	require.NoError(t, err)
+	link := filepath.Join(t.TempDir(), "device-agent")
+	if err := os.Symlink(realDir, link); err != nil {
+		t.Skipf("no symlinks here: %v", err)
+	}
+	m.agentDir = link
+	m.currentExe = func() (string, error) { return filepath.Join(realDir, LinuxNames.Active), nil }
+	writeDownload(t, m, "1.1.0")
+
+	require.NoError(t, m.Activate("1.1.0", "1.0.0"))
+	assert.Equal(t, "1.1.0", fileContent(t, filepath.Join(realDir, LinuxNames.Active)))
+}
+
 func TestActivateMissingOrEmptyDownload(t *testing.T) {
 	m := newTestManager(t)
 
