@@ -18,8 +18,8 @@
 #   - the channel maps named in MANIFESTS: availableVersions.json plus
 #     issued_at, each sealed into build/<name> (an updatesig envelope) and
 #     signed as device-agent/<name>. `just publish-latestVersions` uploads
-#     them. manifest-v2.json is what agents read; manifest.json is frozen at
-#     the bridge release (only `promote-bridge` writes it).
+#     them. manifest-v2.json is what agents read first; manifest.json, for
+#     the agents before the bridge release, only `promote-bridge` writes.
 # --legacy <version> signs reagent[.exe] of that one version in the frozen
 # gs://re-agent tree instead (scripts/freeze-legacy.sh), and no manifest.
 #
