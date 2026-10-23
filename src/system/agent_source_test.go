@@ -108,7 +108,7 @@ func TestMissingManifestFallsBackToTheLegacyTree(t *testing.T) {
 	assert.FileExists(t, legacy.installed(cfg))
 }
 
-// manifest-v2.json (signed in CI) wins over the frozen manifest.json.
+// manifest-v2.json (signed in CI) wins over manifest.json.
 func TestManifestV2IsReadFirst(t *testing.T) {
 	pub, priv, err := ed25519.GenerateKey(rand.Reader)
 	require.NoError(t, err)
@@ -160,7 +160,7 @@ func TestBadManifestV2NeverFallsBack(t *testing.T) {
 	require.ErrorIs(t, err, updatesig.ErrBadSignature)
 }
 
-// The frozen manifest.json, signed as device-agent/manifest.json, cannot be
+// manifest.json, signed as device-agent/manifest.json, cannot be
 // served as manifest-v2.json: the subject is part of the signature.
 func TestManifestCannotStandInForManifestV2(t *testing.T) {
 	pub, priv, err := ed25519.GenerateKey(rand.Reader)
