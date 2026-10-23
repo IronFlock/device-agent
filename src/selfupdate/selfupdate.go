@@ -295,6 +295,20 @@ func (m *Manager) IsVersionBlocked(version string) bool {
 	return (s.Phase == phaseRolledBack || s.Phase == phaseSuspect) && s.NewVersion == version
 }
 
+// samePath reports whether two paths lead to the same location once symlinks
+// are resolved, ignoring case (Windows). A path that cannot be resolved is
+// compared as it is.
+func samePath(a, b string) bool {
+	return strings.EqualFold(resolvedPath(a), resolvedPath(b))
+}
+
+func resolvedPath(path string) string {
+	if resolved, err := filepath.EvalSymlinks(path); err == nil {
+		return resolved
+	}
+	return filepath.Clean(path)
+}
+
 // Activate swaps the downloaded reagent-v<newVersion>.exe into the active
 // path. It runs inside the OLD process; on success the caller must trigger a
 // process restart so the supervisor launches the new file.
@@ -326,12 +340,16 @@ func (m *Manager) Activate(newVersion string, currentVersion string) error {
 	}
 
 	// Never swap when the process does not run from the expected service
-	// location — someone started the exe from a download folder.
+	// location — someone started the exe from a download folder. The kernel
+	// names the running binary by its resolved path, while the active path
+	// may lead through a symlink (a layout migration that could not move
+	// /opt/reagent links /opt/ironflock/device-agent to it), so both are
+	// compared resolved.
 	runningExe, err := m.currentExe()
 	if err != nil {
 		return err
 	}
-	if !strings.EqualFold(filepath.Clean(runningExe), filepath.Clean(m.activePath())) {
+	if !samePath(runningExe, m.activePath()) {
 		return fmt.Errorf("running from %s instead of %s; refusing to self-update", runningExe, m.activePath())
 	}
 
