@@ -19,7 +19,7 @@
 #
 # Corporate certificates: Windows' trusted root certificates are imported into Ubuntu, so
 # corporate CAs (TLS-inspecting proxies, appliance registries) work for image pulls. The
-# agent's proxy (HTTP_PROXY/HTTPS_PROXY/NO_PROXY of the reagent service) is set on dockerd.
+# agent's proxy (HTTP_PROXY/HTTPS_PROXY/NO_PROXY of the agent service) is set on dockerd.
 # Re-run the install after the Windows certificate store or the proxy changed.
 #
 # Refuses to install while Docker Desktop is installed: this would be a second engine next to it.
@@ -91,7 +91,7 @@ $Files = @(
 function Step($t) { Write-Host "`n== $t" -ForegroundColor Cyan }
 function Show($lines) { $lines | ForEach-Object { Write-Host "   $_" } }
 
-# Proxy: $Proxy above, else what 'reagent.exe service install' put on the agent service.
+# Proxy: $Proxy above, else what 'device-agent.exe service install' put on the agent service.
 # Values may hold credentials - they are never printed.
 $proxyVars = [ordered]@{}
 if ($Proxy) {
@@ -100,7 +100,12 @@ if ($Proxy) {
     if ($NoProxy) { $proxyVars['NO_PROXY'] = $NoProxy }
     $proxySource = 'the $Proxy setting'
 } else {
-    $agentEnv = (Get-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Services\reagent' -Name Environment -ErrorAction SilentlyContinue).Environment
+    # The agent service: ironflock-device-agent since agent 1.4.0, reagent before.
+    $agentEnv = $null
+    foreach ($agentSvcName in 'ironflock-device-agent', 'reagent') {
+        $agentEnv = (Get-ItemProperty "HKLM:\SYSTEM\CurrentControlSet\Services\$agentSvcName" -Name Environment -ErrorAction SilentlyContinue).Environment
+        if ($agentEnv) { break }
+    }
     foreach ($entry in @($agentEnv | Where-Object { $_ })) {
         $name, $value = $entry -split '=', 2
         if ($value -and $name -in 'HTTP_PROXY', 'HTTPS_PROXY', 'NO_PROXY') { $proxyVars[$name.ToUpper()] = $value }
@@ -172,7 +177,8 @@ if ((Test-Path (Join-Path $env:ProgramFiles 'Docker\Docker\Docker Desktop.exe'))
 # directly, so a cloud registry on a proxied site keeps using the proxy.
 $directRegistry = $null
 if ($httpsProxy) {
-    $agentSvc = Get-CimInstance Win32_Service -Filter "Name='reagent'"
+    $agentSvc = Get-CimInstance Win32_Service -Filter "Name='ironflock-device-agent'"
+    if (-not $agentSvc) { $agentSvc = Get-CimInstance Win32_Service -Filter "Name='reagent'" }
     if ($agentSvc -and $agentSvc.PathName -match '(?:^|\s)--?config(?:\s+|=)(?:"([^"]+)"|(\S+))') {
         $flockPath = if ($Matches[1]) { $Matches[1] } else { $Matches[2] }
         $registry  = $null

@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"reagent/config"
+	"reagent/winservice"
 	"strings"
 	"testing"
 
@@ -19,7 +20,7 @@ func TestParseServiceInstallFlagsDefaults(t *testing.T) {
 
 	assert.Equal(t, "C:\\tmp\\dev.flock", opts.ConfigPath)
 	assert.False(t, opts.AgentDirSet)
-	assert.Equal(t, filepath.Join(`C:\ProgramData`, "IronFlock", "Reagent"), opts.AgentDir)
+	assert.Equal(t, filepath.Join(`C:\ProgramData`, "IronFlock", "DeviceAgent"), opts.AgentDir)
 	assert.Equal(t, filepath.Join(opts.AgentDir, "apps"), opts.AppsDir)
 	assert.True(t, opts.StartNow, "installing must start the service by default")
 	assert.Empty(t, opts.Proxy)
@@ -81,17 +82,60 @@ func TestParseServiceInstallFlagsRequiresProgramData(t *testing.T) {
 }
 
 // The ImagePath arguments must pin every path the agent would otherwise
-// derive from os.UserHomeDir (meaningless under LocalSystem).
-func TestServiceBinaryArgs(t *testing.T) {
-	opts := &serviceInstallOptions{AgentDir: `C:\ProgramData\IronFlock\Reagent`, AppsDir: `C:\ProgramData\IronFlock\Reagent\apps`}
-	args := serviceBinaryArgs(opts)
+// derive from os.UserHomeDir (meaningless under LocalSystem), under the
+// current names (device-agent.db, device-agent.log), and the service carries
+// the proxy environment it was installed with.
+func TestServiceSpec(t *testing.T) {
+	opts := &serviceInstallOptions{AgentDir: `C:\ProgramData\IronFlock\DeviceAgent`, AppsDir: `C:\ProgramData\IronFlock\DeviceAgent\apps`}
+	spec := serviceSpec(opts, []string{"HTTP_PROXY=http://proxy:3128"})
 
-	joined := strings.Join(args, " ")
-	assert.Contains(t, joined, "-config "+filepath.Join(opts.AgentDir, serviceConfigName))
+	assert.Equal(t, winservice.ServiceName, spec.Name)
+	assert.Equal(t, filepath.Join(opts.AgentDir, "device-agent.exe"), spec.Exe)
+	joined := strings.Join(spec.Args, " ")
+	assert.Contains(t, joined, "-config "+filepath.Join(opts.AgentDir, winservice.ConfigName))
 	assert.Contains(t, joined, "-agentDir "+opts.AgentDir)
 	assert.Contains(t, joined, "-appsDir "+opts.AppsDir)
-	assert.Contains(t, joined, "-dbFileName "+filepath.Join(opts.AgentDir, "reagent.db"))
-	assert.Contains(t, joined, "-logFile "+filepath.Join(opts.AgentDir, "reagent.log"))
+	assert.Contains(t, joined, "-dbFileName "+filepath.Join(opts.AgentDir, "device-agent.db"))
+	assert.Contains(t, joined, "-logFile "+filepath.Join(opts.AgentDir, "device-agent.log"))
+	assert.NotContains(t, joined, "reagent")
+	assert.Equal(t, []string{"HTTP_PROXY=http://proxy:3128"}, spec.Env)
+	assert.Nil(t, serviceSpec(opts, nil).Env, "no proxy: an existing environment (a WSL engine's DOCKER_HOST) is left alone")
+}
+
+// Installing into a folder from before 1.4.0 (the old service folder, a
+// console agent's) renames the database first: the service would otherwise
+// open an empty device-agent.db and treat every app container as an orphan.
+func TestLegacyDatabaseRenames(t *testing.T) {
+	files := func(names ...string) func(string) bool {
+		return func(name string) bool {
+			for _, n := range names {
+				if n == name {
+					return true
+				}
+			}
+			return false
+		}
+	}
+	assert.Equal(t, [][2]string{{"reagent.db", "device-agent.db"}, {"reagent.db-wal", "device-agent.db-wal"}, {"reagent.db-shm", "device-agent.db-shm"}},
+		legacyDatabaseRenames(files("reagent.db", "reagent.db-wal", "reagent.db-shm", "reagent.exe")))
+	assert.Equal(t, [][2]string{{"reagent.db", "device-agent.db"}}, legacyDatabaseRenames(files("reagent.db")))
+	assert.Nil(t, legacyDatabaseRenames(files("device-agent.db", "reagent.db")), "the current database wins over a stale legacy one")
+	assert.Nil(t, legacyDatabaseRenames(files("reagent.db-wal")), "no database, only a stray journal")
+	assert.Nil(t, legacyDatabaseRenames(files()))
+}
+
+// An install without -agentDir must notice the data of every earlier kind
+// of installation: console agents below the user profiles under either
+// database name, and the service folder from before 1.4.0.
+func TestExistingAgentDirCandidates(t *testing.T) {
+	drive := "C:" + string(filepath.Separator)
+	programData := filepath.Join(drive, "ProgramData")
+	assert.Equal(t, []string{
+		filepath.Join(drive, "Users", "*", "reagent", "reagent.db"),
+		filepath.Join(drive, "Users", "*", "reagent", "device-agent.db"),
+		filepath.Join(programData, "IronFlock", "Reagent", "reagent.db"),
+		filepath.Join(programData, "IronFlock", "Reagent", "device-agent.db"),
+	}, existingAgentDirCandidates("C:", programData))
 }
 
 func TestInstallCliArgsDerivesSubdirs(t *testing.T) {
@@ -107,29 +151,16 @@ func TestInstallCliArgsDerivesSubdirs(t *testing.T) {
 }
 
 func TestMigrationAbortMessageOffersBothChoices(t *testing.T) {
-	message := migrationAbortMessage([]string{`C:\Users\alice\reagent`}, `C:\ProgramData\IronFlock\Reagent`)
+	message := migrationAbortMessage([]string{`C:\Users\alice\reagent`}, `C:\ProgramData\IronFlock\DeviceAgent`)
 
 	assert.Contains(t, message, `C:\Users\alice\reagent`)
 	assert.Contains(t, message, `-agentDir "C:\Users\alice\reagent"`)
-	assert.Contains(t, message, `-agentDir "C:\ProgramData\IronFlock\Reagent"`)
-}
-
-func TestRepairCmdContent(t *testing.T) {
-	content := repairCmdContent(`C:\ProgramData\IronFlock\Reagent`)
-
-	assert.Contains(t, content, `set "AGENTDIR=C:\ProgramData\IronFlock\Reagent"`)
-	assert.Contains(t, content, `reagent-prev.exe`)
-	assert.Contains(t, content, `reagent-v*.exe`)
-	assert.Contains(t, content, "sc start reagent")
-	assert.True(t, strings.HasSuffix(content, "\r\n"), "batch files want CRLF endings")
-	for _, line := range strings.Split(content, "\r\n") {
-		assert.NotContains(t, line, "\n", "no bare LF inside lines")
-	}
+	assert.Contains(t, message, `-agentDir "C:\ProgramData\IronFlock\DeviceAgent"`)
 }
 
 func TestCertImportArgs(t *testing.T) {
-	args := certImportArgs("Root", `C:\ProgramData\IronFlock\Reagent\ironflock-root.crt`)
-	assert.Equal(t, []string{"-addstore", "-f", "Root", `C:\ProgramData\IronFlock\Reagent\ironflock-root.crt`}, args)
+	args := certImportArgs("Root", `C:\ProgramData\IronFlock\DeviceAgent\ironflock-root.crt`)
+	assert.Equal(t, []string{"-addstore", "-f", "Root", `C:\ProgramData\IronFlock\DeviceAgent\ironflock-root.crt`}, args)
 
 	pub := certImportArgs("TrustedPublisher", `C:\x\root.crt`)
 	assert.Equal(t, "TrustedPublisher", pub[2])
@@ -141,7 +172,7 @@ func TestCertDeleteArgs(t *testing.T) {
 }
 
 func TestDefenderExclusionCmds(t *testing.T) {
-	frpc := `C:\ProgramData\IronFlock\Reagent\frpc.exe`
+	frpc := `C:\ProgramData\IronFlock\DeviceAgent\frpc.exe`
 	add := defenderAddExclusionCmd(frpc)
 	assert.Contains(t, add, "Add-MpPreference -ExclusionPath")
 	assert.Contains(t, add, frpc)
@@ -151,17 +182,16 @@ func TestDefenderExclusionCmds(t *testing.T) {
 	assert.Contains(t, rm, frpc)
 }
 
-func TestAgentDirFromImagePath(t *testing.T) {
-	// Unquoted (default ProgramData path, no spaces).
-	img := `C:\ProgramData\IronFlock\Reagent\reagent.exe -config C:\ProgramData\IronFlock\Reagent\device.flock -agentDir C:\ProgramData\IronFlock\Reagent -appsDir C:\ProgramData\IronFlock\Reagent\apps`
-	assert.Equal(t, `C:\ProgramData\IronFlock\Reagent`, agentDirFromImagePath(img))
-
-	// Quoted path with a space.
-	imgQuoted := `"C:\Program Files\IronFlock\reagent.exe" -agentDir "D:\my data\reagent" -logFile "D:\my data\reagent\reagent.log"`
-	assert.Equal(t, `D:\my data\reagent`, agentDirFromImagePath(imgQuoted))
-
-	// Missing -agentDir.
-	assert.Equal(t, "", agentDirFromImagePath(`C:\x\reagent.exe -config c.flock`))
+// The -agentDir the installer baked into the ImagePath, from the decomposed
+// command line (agentDirFromImagePath, Windows, decomposes it as the SCM
+// composed it).
+func TestAgentDirFromArgs(t *testing.T) {
+	assert.Equal(t, `C:\ProgramData\IronFlock\DeviceAgent`, agentDirFromArgs([]string{
+		`C:\ProgramData\IronFlock\DeviceAgent\device-agent.exe`, "-config", `C:\ProgramData\IronFlock\DeviceAgent\device.flock`,
+		"-agentDir", `C:\ProgramData\IronFlock\DeviceAgent`, "-appsDir", `C:\ProgramData\IronFlock\DeviceAgent\apps`}))
+	assert.Equal(t, `D:\my data\agent`, agentDirFromArgs([]string{`C:\Program Files\IronFlock\device-agent.exe`, "-agentDir", `D:\my data\agent`}))
+	assert.Equal(t, "", agentDirFromArgs([]string{`C:\x\device-agent.exe`, "-config", "c.flock"}))
+	assert.Equal(t, "", agentDirFromArgs([]string{`C:\x\device-agent.exe`, "-agentDir"}), "a flag without its value")
 }
 
 // Appliance-issued device flocks list only the appliance's *local* registry

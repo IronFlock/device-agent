@@ -504,6 +504,33 @@ publish-latestVersions: sign-release
     fi
     echo "==> live: $(jq -cS . availableVersions.json) ($manifests)"
 
+# The Windows fleet's move to the ironflock-device-agent service (agent 1.4.0) is a
+# separate switch from the Linux one: {"windows": true} in the same migration.json
+# starts it (at each device's next agent start or Studio update click); absent or
+# false holds every Windows device where it is, which is also the emergency stop.
+# The other keys of the live object are kept. `migrate-layout start` on a device
+# ignores the switch (canaries).
+# Switch the Windows layout migration on or off fleet-wide: just windows-migration on|off
+windows-migration STATE:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    cd {{ROOT_DIR}}
+    case "{{STATE}}" in
+        on) value=true ;;
+        off) value=false ;;
+        *) echo "usage: just windows-migration on|off" >&2; exit 2 ;;
+    esac
+    mkdir -p build
+    if gsutil -q stat gs://ironflock-downloads/device-agent/migration.json; then
+        gsutil -q cp gs://ironflock-downloads/device-agent/migration.json build/migration.json
+    else
+        echo '{"enabled": true}' > build/migration.json
+    fi
+    jq --argjson windows "$value" '. + {windows: $windows}' build/migration.json > build/migration.json.new
+    mv build/migration.json.new build/migration.json
+    gsutil -q -h "Cache-Control:public, max-age=0" cp build/migration.json gs://ironflock-downloads/device-agent/migration.json
+    echo "==> live device-agent/migration.json: $(jq -c . build/migration.json)"
+
 # One-off, with the release that moves devices to the new layout (1.3.0): copy that
 # staged version into the frozen legacy tree gs://re-agent under the legacy names
 # (reagent[.exe]), sign it there, point every legacy channel and latest/ at it, and

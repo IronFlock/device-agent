@@ -14,12 +14,17 @@
 //
 // Files in agentDir (Windows names / Linux names):
 //
-//	reagent.exe / device-agent                  the active binary (service ImagePath / ExecStart)
-//	reagent-v<v>.exe / device-agent-v<v>        downloaded by system.downloadBinary
-//	reagent-prev.exe / device-agent-prev        the previously active binary (rollback target)
-//	reagent-failed-v<v>.exe / device-agent-failed-v<v>  a version that failed probation
-//	update-state.json                           the marker persisting swap/probation/rollback state
-//	last-connected                              when the device was last connected to IronFlock
+//	device-agent.exe / device-agent                  the active binary (service ImagePath / ExecStart)
+//	device-agent-v<v>.exe / device-agent-v<v>        downloaded by system.downloadBinary
+//	device-agent-prev.exe / device-agent-prev        the previously active binary (rollback target)
+//	device-agent-failed-v<v>.exe / device-agent-failed-v<v>  a version that failed probation
+//	update-state.json                                the marker persisting swap/probation/rollback state
+//	last-connected                                   when the device was last connected to IronFlock
+//
+// A Windows install from before 1.4.0 runs reagent.exe (reagent-prev.exe,
+// reagent-v<v>.exe, …) until the Windows layout migration renames it; the
+// names follow the layout (NamesFor), never the OS alone, so such a service
+// keeps updating and rolling back under the names its ImagePath points at.
 //
 // All operations are same-directory renames and links, so the state machine
 // is unit-testable on any OS.
@@ -56,9 +61,34 @@ type Names struct {
 }
 
 var (
-	WindowsNames = Names{Active: "reagent.exe", Prev: "reagent-prev.exe", Prefix: "reagent", Ext: ".exe"}
-	LinuxNames   = Names{Active: "device-agent", Prev: "device-agent-prev", Prefix: "device-agent", LinkSwap: true}
+	WindowsNames = Names{Active: "device-agent.exe", Prev: "device-agent-prev.exe", Prefix: "device-agent", Ext: ".exe"}
+	// WindowsLegacyNames are the names of a Windows install from before
+	// 1.4.0 (service ImagePath …\Reagent\reagent.exe), kept until the layout
+	// migration renames the files.
+	WindowsLegacyNames = Names{Active: "reagent.exe", Prev: "reagent-prev.exe", Prefix: "reagent", Ext: ".exe"}
+	LinuxNames         = Names{Active: "device-agent", Prev: "device-agent-prev", Prefix: "device-agent", LinkSwap: true}
 )
+
+// legacyBinaryName is layout.Paths.BinaryName of the legacy layouts.
+const legacyBinaryName = "reagent"
+
+// NamesFor returns this OS's names for the layout the agent runs in, given
+// the layout's binary name (layout.Paths.BinaryName, config.CommandLineArguments.BinaryName):
+// on Windows the legacy names for "reagent", the current ones for anything
+// else; Linux has one set.
+func NamesFor(binaryName string) Names {
+	return namesFor(runtime.GOOS, binaryName)
+}
+
+func namesFor(goos string, binaryName string) Names {
+	if goos != "windows" {
+		return LinuxNames
+	}
+	if binaryName == legacyBinaryName {
+		return WindowsLegacyNames
+	}
+	return WindowsNames
+}
 
 const (
 	markerName        = "update-state.json"
@@ -155,12 +185,9 @@ type Manager struct {
 	enforceSignature bool
 }
 
-// New returns the Manager for agentDir with this OS's file names.
-func New(agentDir string) *Manager {
-	names := LinuxNames
-	if runtime.GOOS == "windows" {
-		names = WindowsNames
-	}
+// New returns the Manager for agentDir with the file names of the layout the
+// agent runs in (NamesFor).
+func New(agentDir string, names Names) *Manager {
 	return &Manager{
 		agentDir:   agentDir,
 		names:      names,
@@ -309,7 +336,7 @@ func resolvedPath(path string) string {
 	return filepath.Clean(path)
 }
 
-// Activate swaps the downloaded reagent-v<newVersion>.exe into the active
+// Activate swaps the downloaded <Prefix>-v<newVersion><Ext> into the active
 // path. It runs inside the OLD process; on success the caller must trigger a
 // process restart so the supervisor launches the new file.
 func (m *Manager) Activate(newVersion string, currentVersion string) error {

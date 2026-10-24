@@ -90,16 +90,6 @@ func migrateStart(env migrate.Env, args []string) error {
 	return migrate.Run(env)
 }
 
-const (
-	// migrationFirstCheck: the new version first proves itself in the legacy
-	// layout (the legacy manager's probation) before it moves.
-	migrationFirstCheck = 5 * time.Minute
-	// migrationSwitch (absent means enabled) stops new migrations
-	// fleet-wide: {"enabled": false}. It can only hold devices back, so it
-	// is not signed.
-	migrationSwitch = "device-agent/migration.json"
-)
-
 // watchLayoutMigration moves a legacy install to the current layout. The move
 // restarts Docker and every app once, so — like an update — it starts only
 // at the agent's start (once, 5 minutes after the agent connected: the
@@ -169,16 +159,8 @@ func tryLayoutMigration(cliArgs *config.CommandLineArguments, connected func() b
 	return true, migrate.Begin(env, self)
 }
 
-// updateBase is where the agent updates from: the .flock's update_url (an
-// appliance mirror), else -remoteUpdateURL. The switch lives next to the
-// manifest there.
-func updateBase(cliArgs *config.CommandLineArguments) string {
-	if flock, err := config.LoadReswarmConfig(cliArgs.ConfigFileLocation); err == nil && flock.UpdateURL != "" {
-		return flock.UpdateURL
-	}
-	return cliArgs.RemoteUpdateURL
-}
-
+// migrationEnabled reads the fleet switch for Linux ("enabled"; absent, or
+// no file, means on).
 func migrationEnabled(base string) (bool, error) {
 	url := strings.TrimSuffix(base, "/") + "/" + migrationSwitch
 	body, status, err := filesystem.GetRemoteFileWithStatus(url)

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -157,6 +158,9 @@ func updOrdHasLoop(am *AppManager, appKey uint64, stage common.Stage) bool {
 // by EXACT argument equality (never substring — a temp path containing "pull"
 // must not trigger it) and records one line of argv per invocation.
 func updOrdComposeHarness(t *testing.T, pullExit int) (*StateMachine, *mocks.Container, *store.AppStore, *config.Config, string) {
+	if runtime.GOOS == "windows" {
+		t.Skip("the compose CLI stub is a POSIX shell script")
+	}
 	t.Helper()
 
 	am, mc, mockTunnel, st, _, cfg := amHarness(t)

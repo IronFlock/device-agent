@@ -206,11 +206,14 @@ agent only downloads them). From an elevated (Administrator) prompt:
 
 ```
 device-agent.exe service install -config path\to\config.flock
-reagent.exe service status|start|stop|uninstall
+device-agent.exe service status|start|stop|uninstall
 ```
 
-(The download is `device-agent.exe` since 1.3.0; the service still installs it as
-`reagent.exe` in `%ProgramData%\IronFlock\Reagent` until the Windows layout moves.)
+The service is `ironflock-device-agent` (display name "IronFlock Device Agent")
+in `%ProgramData%\IronFlock\DeviceAgent` since agent 1.4.0: `device-agent.exe`,
+`device-agent.db`, `device-agent.log`. A device installed before 1.4.0 runs the
+service `reagent` from `%ProgramData%\IronFlock\Reagent` and moves to the new
+names by itself, see [Windows devices installed before 1.4.0](#windows-devices-installed-before-140).
 
 `service install` **starts the service** when it finishes — a device that was just
 registered should come online without a second command. Pass `-noStart` to install
@@ -219,11 +222,20 @@ provisioning scripts, but it no longer does anything.)
 
 What `service install` sets up:
 
+- Hardens `%ProgramData%\IronFlock` first (inheritance off; SYSTEM and
+  Administrators full control; Users read and execute; owner Administrators):
+  the folder inherits create rights for every user from `%ProgramData%`, and
+  the service executes binaries below it as SYSTEM. A chosen agent dir that
+  someone else owns is refused.
 - Copies the exe and the `.flock` (as `device.flock`) into the agent dir
-  (default `%ProgramData%\IronFlock\Reagent`, override with `-agentDir`) and
+  (default `%ProgramData%\IronFlock\DeviceAgent`, override with `-agentDir`) and
   bakes `-config/-agentDir/-appsDir/-dbFileName/-logFile` into the service
   ImagePath, so no path ever falls back to `os.UserHomeDir` (meaningless under
-  LocalSystem).
+  LocalSystem). A chosen folder that holds a `reagent.db` from before 1.4.0
+  gets it renamed to `device-agent.db` (with `-wal`/`-shm`) first, so the
+  service opens the device's data and not an empty database.
+- Refuses while a `reagent` service exists: that service moves to the new name
+  by itself once it runs 1.4.0; `service uninstall` first for a manual reinstall.
 - Restricts the agent dir ACLs to SYSTEM + Administrators (the `.flock` and
   generated `.env-compose` files contain the device secret; the self-update
   executes binaries from this dir as SYSTEM), with a Users modify-grant on the
@@ -232,19 +244,67 @@ What `service install` sets up:
   1 day). Deliberate restarts (update activation, `system_restart_agent`) exit
   without reporting SERVICE_STOPPED so they always trigger recovery.
 - A boot-time repair Scheduled Task ("IronFlock Agent Repair") that restores
-  `reagent.exe` from `reagent-prev.exe` if an interrupted update swap left the
-  ImagePath vacant — SCM recovery cannot fix a service that fails to _start_.
+  `device-agent.exe` from `device-agent-prev.exe` if an interrupted update swap
+  left the ImagePath vacant — SCM recovery cannot fix a service that fails to
+  _start_.
 - Optional `-proxy http://host:port` writes HTTP(S)_PROXY into the service
   environment (a LocalSystem service only sees machine-wide env).
 
 Update flow (the same on Linux, see [Linux layout and service](#linux-layout-and-service)
-and `src/selfupdate`): download `reagent-v<ver>.exe` (SHA-256 and signature
+and `src/selfupdate`): download `device-agent-v<ver>.exe` (SHA-256 and signature
 verified) → validate it executes → rename the running exe to
-`reagent-prev.exe`, rename the update into place → exit for a supervised
+`device-agent-prev.exe`, rename the update into place → exit for a supervised
 restart → probation: a new version that fails 3 consecutive starts, or does
 not connect to IronFlock within 10 minutes, is rolled back; it is blocked once
 the old version connects (and may be tried again when the old one cannot
-either: the network was at fault).
+either: the network was at fault). The file names follow the name of the
+running executable, not the OS: a service installed before 1.4.0 keeps
+updating and rolling back as `reagent.exe` / `reagent-prev.exe` until it moved.
+
+#### Windows devices installed before 1.4.0
+
+A device enrolled before agent 1.4.0 runs the service `reagent` from
+`%ProgramData%\IronFlock\Reagent` (`reagent.exe`, `reagent.db`, `reagent.log`).
+Its agent updates itself to 1.4.0 under those names, and 1.4.0 then moves the
+device to the current names in one journaled migration
+(`%ProgramData%\IronFlock\.device-agent-migration.json`, package
+`src/migrate/winmigrate`):
+
+- It starts only from a connected agent running as the `reagent` service:
+  once per agent start, 5 minutes after it connected, or when a user clicks
+  "update agent" in Studio with nothing newer to install — and only with
+  `"windows": true` in `device-agent/migration.json` on the download server
+  (`just windows-migration on|off`; absent or false holds the Windows fleet
+  where it is, which is also the emergency stop; Linux reads only `enabled`).
+  `device-agent.exe migrate-layout start` from an elevated prompt moves one
+  device regardless of the switch; `migrate-layout status` prints the journal.
+  A `reagent.exe` that no service supervises (a console run, FlockFlasher's
+  test device) reports `stats.layout` = `legacy-console` and never moves.
+- The agent stages the move: `%ProgramData%\IronFlock` hardened, a verified
+  copy of itself in `.migrate\device-agent.exe`, the temporary service
+  `ironflock-device-agent-migrate` (automatic start, restarted every 30 s: a
+  power cut or a crash resumes the move from the journal) with the `reagent`
+  service's `Environment` (a WSL engine's `DOCKER_HOST`, a proxy), and the
+  journal last. The migrate service then runs the steps `prepare`,
+  `stop-legacy`, `stop-apps`, `rename-files`, `move-folder` (to `DeviceAgent`;
+  a custom `-agentDir`, another volume or a Docker Desktop Hyper-V file-sharing
+  list that does not cover it keep the folder in place: only the names change),
+  `register-service` (`ironflock-device-agent`, every setting reapplied),
+  `start-agent`, `health` and `cleanup`. The move counts as done only once the
+  new service's process is connected to IronFlock at this version
+  (`DeviceAgent\connected`, "`<pid> <version> <service>`") and stays up a minute;
+  otherwise every step is undone in reverse, `reagent` runs again, and the move
+  is tried again at a later start, a day later at the earliest, without end.
+  Done or rolled back, `ensure-agent` makes sure an agent service runs. During
+  the move the repair task runs `.migrate\repair.cmd`, which restores the
+  migrator or whichever agent service is enabled at boot.
+- `stats.layout` is `legacy` until then (`layout_error` says why an attempt was
+  rolled back) and `ironflock` afterwards. The agent recreates its app
+  containers once after a folder move (`recreate-containers`): their bind mounts
+  name the new folder, and an image's `VOLUME` data (a database) is carried over;
+  compose apps are recreated by compose. `service stop` and `service uninstall`
+  refuse while a move is in progress. The migrate service and `.migrate` are
+  removed by the agent at its next start; the journal stays.
 
 Docker note: with Docker Desktop the engine only starts at user sign-in. The
 service tolerates that (it waits patiently and reports the device as

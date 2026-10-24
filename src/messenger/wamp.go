@@ -7,7 +7,6 @@ import (
 	"math/rand"
 	"os"
 	"path/filepath"
-	"runtime"
 	"runtime/debug"
 	"strings"
 	"sync"
@@ -20,7 +19,7 @@ import (
 	"reagent/diskguard"
 	"reagent/errdefs"
 	"reagent/messenger/topics"
-	"reagent/migrate"
+	"reagent/migratestate"
 
 	"github.com/ironflock/nexus/v3/client"
 	"github.com/ironflock/nexus/v3/transport"
@@ -1075,14 +1074,13 @@ func (s *WampSession) UpdateRemoteDeviceStatus(status DeviceStatus) error {
 	}
 
 	// The file layout (package layout), for following the fleet's move to
-	// /opt/ironflock/device-agent; layout_error says why a move was rolled back.
+	// the current layout (/opt/ironflock/device-agent, the ironflock-device-agent
+	// service on Windows); layout_error says why a move was rolled back.
 	if cfg.CommandLineArguments.Layout != "" {
 		statsDict["layout"] = string(cfg.CommandLineArguments.Layout)
 	}
-	if runtime.GOOS == "linux" {
-		if layoutErr := migrate.LastError(""); layoutErr != "" {
-			statsDict["layout_error"] = layoutErr
-		}
+	if layoutErr := migratestate.LastError(); layoutErr != "" {
+		statsDict["layout_error"] = layoutErr
 	}
 
 	payload := common.Dict{

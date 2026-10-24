@@ -82,7 +82,8 @@ jobs:
           if-no-files-found: warn
 
   # Native Windows check for the Windows-service code paths (svc handler,
-  # installer CLI, self-update swap, ConPTY host terminal): the packages that
+  # installer CLI, self-update swap, ConPTY host terminal, the layout
+  # migration and its service control manager contract): the packages that
   # carry windows build tags plus a full native build.
   windows-unit:
     runs-on: windows-latest
@@ -100,8 +101,14 @@ jobs:
           cache-dependency-path: src/go.sum
       - name: native build (all packages, windows tags active)
         run: cd src && touch embedded/frpc_binary && go build ./...
-      - name: unit tests (service, self-update, codesign, tunnel, lifecycle, config, system, terminal)
-        run: cd src && go test -count=1 ./selfupdate/... ./codesign/... ./tunnel/... ./lifecycle/... ./config/... ./system/... ./terminal/... .
+      - name: unit tests (service, self-update, codesign, tunnel, lifecycle, config, system, terminal, layout, apps, migration)
+        run: cd src && go test -count=1 ./selfupdate/... ./codesign/... ./tunnel/... ./lifecycle/... ./config/... ./system/... ./terminal/... ./layout/... ./apps/... ./migrate/winmigrate/... ./migratestate/... ./winservice/... .
+      # The behaviour table the migration's fake service control manager
+      # models, against the real one: throwaway services made from the test
+      # binary (the runner is elevated; the test skips when it is not), and
+      # the real repair scripts over fixture folders.
+      - name: service control manager contract
+        run: cd src && go test -count=1 -v -run 'TestContract' ./migrate/winmigrate/...
 
   # The required check of the main-branch ruleset: green only when every job
   # above succeeded (skipped or cancelled counts as failed).

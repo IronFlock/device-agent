@@ -1,7 +1,8 @@
 # connect-agent-to-wsl-docker.ps1
 #
 # Makes the WSL Docker Engine (installed by setup-docker-wsl.ps1) usable by the
-# IronFlock device agent (reagent) running as a Windows service (SYSTEM):
+# IronFlock device agent running as a Windows service (SYSTEM; ironflock-device-agent since
+# agent 1.4.0, reagent before):
 #   - dockerd additionally listens on tcp://127.0.0.1:2376 (loopback only)
 #   - mutual TLS: only clients holding the generated client certificate get in
 #   - client certs land in C:\WSL-Setup\certs (SYSTEM, Administrators, WSL account only)
@@ -22,8 +23,9 @@
 # Safe to re-run: existing certificates are kept, and Docker and the agent are only
 # restarted when their configuration actually changed.
 #
-# Re-run it after every 'reagent.exe service install': the install recreates the service
-# and, with a proxy, overwrites its environment.
+# Re-run it after every 'device-agent.exe service install': the install recreates the
+# service and, with a proxy, overwrites its environment. A device installed before agent
+# 1.4.0 keeps its environment when the agent moves it to the new service name.
 #
 # Apps need agent 1.2.11 or newer on this engine: older agents pass Windows paths
 # (C:\ProgramData\IronFlock\...) as the bind-mount sources of every app, which a Linux
@@ -50,7 +52,10 @@ $Helper      = 'C:\WSL-Setup\run-as-wsl-user.ps1'
 $CertDir     = 'C:\WSL-Setup\certs'
 $BinDir      = 'C:\WSL-Setup\bin'
 $PluginDir   = Join-Path $env:ProgramFiles 'Docker\cli-plugins'
-$ServiceName = 'reagent'
+# The agent service: ironflock-device-agent since agent 1.4.0, reagent before (a device
+# installed earlier moves to the new name by itself once it runs 1.4.0).
+$ServiceName = 'ironflock-device-agent'
+if (-not (Get-Service -Name $ServiceName -ErrorAction SilentlyContinue)) { $ServiceName = 'reagent' }
 $DockerHost  = 'tcp://127.0.0.1:2376'
 $MinAgentVersion = [version]'1.2.11'   # first agent that translates mount paths for this engine
 
@@ -318,7 +323,7 @@ if (Test-Path $docker) {
 
 Write-Host "`n== 5/5  Agent service environment" -ForegroundColor Cyan
 if (-not $svc) {
-    Write-Host '   agent service not installed yet - re-run this script after "reagent.exe service install"'
+    Write-Host '   agent service not installed yet - re-run this script after "device-agent.exe service install"'
     return
 }
 $svcKey = "HKLM:\SYSTEM\CurrentControlSet\Services\$ServiceName"
@@ -329,7 +334,7 @@ $wanted = [ordered]@{
     # services keep the PATH they had at boot; this hands the agent the one with docker.exe now
     PATH              = [Environment]::GetEnvironmentVariable('Path', 'Machine')
 }
-# keep everything else, e.g. the proxy variables 'reagent.exe service install' wrote
+# keep everything else, e.g. the proxy variables 'device-agent.exe service install' wrote
 $kept    = @($ServiceEnv | Where-Object { $wanted.Keys -notcontains ($_ -split '=', 2)[0] })
 $updated = @($kept) + @($wanted.Keys | ForEach-Object { "$_=$($wanted[$_])" })
 $envChanged = -not (($ServiceEnv -join "`n") -ceq ($updated -join "`n"))
@@ -359,7 +364,7 @@ if ($restart -and -not $RestartAgent) {
     # The restart runs as a one-shot SYSTEM task, outside this shell. Started from the
     # IronFlock device terminal, this shell belongs to the agent's kill-on-close job and dies
     # with the agent - a stop issued from here would never be followed by the start.
-    # reagent.exe's own stop waits for the agent to drain; Restart-Service gives up early.
+    # The agent's own 'service stop' waits for it to drain; Restart-Service gives up early.
     $taskName = 'IronFlock-Agent-Restart'
     $exe      = $AgentExe.Replace("'", "''")
     $command  = "& '$exe' service stop; & '$exe' service start; Unregister-ScheduledTask -TaskName '$taskName' -Confirm:`$false"

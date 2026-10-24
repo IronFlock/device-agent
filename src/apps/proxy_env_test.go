@@ -1,6 +1,7 @@
 package apps
 
 import (
+	"runtime"
 	"strings"
 	"testing"
 
@@ -50,6 +51,9 @@ func TestResolveDeviceProxy(t *testing.T) {
 	})
 
 	t.Run("upper case wins over lower case", func(t *testing.T) {
+		if runtime.GOOS == "windows" {
+			t.Skip("Windows environment variables are case-insensitive: HTTPS_PROXY and https_proxy are one variable")
+		}
 		clearProxyEnv(t)
 		t.Setenv("HTTPS_PROXY", "http://upper:3128")
 		t.Setenv("https_proxy", "http://lower:3128")

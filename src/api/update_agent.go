@@ -55,7 +55,7 @@ func (ex *External) updateReagent(ctx context.Context, response messenger.Result
 			return nil, err
 		}
 		if started {
-			updateResult.Message = "moving the device to the current layout; Docker and the apps restart once"
+			updateResult.Message = layoutMigrationMessage
 		}
 	}
 

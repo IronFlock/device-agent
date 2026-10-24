@@ -1,9 +1,10 @@
 package main
 
-// OS-neutral logic for the `reagent service` subcommand: flag parsing, the
-// migration decision, and generated file/argument contents. Kept free of
-// syscalls so it is unit-testable on every platform; the Windows-only pieces
-// live in servicecmd_windows.go.
+// OS-neutral logic for the `device-agent service` subcommand on Windows: flag
+// parsing, the migration decision, and generated file/argument contents.
+// Kept free of syscalls so it is unit-testable on every platform; the
+// Windows-only pieces live in servicecmd_windows.go, the names and scripts in
+// package winservice.
 
 import (
 	"bytes"
@@ -16,14 +17,8 @@ import (
 	"path/filepath"
 	"reagent/common"
 	"reagent/config"
+	"reagent/winservice"
 	"strings"
-)
-
-const (
-	serviceDisplayName = "IronFlock Device Agent"
-	serviceDescription = "Connects this device to the IronFlock platform, runs apps via Docker, and keeps the agent up to date."
-	repairTaskName     = "IronFlock Agent Repair"
-	serviceConfigName  = "device.flock"
 )
 
 // certImportArgs builds `certutil -addstore -f <store> <certPath>` args to
@@ -54,43 +49,17 @@ func defenderRemoveExclusionCmd(frpcPath string) string {
 	return "Remove-MpPreference -ExclusionPath '" + frpcPath + "'"
 }
 
-// agentDirFromImagePath extracts the -agentDir value the installer baked into
-// the service's ImagePath, so uninstall can reverse the dir-scoped side
-// effects (Defender exclusion, cert file). Returns "" when not found.
-func agentDirFromImagePath(imagePath string) string {
-	fields := splitCommandLine(imagePath)
+// agentDirFromArgs extracts the -agentDir value the installer baked into the
+// service's ImagePath (decomposed by the caller), so uninstall can reverse
+// the dir-scoped side effects (Defender exclusion, cert file). Returns ""
+// when not found.
+func agentDirFromArgs(fields []string) string {
 	for i, f := range fields {
 		if f == "-agentDir" && i+1 < len(fields) {
 			return fields[i+1]
 		}
 	}
 	return ""
-}
-
-// splitCommandLine splits a Windows ImagePath into fields, honoring
-// double-quoted segments (paths under %ProgramData% have no spaces by default,
-// but a custom -agentDir might).
-func splitCommandLine(s string) []string {
-	var fields []string
-	var cur strings.Builder
-	inQuote := false
-	for _, r := range s {
-		switch {
-		case r == '"':
-			inQuote = !inQuote
-		case r == ' ' && !inQuote:
-			if cur.Len() > 0 {
-				fields = append(fields, cur.String())
-				cur.Reset()
-			}
-		default:
-			cur.WriteRune(r)
-		}
-	}
-	if cur.Len() > 0 {
-		fields = append(fields, cur.String())
-	}
-	return fields
 }
 
 // normalizeRegistryHost reduces a registry reference from the .flock to the
@@ -225,11 +194,11 @@ func renderProxyEnv(cfg proxyConfig) string {
 	var b strings.Builder
 	b.WriteString("# IronFlock agent proxy configuration.\n")
 	b.WriteString("#\n")
-	b.WriteString("# This file is the durable source for the reagent service's proxy settings.\n")
-	b.WriteString("# `reagent service install` seeds it once and applies it to the Windows\n")
+	b.WriteString("# This file is the durable source for the device agent service's proxy settings.\n")
+	b.WriteString("# `device-agent.exe service install` seeds it once and applies it to the Windows\n")
 	b.WriteString("# service environment; `service uninstall` leaves it in place, so edits\n")
 	b.WriteString("# survive a reinstall. To change the proxy, edit this file and re-run\n")
-	b.WriteString("# `reagent service install`.\n")
+	b.WriteString("# `device-agent.exe service install`.\n")
 	b.WriteString("#\n")
 	b.WriteString("# NO_PROXY matches the host NAME a client dials, never the address that name\n")
 	b.WriteString("# resolves to, so an appliance reached by name has to be listed here. A bare\n")
@@ -475,14 +444,14 @@ type serviceInstallOptions struct {
 	AgentDirSet bool
 }
 
-// parseServiceInstallFlags parses `reagent service install` flags.
+// parseServiceInstallFlags parses `device-agent.exe service install` flags.
 // programData is the value of %ProgramData% (injected for tests).
 func parseServiceInstallFlags(args []string, programData string, output io.Writer) (*serviceInstallOptions, error) {
 	flags := flag.NewFlagSet("service install", flag.ContinueOnError)
 	flags.SetOutput(output)
 
 	configPath := flags.String("config", "", "path to the device's .flock configuration file (required)")
-	agentDir := flags.String("agentDir", "", "agent directory (default: %ProgramData%\\IronFlock\\Reagent)")
+	agentDir := flags.String("agentDir", "", "agent directory (default: %ProgramData%\\IronFlock\\"+winservice.Folder+")")
 	appsDir := flags.String("appsDir", "", "apps directory (default: <agentDir>\\apps)")
 	proxy := flags.String("proxy", "", "optional HTTP(S) proxy URL, written to the service environment")
 	// The counterpart to ironflock-init's --no-proxy on Linux. Without it the
@@ -527,7 +496,7 @@ func parseServiceInstallFlags(args []string, programData string, output io.Write
 		if programData == "" {
 			return nil, fmt.Errorf("%%ProgramData%% is not set and no -agentDir was given")
 		}
-		opts.AgentDir = filepath.Join(programData, "IronFlock", "Reagent")
+		opts.AgentDir = filepath.Join(winservice.Root(programData), winservice.Folder)
 	}
 
 	opts.AppsDir = *appsDir
@@ -552,21 +521,16 @@ func installCliArgs(opts *serviceInstallOptions) *config.CommandLineArguments {
 	}
 }
 
-// serviceBinaryArgs are the arguments baked into the service ImagePath. Every
-// path is explicit so the os.UserHomeDir-based defaults (meaningless under
-// LocalSystem) never apply at service runtime.
-func serviceBinaryArgs(opts *serviceInstallOptions) []string {
-	return []string{
-		"-config", filepath.Join(opts.AgentDir, serviceConfigName),
-		"-agentDir", opts.AgentDir,
-		"-appsDir", opts.AppsDir,
-		"-dbFileName", filepath.Join(opts.AgentDir, "reagent.db"),
-		"-logFile", filepath.Join(opts.AgentDir, "reagent.log"),
-	}
+// serviceSpec is the service as `service install` registers it (ImagePath
+// with every path explicit, so the os.UserHomeDir-based defaults —
+// meaningless under LocalSystem — never apply at service runtime; recovery;
+// the proxy environment, nil to leave an existing value alone).
+func serviceSpec(opts *serviceInstallOptions, env []string) winservice.Spec {
+	return winservice.AgentSpec(opts.AgentDir, opts.AppsDir, nil, env)
 }
 
-// migrationAbortMessage explains the choice when data from a previous manual
-// (console) installation exists: reuse it, or start fresh. Moving the data is
+// migrationAbortMessage explains the choice when data from a previous
+// installation exists: reuse it, or start fresh. Moving the data is
 // deliberately not offered — app /data bind-mount sources are baked into the
 // existing containers, so a silent move would strand their data.
 func migrationAbortMessage(existingDirs []string, defaultAgentDir string) string {
@@ -581,28 +545,35 @@ func migrationAbortMessage(existingDirs []string, defaultAgentDir string) string
 	return b.String()
 }
 
-// repairCmdContent is the boot-time repair script registered as an ONSTART
-// scheduled task. It closes the one gap in-process code cannot: an
-// interrupted self-update swap that left the service ImagePath vacant (SCM
-// recovery actions do not fire for a service that fails to START). Prefers
-// the known-good previous binary, falls back to the newest downloaded one.
-func repairCmdContent(agentDir string) string {
-	return strings.Join([]string{
-		"@echo off",
-		"rem IronFlock agent repair (registered as scheduled task '" + repairTaskName + "')",
-		"rem Restores the service binary if an interrupted self-update left it missing.",
-		"set \"AGENTDIR=" + agentDir + "\"",
-		"if exist \"%AGENTDIR%\\reagent.exe\" goto start",
-		"if exist \"%AGENTDIR%\\reagent-prev.exe\" (",
-		"  ren \"%AGENTDIR%\\reagent-prev.exe\" \"reagent.exe\"",
-		"  goto start",
-		")",
-		"for /f \"delims=\" %%F in ('dir /b /o-d \"%AGENTDIR%\\reagent-v*.exe\" 2^>nul') do (",
-		"  ren \"%AGENTDIR%\\%%F\" \"reagent.exe\"",
-		"  goto start",
-		")",
-		":start",
-		"sc start reagent",
-		"",
-	}, "\r\n")
+// legacyDatabaseRenames lists the renames that give a folder from before
+// 1.4.0 (reagent.db) the current database name, so an install into it opens
+// the device's data rather than an empty database. Nothing when the current
+// database exists already. The names are relative to the folder.
+func legacyDatabaseRenames(exists func(name string) bool) [][2]string {
+	if exists("device-agent.db") || !exists("reagent.db") {
+		return nil
+	}
+	var renames [][2]string
+	for _, suffix := range []string{"", "-wal", "-shm"} {
+		if exists("reagent.db" + suffix) {
+			renames = append(renames, [2]string{"reagent.db" + suffix, "device-agent.db" + suffix})
+		}
+	}
+	return renames
+}
+
+// existingAgentDirCandidates lists where data from a previous installation
+// may sit: the console agent's folder below every user profile (either
+// database name) and the service folder from before 1.4.0. FlockFlasher's
+// throwaway test-device dir (~\.Reflasher\agent) is deliberately not among
+// them.
+func existingAgentDirCandidates(systemDrive, programData string) []string {
+	// "C:" alone would be drive-relative; the separator makes it the root.
+	drive := systemDrive + string(filepath.Separator)
+	return []string{
+		filepath.Join(drive, "Users", "*", "reagent", "reagent.db"),
+		filepath.Join(drive, "Users", "*", "reagent", "device-agent.db"),
+		filepath.Join(winservice.Root(programData), winservice.LegacyFolder, "reagent.db"),
+		filepath.Join(winservice.Root(programData), winservice.LegacyFolder, "device-agent.db"),
+	}
 }

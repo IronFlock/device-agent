@@ -26,8 +26,7 @@ func newTestManagerWith(t *testing.T, names Names) *Manager {
 	t.Helper()
 	dir := t.TempDir()
 
-	m := New(dir)
-	m.names = names
+	m := New(dir, names)
 	m.retryDelay = time.Millisecond
 	m.currentExe = func() (string, error) { return m.activePath(), nil }
 	m.execVersion = func(exePath string) (string, error) {
@@ -268,12 +267,51 @@ func TestActivateRefusedWhilePreviousUpdateIsOnProbation(t *testing.T) {
 	}
 }
 
-func TestNewPicksThisOSNames(t *testing.T) {
-	m := New(t.TempDir())
+// The names follow the layout the agent runs in, never the OS alone: a
+// legacy Windows service that updated itself in place runs 1.4.0 as
+// reagent.exe, and a 1.4.0 that took the current names from the OS would
+// refuse every later update (the running exe is not the active path) and
+// could not roll back (no reagent-prev.exe).
+func TestNamesFollowTheLayout(t *testing.T) {
+	assert.Equal(t, WindowsLegacyNames, namesFor("windows", "reagent"))
+	assert.Equal(t, WindowsNames, namesFor("windows", "device-agent"))
+	assert.Equal(t, WindowsNames, namesFor("windows", ""), "no layout: the current names")
+	assert.Equal(t, LinuxNames, namesFor("linux", "reagent"), "Linux has one set of names")
+	assert.Equal(t, LinuxNames, namesFor("linux", "device-agent"))
+
 	if runtime.GOOS == "windows" {
-		assert.Equal(t, WindowsNames, m.names)
+		assert.Equal(t, WindowsLegacyNames, NamesFor("reagent"))
+		assert.Equal(t, WindowsNames, NamesFor("device-agent"))
 	} else {
-		assert.Equal(t, LinuxNames, m.names)
+		assert.Equal(t, LinuxNames, NamesFor("reagent"))
+	}
+	assert.Equal(t, WindowsNames, New(t.TempDir(), WindowsNames).names)
+}
+
+// A 1.4.0 under either Windows name set activates an update and rolls it
+// back under its own names: the service's ImagePath keeps working.
+func TestWindowsActivateAndRollBackUnderBothNameSets(t *testing.T) {
+	for name, names := range map[string]Names{"legacy (reagent.exe)": WindowsLegacyNames, "current (device-agent.exe)": WindowsNames} {
+		t.Run(name, func(t *testing.T) {
+			m := newTestManagerWith(t, names)
+			writeDownload(t, m, "1.4.1")
+			require.NoError(t, m.Activate("1.4.1", "1.4.0"))
+
+			assert.Equal(t, "1.4.1", fileContent(t, filepath.Join(m.agentDir, names.Active)))
+			assert.Equal(t, "old-binary", fileContent(t, filepath.Join(m.agentDir, names.Prev)))
+			assert.NoFileExists(t, filepath.Join(m.agentDir, names.Prefix+"-v1.4.1"+names.Ext))
+			assert.Equal(t, phaseProbation, readMarkerFile(t, m).Phase)
+
+			// three failed starts of the new version: rolled back under the same names
+			for i := 0; i < maxProbationAttempts; i++ {
+				assert.False(t, m.OnServiceStart("1.4.1").RollbackPerformed)
+			}
+			assert.True(t, m.OnServiceStart("1.4.1").RollbackPerformed)
+			assert.Equal(t, "old-binary", fileContent(t, filepath.Join(m.agentDir, names.Active)))
+			assert.Equal(t, "1.4.1", fileContent(t, filepath.Join(m.agentDir, names.Prefix+"-failed-v1.4.1"+names.Ext)))
+			assert.NoFileExists(t, filepath.Join(m.agentDir, names.Prev))
+			assert.Equal(t, phaseSuspect, readMarkerFile(t, m).Phase)
+		})
 	}
 }
 

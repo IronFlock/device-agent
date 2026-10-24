@@ -51,7 +51,7 @@ func exitForRestart(reason string) {
 // loop (service_windows.go): update probation first, then the agent, then
 // restart requests and signals.
 func runService(cliArgs *config.CommandLineArguments) {
-	updateManager := selfupdate.New(cliArgs.AgentDir)
+	updateManager := selfupdate.New(cliArgs.AgentDir, selfupdate.NamesFor(cliArgs.BinaryName))
 	if updateManager.OnServiceStart(release.GetVersion()).RollbackPerformed {
 		exitForRestart("rolled back a failed agent update")
 	}

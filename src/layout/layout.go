@@ -13,8 +13,15 @@
 // legacy unit would find it empty and remove every app container as an orphan.
 //
 // Off Linux the same split exists below the home directory ($HOME/reagent
-// before, $HOME/ironflock/device-agent now). Windows keeps its legacy paths
-// until its own migration; its service passes every path explicitly anyway.
+// before, $HOME/ironflock/device-agent now).
+//
+// On Windows the layout follows the name of the running executable
+// (DetectWindows): a 1.3.x service install runs %ProgramData%\IronFlock\Reagent\
+// reagent.exe and updates itself in place, so the first 1.4.0 on such a device
+// runs as reagent.exe and must keep the legacy file names (reagent-prev.exe,
+// reagent-v<v>.exe) for its own updates and rollbacks until the Windows
+// migration (package migrate/winmigrate) renames it. The service passes every
+// path explicitly, so the directory defaults here matter only for console runs.
 package layout
 
 import (
@@ -39,6 +46,10 @@ const (
 	// It stays as it is: an OS update or the image's own boot scripts would
 	// bring the old units back.
 	LegacyImage Kind = "legacy-image"
+	// LegacyConsole is a reagent.exe on Windows that no service supervises
+	// (a console run, FlockFlasher's test device). It cannot move by itself:
+	// the Windows migration needs the legacy service to replace.
+	LegacyConsole Kind = "legacy-console"
 )
 
 // Paths are the defaults of one layout. Flags override every field.
@@ -139,30 +150,56 @@ func IsIronflockInitInstall(root string) bool {
 	return filepath.Clean(strings.TrimPrefix(target, root)) == LegacyUnitFile
 }
 
-// DetectHome returns the layout below a home directory, for the agent off
-// Linux: $HOME/reagent when that exists (installs before 1.3.0), else
-// $HOME/ironflock/device-agent. On Windows it stays $HOME/reagent until the
-// Windows migration.
-func DetectHome(home string, goos string) Paths {
-	legacyDir := filepath.Join(home, "reagent")
-	if goos == "windows" || isDir(legacyDir) {
+// DetectHome returns the layout below a home directory, for the agent on
+// macOS: $HOME/reagent when that exists (installs before 1.3.0), else
+// $HOME/ironflock/device-agent.
+func DetectHome(home string) Paths {
+	if isDir(filepath.Join(home, "reagent")) {
+		return homePaths(home, Legacy)
+	}
+	return homePaths(home, Current)
+}
+
+// LegacyExeName is the executable of a Windows install before 1.4.0; every
+// other name is the current layout.
+const LegacyExeName = "reagent.exe"
+
+// DetectWindows returns the Windows layout, decided from the name of the
+// running executable (exeName, the base name): reagent.exe is the legacy
+// layout, anything else the current one. service says whether the service
+// control manager started the process; a legacy executable without one is
+// LegacyConsole. The directories are the console defaults below home; the
+// service passes every path explicitly.
+func DetectWindows(home string, exeName string, service bool) Paths {
+	if !strings.EqualFold(exeName, LegacyExeName) {
+		return homePaths(home, Current)
+	}
+	if service {
+		return homePaths(home, Legacy)
+	}
+	return homePaths(home, LegacyConsole)
+}
+
+func homePaths(home string, kind Kind) Paths {
+	if kind == Current {
+		dir := filepath.Join(home, "ironflock", "device-agent")
 		return Paths{
-			Kind:       Legacy,
-			AgentDir:   legacyDir,
-			Database:   filepath.Join(legacyDir, "reagent.db"),
-			LogFile:    filepath.Join(legacyDir, "reagent.log"),
-			FrpcLog:    filepath.Join(legacyDir, "frpc.log"),
-			BinaryName: legacyBinaryName,
+			Kind:       Current,
+			AgentDir:   dir,
+			Database:   filepath.Join(dir, "device-agent.db"),
+			LogFile:    filepath.Join(dir, "device-agent.log"),
+			FrpcLog:    filepath.Join(dir, "frpc.log"),
+			BinaryName: binaryName,
 		}
 	}
-	dir := filepath.Join(home, "ironflock", "device-agent")
+	legacyDir := filepath.Join(home, "reagent")
 	return Paths{
-		Kind:       Current,
-		AgentDir:   dir,
-		Database:   filepath.Join(dir, "device-agent.db"),
-		LogFile:    filepath.Join(dir, "device-agent.log"),
-		FrpcLog:    filepath.Join(dir, "frpc.log"),
-		BinaryName: binaryName,
+		Kind:       kind,
+		AgentDir:   legacyDir,
+		Database:   filepath.Join(legacyDir, "reagent.db"),
+		LogFile:    filepath.Join(legacyDir, "reagent.log"),
+		FrpcLog:    filepath.Join(legacyDir, "frpc.log"),
+		BinaryName: legacyBinaryName,
 	}
 }
 

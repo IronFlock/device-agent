@@ -927,7 +927,7 @@ func (system *System) updateAgentIfRequired(progressCallback func(filesystem.Dow
 
 	// A version that already failed its probation here stays blocked until a
 	// newer one appears; downloading it again would only cost bandwidth.
-	if lifecycle.Supervised() && selfupdate.New(system.config.CommandLineArguments.AgentDir).IsVersionBlocked(latestVersion) {
+	if lifecycle.Supervised() && selfupdate.New(system.config.CommandLineArguments.AgentDir, selfupdate.NamesFor(system.config.CommandLineArguments.BinaryName)).IsVersionBlocked(latestVersion) {
 		return UpdateResult{
 			CurrentVersion: currentVersion,
 			LatestVersion:  latestVersion,
