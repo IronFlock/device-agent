@@ -7,16 +7,16 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"reagent/codesign"
 	"reagent/config"
 	"reagent/filesystem"
+	"reagent/migratestate"
+	"reagent/winservice"
 	"strings"
 	"time"
 
 	"golang.org/x/sys/windows"
-	"golang.org/x/sys/windows/registry"
 	"golang.org/x/sys/windows/svc"
 	"golang.org/x/sys/windows/svc/eventlog"
 	"golang.org/x/sys/windows/svc/mgr"
@@ -37,7 +37,7 @@ func installTrustAnchors(agentDir string) {
 			continue
 		}
 		for _, store := range []string{"Root", "TrustedPublisher"} {
-			if err := runCommand("certutil", certImportArgs(store, certPath)...); err != nil {
+			if err := winservice.RunCommand("certutil", certImportArgs(store, certPath)...); err != nil {
 				fmt.Fprintf(os.Stderr, "warning: could not import %q into %s: %v\n", root.FileName, store, err)
 			}
 		}
@@ -50,7 +50,7 @@ func installTrustAnchors(agentDir string) {
 func removeTrustAnchors(agentDir string) {
 	for _, root := range codesign.EmbeddedRoots() {
 		for _, store := range []string{"Root", "TrustedPublisher"} {
-			if err := runCommand("certutil", certDeleteArgs(store, root.CommonName)...); err != nil {
+			if err := winservice.RunCommand("certutil", certDeleteArgs(store, root.CommonName)...); err != nil {
 				fmt.Fprintf(os.Stderr, "warning: could not remove %q from %s: %v\n", root.CommonName, store, err)
 			}
 		}
@@ -58,17 +58,11 @@ func removeTrustAnchors(agentDir string) {
 	}
 }
 
-// Language-neutral SIDs (localized group names like "Administratoren" would
-// break icacls on non-English Windows).
-const (
-	sidSystem         = "*S-1-5-18"
-	sidAdministrators = "*S-1-5-32-544"
-	sidUsers          = "*S-1-5-32-545"
-)
+const serviceUsage = "usage: device-agent.exe service <install|uninstall|start|stop|status>"
 
 func runServiceCommand(args []string) int {
 	if len(args) == 0 {
-		fmt.Fprintln(os.Stderr, "usage: reagent service <install|uninstall|start|stop|status>")
+		fmt.Fprintln(os.Stderr, serviceUsage)
 		return 2
 	}
 
@@ -79,13 +73,13 @@ func runServiceCommand(args []string) int {
 	case "uninstall":
 		err = serviceUninstall()
 	case "start":
-		err = serviceControl(func(s *mgr.Service) error { return s.Start() })
+		err = serviceControl(func(name string, s *mgr.Service) error { return s.Start() })
 	case "stop":
 		err = serviceStop()
 	case "status":
 		err = serviceStatus()
 	default:
-		fmt.Fprintf(os.Stderr, "unknown service command %q\nusage: reagent service <install|uninstall|start|stop|status>\n", args[0])
+		fmt.Fprintf(os.Stderr, "unknown service command %q\n%s\n", args[0], serviceUsage)
 		return 2
 	}
 
@@ -103,6 +97,16 @@ func requireElevation() error {
 	return nil
 }
 
+// refuseDuringMigration keeps `service stop` and `service uninstall` from
+// pulling the service out from under the layout migration, which stops,
+// renames and starts services itself and would roll back.
+func refuseDuringMigration(verb string) error {
+	if migratestate.InProgress() {
+		return fmt.Errorf("the move to the %s service is in progress; `service %s` would interrupt it (see `device-agent.exe migrate-layout status`)", winservice.ServiceName, verb)
+	}
+	return nil
+}
+
 func serviceInstall(args []string) error {
 	err := requireElevation()
 	if err != nil {
@@ -114,7 +118,26 @@ func serviceInstall(args []string) error {
 		return err
 	}
 
-	// Data from a previous manual installation must not be silently orphaned:
+	m, err := mgr.Connect()
+	if err != nil {
+		return fmt.Errorf("failed to connect to the service manager: %w", err)
+	}
+	defer func() { _ = m.Disconnect() }()
+
+	// A service from before 1.4.0 moves to the new name by itself once the
+	// agent runs 1.4.0 (package winmigrate); a second service next to it
+	// would run the device's apps twice.
+	if legacy, err := m.OpenService(winservice.LegacyServiceName); err == nil {
+		_ = legacy.Close()
+		return fmt.Errorf("the %q service from before agent 1.4.0 is installed: it moves to %q by itself once agent 1.4.0 runs; for a manual reinstall run 'device-agent.exe service uninstall' first",
+			winservice.LegacyServiceName, winservice.ServiceName)
+	}
+	if existing, err := m.OpenService(winservice.ServiceName); err == nil {
+		_ = existing.Close()
+		return fmt.Errorf("service %q is already installed — run 'device-agent.exe service uninstall' first", winservice.ServiceName)
+	}
+
+	// Data from a previous installation must not be silently orphaned:
 	// force an explicit -agentDir decision when any is found.
 	if !opts.AgentDirSet {
 		existingDirs := findExistingAgentDirs()
@@ -128,6 +151,27 @@ func serviceInstall(args []string) error {
 		return fmt.Errorf("cannot read the .flock config file: %w", err)
 	}
 
+	// %ProgramData%\IronFlock first, before anything is created below it: it
+	// inherits create rights for every user from %ProgramData%, and a folder
+	// there that someone else made is not ours to fill with the device
+	// secret and binaries the service executes.
+	root := winservice.Root(os.Getenv("ProgramData"))
+	if err := os.MkdirAll(root, 0o755); err != nil { //nolint:gosec // G703: %ProgramData%\IronFlock, the installer's own layout
+		return fmt.Errorf("failed to create %s: %w", root, err)
+	}
+	if err := winservice.HardenRoot(root); err != nil {
+		return fmt.Errorf("failed to restrict permissions on %s: %w", root, err)
+	}
+	if _, err := os.Stat(opts.AgentDir); err == nil {
+		owned, err := winservice.OwnedByAdministrators(opts.AgentDir)
+		if err != nil {
+			return fmt.Errorf("cannot read the owner of %s: %w", opts.AgentDir, err)
+		}
+		if !owned {
+			return fmt.Errorf("%s exists but is not owned by SYSTEM or Administrators; remove it (or choose another -agentDir) and run the install again", opts.AgentDir)
+		}
+	}
+
 	err = filesystem.InitDirectories(installCliArgs(opts))
 	if err != nil {
 		return fmt.Errorf("failed to create agent directories: %w", err)
@@ -138,18 +182,32 @@ func serviceInstall(args []string) error {
 	// the device secret — regular users get no access at all. The apps dir
 	// gets an explicit modify grant back: Docker Desktop bind mounts access
 	// app /data in the interactive user's context.
-	err = runCommand("icacls", opts.AgentDir, "/inheritance:r",
-		"/grant", sidSystem+":(OI)(CI)F",
-		"/grant", sidAdministrators+":(OI)(CI)F")
+	err = winservice.RunCommand("icacls", opts.AgentDir, "/inheritance:r",
+		"/grant", winservice.SidSystem+":(OI)(CI)F",
+		"/grant", winservice.SidAdministrators+":(OI)(CI)F")
 	if err != nil {
 		return fmt.Errorf("failed to restrict permissions on %s: %w", opts.AgentDir, err)
 	}
-	err = runCommand("icacls", opts.AppsDir, "/grant", sidUsers+":(OI)(CI)M")
+	err = winservice.RunCommand("icacls", opts.AppsDir, "/grant", winservice.SidUsers+":(OI)(CI)M")
 	if err != nil {
 		return fmt.Errorf("failed to grant app-data permissions on %s: %w", opts.AppsDir, err)
 	}
 
-	installedExe := filepath.Join(opts.AgentDir, "reagent.exe")
+	// A folder from before 1.4.0 (-agentDir pointing at the old service
+	// folder, or a console agent's): the database keeps its data under the
+	// current name, otherwise the service would open an empty one and treat
+	// every app container as an orphan.
+	for _, rename := range legacyDatabaseRenames(func(name string) bool {
+		_, err := os.Stat(filepath.Join(opts.AgentDir, name)) //nolint:gosec // G703: the installer's own -agentDir and fixed names
+		return err == nil
+	}) {
+		if err := os.Rename(filepath.Join(opts.AgentDir, rename[0]), filepath.Join(opts.AgentDir, rename[1])); err != nil {
+			return fmt.Errorf("failed to rename the database %s: %w", rename[0], err)
+		}
+		fmt.Printf("Renamed %s to %s\n", rename[0], rename[1])
+	}
+
+	installedExe := filepath.Join(opts.AgentDir, winservice.ExeName)
 	currentExe, err := os.Executable()
 	if err != nil {
 		return err
@@ -159,79 +217,16 @@ func serviceInstall(args []string) error {
 		return fmt.Errorf("failed to install the agent binary: %w", err)
 	}
 
-	installedConfig := filepath.Join(opts.AgentDir, serviceConfigName)
+	installedConfig := filepath.Join(opts.AgentDir, winservice.ConfigName)
 	err = copyFileIfDifferent(opts.ConfigPath, installedConfig)
 	if err != nil {
 		return fmt.Errorf("failed to install the .flock config: %w", err)
 	}
 
-	repairCmd := filepath.Join(opts.AgentDir, "repair.cmd")
-	err = os.WriteFile(repairCmd, []byte(repairCmdContent(opts.AgentDir)), 0644) //nolint:gosec // G306: public CA certificate / repair script / Docker engine config, no secrets
+	repairCmd := filepath.Join(opts.AgentDir, winservice.RepairName)
+	err = os.WriteFile(repairCmd, []byte(winservice.RepairCmd(opts.AgentDir)), 0644) //nolint:gosec // G306: public CA certificate / repair script / Docker engine config, no secrets
 	if err != nil {
 		return fmt.Errorf("failed to write repair.cmd: %w", err)
-	}
-
-	m, err := mgr.Connect()
-	if err != nil {
-		return fmt.Errorf("failed to connect to the service manager: %w", err)
-	}
-	defer func() { _ = m.Disconnect() }()
-
-	existing, err := m.OpenService(serviceName)
-	if err == nil {
-		_ = existing.Close()
-		return fmt.Errorf("service %q is already installed — run 'reagent service uninstall' first", serviceName)
-	}
-
-	service, err := m.CreateService(serviceName, installedExe, mgr.Config{
-		DisplayName:      serviceDisplayName,
-		Description:      serviceDescription,
-		StartType:        mgr.StartAutomatic,
-		DelayedAutoStart: true,
-		ErrorControl:     mgr.ErrorNormal,
-	}, serviceBinaryArgs(opts)...)
-	if err != nil {
-		return fmt.Errorf("failed to create the service: %w", err)
-	}
-	defer func() { _ = service.Close() }()
-
-	// From here on the service exists and can run. The remaining steps only harden it, so a
-	// failure is a warning: leaving a freshly registered device offline because a resilience
-	// nicety could not be configured is the worse outcome.
-
-	// Restart on every failure, never give up: the last action repeats when
-	// the list is exhausted, so the 120s delay throttles a crash loop while
-	// deliberate exit-for-restart (updates, remote restart) recovers in 5s.
-	err = service.SetRecoveryActions([]mgr.RecoveryAction{
-		{Type: mgr.ServiceRestart, Delay: 5 * time.Second},
-		{Type: mgr.ServiceRestart, Delay: 30 * time.Second},
-		{Type: mgr.ServiceRestart, Delay: 120 * time.Second},
-	}, 86400)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "warning: could not set service recovery actions (the service will not auto-restart after a crash): %v\n", err)
-	}
-	// Also fire recovery when the process reports STOPPED with a non-zero
-	// exit code (belt and braces next to the crash-style exits).
-	err = service.SetRecoveryActionsOnNonCrashFailures(true)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "warning: could not enable recovery on non-crash failures: %v\n", err)
-	}
-
-	err = eventlog.InstallAsEventCreate(serviceName, eventlog.Error|eventlog.Warning|eventlog.Info)
-	if err != nil && !strings.Contains(err.Error(), "registry key already exists") {
-		fmt.Fprintf(os.Stderr, "warning: could not register the event log source: %v\n", err)
-	}
-
-	// Boot-time repair task: SCM recovery cannot fix a service whose binary
-	// is missing (start failures are not service failures), the scheduled
-	// task can.
-	err = runCommand("schtasks", "/Create", "/F",
-		"/TN", repairTaskName,
-		"/SC", "ONSTART",
-		"/RU", "SYSTEM",
-		"/TR", "\""+repairCmd+"\"")
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "warning: could not register the repair scheduled task (an interrupted self-update will need a manual repair): %v\n", err)
 	}
 
 	// Proxy settings come from proxy.env when the device already has one, so a
@@ -242,17 +237,48 @@ func serviceInstall(args []string) error {
 	if err != nil {
 		return err
 	}
+	var env []string
 	if proxyCfg.configured() {
-		err = setServiceProxy(proxyCfg)
-		if err != nil {
-			return fmt.Errorf("failed to set the service proxy environment: %w", err)
-		}
+		env = proxyCfg.environmentEntries()
+	}
+
+	// The same helper the layout migration registers the service with: open
+	// or create, then every setting (ImagePath, start type, recovery, the
+	// environment).
+	service, err := winservice.CreateOrUpdateService(m, serviceSpec(opts, env))
+	if err != nil {
+		return fmt.Errorf("failed to create the service: %w", err)
+	}
+	defer func() { _ = service.Close() }()
+
+	// From here on the service exists and can run. The remaining steps only harden it, so a
+	// failure is a warning: leaving a freshly registered device offline because a resilience
+	// nicety could not be configured is the worse outcome.
+
+	if proxyCfg.configured() {
 		if seeded {
 			fmt.Printf("Proxy configured, and written to %s — edit that file to change it.\n", proxyEnvPath)
 		} else {
 			fmt.Printf("Proxy configured from %s\n", proxyEnvPath)
 		}
 		fmt.Printf("Reached directly (NO_PROXY): %s\n", proxyCfg.NoProxy)
+	}
+
+	err = eventlog.InstallAsEventCreate(winservice.ServiceName, eventlog.Error|eventlog.Warning|eventlog.Info)
+	if err != nil && !strings.Contains(err.Error(), "registry key already exists") {
+		fmt.Fprintf(os.Stderr, "warning: could not register the event log source: %v\n", err)
+	}
+
+	// Boot-time repair task: SCM recovery cannot fix a service whose binary
+	// is missing (start failures are not service failures), the scheduled
+	// task can.
+	err = winservice.RunCommand("schtasks", "/Create", "/F",
+		"/TN", winservice.RepairTaskName,
+		"/SC", "ONSTART",
+		"/RU", "SYSTEM",
+		"/TR", "\""+repairCmd+"\"")
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "warning: could not register the repair scheduled task (an interrupted self-update will need a manual repair): %v\n", err)
 	}
 
 	// Docker must trust the appliance's plain-HTTP registry or every app
@@ -281,15 +307,15 @@ func serviceInstall(args []string) error {
 	// Exclude frpc.exe from Defender (frp is flagged PUA). Best-effort;
 	// Tamper Protection / managed policy may ignore it.
 	frpcPath := filepath.Join(opts.AgentDir, "frpc.exe")
-	err = runCommand("powershell", "-NonInteractive", "-Command", defenderAddExclusionCmd(frpcPath))
+	err = winservice.RunCommand("powershell", "-NonInteractive", "-Command", defenderAddExclusionCmd(frpcPath))
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "warning: could not add the Defender exclusion for frpc (tunnels may be quarantined on managed devices): %v\n", err)
 	}
 
-	fmt.Printf("Installed service %q (agent dir: %s)\n", serviceName, opts.AgentDir)
+	fmt.Printf("Installed service %q (agent dir: %s)\n", winservice.ServiceName, opts.AgentDir)
 
 	if !opts.StartNow {
-		fmt.Println("Not started (-noStart). Start it with: reagent service start")
+		fmt.Println("Not started (-noStart). Start it with: device-agent.exe service start")
 		return nil
 	}
 
@@ -303,7 +329,7 @@ func serviceInstall(args []string) error {
 		// fatal — but say so plainly and point at the two places that explain why.
 		fmt.Fprintf(os.Stderr, "warning: %v\n", err)
 		fmt.Fprintf(os.Stderr, "the service is installed and will retry at boot; check %s and the Windows event log (source %q)\n",
-			filepath.Join(opts.AgentDir, "reagent.log"), serviceName)
+			filepath.Join(opts.AgentDir, "device-agent.log"), winservice.ServiceName)
 		return nil
 	}
 	fmt.Println("Service started.")
@@ -335,9 +361,34 @@ func waitForRunning(service *mgr.Service, timeout time.Duration) error {
 	}
 }
 
+// openInstalledService opens the agent service: the current name first, then
+// the one from before 1.4.0 (not moved yet).
+func openInstalledService(m *mgr.Mgr) (string, *mgr.Service, error) {
+	for _, name := range []string{winservice.ServiceName, winservice.LegacyServiceName} {
+		service, err := m.OpenService(name)
+		if err == nil {
+			return name, service, nil
+		}
+	}
+	return "", nil, fmt.Errorf("service %q is not installed", winservice.ServiceName)
+}
+
+// agentDirFromImagePath extracts the -agentDir the installer baked into the
+// service's ImagePath; "" when not found.
+func agentDirFromImagePath(imagePath string) string {
+	fields, err := windows.DecomposeCommandLine(imagePath)
+	if err != nil {
+		return ""
+	}
+	return agentDirFromArgs(fields)
+}
+
 func serviceUninstall() error {
 	err := requireElevation()
 	if err != nil {
+		return err
+	}
+	if err := refuseDuringMigration("uninstall"); err != nil {
 		return err
 	}
 
@@ -347,9 +398,9 @@ func serviceUninstall() error {
 	}
 	defer func() { _ = m.Disconnect() }()
 
-	service, err := m.OpenService(serviceName)
+	name, service, err := openInstalledService(m)
 	if err != nil {
-		return fmt.Errorf("service %q is not installed", serviceName)
+		return err
 	}
 	defer func() { _ = service.Close() }()
 
@@ -377,12 +428,12 @@ func serviceUninstall() error {
 		return fmt.Errorf("failed to delete the service: %w", err)
 	}
 
-	err = eventlog.Remove(serviceName)
+	err = eventlog.Remove(name)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "warning: could not remove the event log source: %v\n", err)
 	}
 
-	err = runCommand("schtasks", "/Delete", "/F", "/TN", repairTaskName)
+	err = winservice.RunCommand("schtasks", "/Delete", "/F", "/TN", winservice.RepairTaskName)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "warning: could not remove the repair scheduled task: %v\n", err)
 	}
@@ -390,18 +441,21 @@ func serviceUninstall() error {
 	// Reverse the install-time trust + AV side effects (symmetric uninstall).
 	if agentDir != "" {
 		frpcPath := filepath.Join(agentDir, "frpc.exe")
-		if rmErr := runCommand("powershell", "-NonInteractive", "-Command", defenderRemoveExclusionCmd(frpcPath)); rmErr != nil {
+		if rmErr := winservice.RunCommand("powershell", "-NonInteractive", "-Command", defenderRemoveExclusionCmd(frpcPath)); rmErr != nil {
 			fmt.Fprintf(os.Stderr, "warning: could not remove the Defender exclusion: %v\n", rmErr)
 		}
 		removeTrustAnchors(agentDir)
 	}
 
-	fmt.Printf("Uninstalled service %q. The agent directory and app data were kept.\n", serviceName)
+	fmt.Printf("Uninstalled service %q. The agent directory and app data were kept.\n", name)
 	return nil
 }
 
 func serviceStop() error {
-	return serviceControl(func(s *mgr.Service) error {
+	if err := refuseDuringMigration("stop"); err != nil {
+		return err
+	}
+	return serviceControl(func(name string, s *mgr.Service) error {
 		status, err := s.Control(svc.Stop)
 		if err != nil {
 			return err
@@ -421,7 +475,7 @@ func serviceStop() error {
 }
 
 func serviceStatus() error {
-	return serviceControl(func(s *mgr.Service) error {
+	return serviceControl(func(name string, s *mgr.Service) error {
 		status, err := s.Query()
 		if err != nil {
 			return err
@@ -436,16 +490,23 @@ func serviceStatus() error {
 			svc.PausePending:    "pause pending",
 			svc.Paused:          "paused",
 		}
-		name, ok := stateNames[status.State]
+		state, ok := stateNames[status.State]
 		if !ok {
-			name = fmt.Sprintf("unknown (%d)", status.State)
+			state = fmt.Sprintf("unknown (%d)", status.State)
 		}
-		fmt.Println(name)
+		if name == winservice.LegacyServiceName {
+			fmt.Printf("%s (service from before agent 1.4.0; moves to %s automatically)\n", state, winservice.ServiceName)
+		} else {
+			fmt.Println(state)
+		}
+		if migratestate.InProgress() {
+			fmt.Printf("the move to the %s service is in progress (device-agent.exe migrate-layout status)\n", winservice.ServiceName)
+		}
 		return nil
 	})
 }
 
-func serviceControl(action func(*mgr.Service) error) error {
+func serviceControl(action func(name string, s *mgr.Service) error) error {
 	err := requireElevation()
 	if err != nil {
 		return err
@@ -457,33 +518,39 @@ func serviceControl(action func(*mgr.Service) error) error {
 	}
 	defer func() { _ = m.Disconnect() }()
 
-	service, err := m.OpenService(serviceName)
+	name, service, err := openInstalledService(m)
 	if err != nil {
-		return fmt.Errorf("service %q is not installed", serviceName)
+		return err
 	}
 	defer func() { _ = service.Close() }()
 
-	return action(service)
+	return action(name, service)
 }
 
-// findExistingAgentDirs locates data from previous manual (console)
-// installations. The installer runs elevated, so %USERPROFILE% would be the
-// admin's profile — scan every user profile instead. FlockFlasher's
-// throwaway test-device dir (~\.Reflasher\agent) is deliberately not matched.
+// findExistingAgentDirs locates data from previous installations: console
+// agents below every user profile (the installer runs elevated, so
+// %USERPROFILE% would be the admin's profile) and the service folder from
+// before 1.4.0 (existingAgentDirCandidates).
 func findExistingAgentDirs() []string {
 	systemDrive := os.Getenv("SystemDrive")
 	if systemDrive == "" {
 		systemDrive = "C:"
 	}
 
-	matches, err := filepath.Glob(filepath.Join(systemDrive+`\`, "Users", "*", "reagent", "reagent.db"))
-	if err != nil {
-		return nil
-	}
-
-	dirs := make([]string, 0, len(matches))
-	for _, match := range matches {
-		dirs = append(dirs, filepath.Dir(match))
+	var dirs []string
+	seen := map[string]bool{}
+	for _, pattern := range existingAgentDirCandidates(systemDrive, os.Getenv("ProgramData")) {
+		matches, err := filepath.Glob(pattern)
+		if err != nil {
+			continue
+		}
+		for _, match := range matches {
+			dir := filepath.Dir(match)
+			if !seen[strings.ToLower(dir)] {
+				seen[strings.ToLower(dir)] = true
+				dirs = append(dirs, dir)
+			}
+		}
 	}
 	return dirs
 }
@@ -615,32 +682,6 @@ func ensureDockerCredentialStore(flockPath string) error {
 		return err
 	}
 	return os.WriteFile(configPath, merged, 0600) //nolint:gosec // G703: paths from the installer layout and Program Files, not remote input
-}
-
-// setServiceProxy writes the proxy into the service's Environment registry
-// value (REG_MULTI_SZ). A LocalSystem service only inherits machine-wide
-// environment, and Go does not read the WinHTTP/IE proxy settings.
-//
-// All three entries are written together because the value is a single
-// REG_MULTI_SZ. This key is NOT the place to keep the operator's settings:
-// `service uninstall` deletes the service and the value with it, so the
-// durable copy lives in proxy.env and this only mirrors it.
-func setServiceProxy(cfg proxyConfig) error {
-	key, err := registry.OpenKey(registry.LOCAL_MACHINE, `SYSTEM\CurrentControlSet\Services\`+serviceName, registry.SET_VALUE)
-	if err != nil {
-		return err
-	}
-	defer func() { _ = key.Close() }()
-
-	return key.SetStringsValue("Environment", cfg.environmentEntries())
-}
-
-func runCommand(name string, args ...string) error {
-	output, err := exec.Command(name, args...).CombinedOutput() //nolint:gosec // G204: fixed Windows service/registry tools chosen by the installer
-	if err != nil {
-		return fmt.Errorf("%s %s: %v: %s", name, strings.Join(args, " "), err, strings.TrimSpace(string(output)))
-	}
-	return nil
 }
 
 func copyFileIfDifferent(src string, dst string) error {

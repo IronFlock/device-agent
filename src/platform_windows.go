@@ -10,27 +10,49 @@ import (
 	"golang.org/x/sys/windows"
 )
 
-// singleInstanceMutex is held for the process lifetime; never closed.
-var singleInstanceMutex windows.Handle //nolint:unused // write-only on purpose: documents that the handle is held, never closed
+// singleInstanceMutexes are held for the process lifetime; never closed.
+var singleInstanceMutexes []windows.Handle //nolint:unused // write-only on purpose: documents that the handles are held, never closed
+
+// singleInstanceMutexNames: the current name, and the one agents before
+// 1.4.0 take. Holding both keeps an old and a new agent from running side by
+// side while a device moves between them (the Linux locks do the same,
+// platform_other.go), and keeps FlockFlasher's "Test Device" console agent
+// refused by a service of either name.
+var singleInstanceMutexNames = []string{`Global\ironflock-device-agent`, `Global\ironflock-reagent`}
 
 // errAgentAlreadyRunning is the operator-facing message shown when another
 // agent already holds the machine-wide lock — most often the installed
 // LocalSystem service. This is exactly what blocks FlockFlasher's
 // "Test Device" console run on a machine that already runs the service.
 func errAgentAlreadyRunning() error {
-	return fmt.Errorf("another reagent instance is already running on this machine (if it runs as a service, stop it with: reagent service stop)")
+	return fmt.Errorf("another device agent instance is already running on this machine (if it runs as a service, stop it with: device-agent.exe service stop)")
 }
 
-// acquireSingleInstanceLock refuses a second agent on the machine. The mutex
-// lives in the Global\ namespace so it spans session 0 (the service) and
-// interactive sessions: a leftover console agent and the service would
+// acquireSingleInstanceLock refuses a second agent on the machine. The
+// mutexes live in the Global\ namespace so they span session 0 (the service)
+// and interactive sessions: a leftover console agent and the service would
 // otherwise treat each other's containers as orphans and delete them
 // (apps.CleanupOrphanedContainers). This deliberately blocks FlockFlasher's
 // "Test Device" console agent on machines that run the service — intended.
 func acquireSingleInstanceLock() error {
-	name, err := windows.UTF16PtrFromString(`Global\ironflock-reagent`)
+	for _, name := range singleInstanceMutexNames {
+		handle, err := acquireMutex(name)
+		if err != nil {
+			for _, held := range singleInstanceMutexes {
+				_ = windows.CloseHandle(held)
+			}
+			singleInstanceMutexes = nil
+			return err
+		}
+		singleInstanceMutexes = append(singleInstanceMutexes, handle)
+	}
+	return nil
+}
+
+func acquireMutex(mutexName string) (windows.Handle, error) {
+	name, err := windows.UTF16PtrFromString(mutexName)
 	if err != nil {
-		return err
+		return 0, err
 	}
 
 	// The x/sys wrapper reports the create outcome in err even when it also
@@ -38,15 +60,14 @@ func acquireSingleInstanceLock() error {
 	handle, err := windows.CreateMutex(nil, false, name)
 	switch err {
 	case nil:
-		singleInstanceMutex = handle
-		return nil
+		return handle, nil
 
 	case windows.ERROR_ALREADY_EXISTS:
 		// The mutex exists and we could open it — another instance owns it.
 		if handle != 0 {
 			_ = windows.CloseHandle(handle)
 		}
-		return errAgentAlreadyRunning()
+		return 0, errAgentAlreadyRunning()
 
 	case windows.ERROR_ACCESS_DENIED:
 		// CreateMutex denies access in two situations: (a) the mutex already
@@ -64,12 +85,12 @@ func acquireSingleInstanceLock() error {
 			if probe != 0 {
 				_ = windows.CloseHandle(probe)
 			}
-			return errAgentAlreadyRunning()
+			return 0, errAgentAlreadyRunning()
 		}
-		return fmt.Errorf("cannot create the machine-wide agent lock: access denied — run the agent from an elevated (Administrator) context")
+		return 0, fmt.Errorf("cannot create the machine-wide agent lock: access denied — run the agent from an elevated (Administrator) context")
 
 	default:
-		return fmt.Errorf("failed to create single-instance mutex: %w", err)
+		return 0, fmt.Errorf("failed to create single-instance mutex %s: %w", mutexName, err)
 	}
 }
 

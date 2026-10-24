@@ -63,7 +63,7 @@ Then wire it up:
 2. Add repo/org GitHub Actions secrets:
    - `WINDOWS_SIGNING_PFX_B64` = `base64 -w0 leaf.pfx`
    - `WINDOWS_SIGNING_PFX_PASSWORD` = the PFX password.
-3. Ship one release. It signs `reagent.exe` + `frpc.exe`
+3. Ship one release. It signs `device-agent.exe` + `frpc.exe`
    (`scripts/sign-windows.sh`, osslsigncode + free RFC3161 timestamp) and the
    installer imports `root.crt`.
 4. After a full signed release cycle, flip enforcement to fatal (PR-6) so

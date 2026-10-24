@@ -1105,6 +1105,15 @@ func (sm *StateMachine) createContainer(payload common.TransitionPayload, app *c
 			return "", err
 		}
 
+		// A container removed after the agent folder moved gets the volumes
+		// of the one before (recreate_marker.go).
+		sm.carryRecordedVolumes(containerName, hConfig)
+		defer func() {
+			if containerID != "" {
+				sm.markRecreated(containerName)
+			}
+		}()
+
 		createContainerContext, cancel := context.WithTimeout(context.Background(), time.Second*30)
 		defer cancel()
 		containerID, err = sm.Container.CreateContainer(createContainerContext, *cConfig, *hConfig, network.NetworkingConfig{}, containerName)
@@ -1136,6 +1145,9 @@ func (sm *StateMachine) createContainer(payload common.TransitionPayload, app *c
 		}
 	} else {
 		containerID = cont.ID
+		// A container that exists again (created by an earlier start that
+		// was cut before it recorded so) has served the recreate marker too.
+		sm.markRecreated(containerName)
 	}
 
 	return containerID, nil

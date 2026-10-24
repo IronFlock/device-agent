@@ -4,12 +4,21 @@ package system
 
 import (
 	"reagent/lifecycle"
-	"reagent/migrate"
+	"reagent/migratestate"
 	"reagent/safe"
 	"reagent/selfupdate"
 	"time"
 
 	"github.com/rs/zerolog/log"
+)
+
+// migrationInProgress reports whether the layout migration is under way (a
+// test replaces it); activationDelay is how long the update_agent response
+// gets to flush before the restart.
+var (
+	migrationInProgress = migratestate.InProgress
+	activationDelay     = 10 * time.Second
+	activateUpdate      = (*selfupdate.Manager).Activate
 )
 
 // maybeActivateAgentUpdate swaps a freshly downloaded agent version into the
@@ -31,12 +40,12 @@ func (system *System) maybeActivateAgentUpdate(result UpdateResult) {
 	// for a minute; activating an update meanwhile would roll the move back.
 	// The next update (the agent's next start, or one a user starts)
 	// activates it.
-	if migrate.InProgress("") {
+	if migrationInProgress() {
 		log.Info().Msgf("agent v%s downloaded but not activated: the layout migration is still checking this version", result.LatestVersion)
 		return
 	}
 
-	manager := selfupdate.New(system.config.CommandLineArguments.AgentDir)
+	manager := selfupdate.New(system.config.CommandLineArguments.AgentDir, selfupdate.NamesFor(system.config.CommandLineArguments.BinaryName))
 	if reason := manager.ActivationHold(time.Now()); reason != "" {
 		log.Info().Msgf("agent v%s downloaded but not activated yet: %s", result.LatestVersion, reason)
 		return
@@ -50,9 +59,16 @@ func (system *System) maybeActivateAgentUpdate(result UpdateResult) {
 		// Give the update_agent WAMP response and the progress publishes time
 		// to flush before the process restarts (the Linux manager has a
 		// comparable <=15s activation lag).
-		time.Sleep(10 * time.Second)
+		time.Sleep(activationDelay)
 
-		err := manager.Activate(result.LatestVersion, result.CurrentVersion)
+		// Checked again at the moment of the swap: the layout migration may
+		// have started meanwhile (its first step renames these executables).
+		if migrationInProgress() {
+			log.Info().Msgf("agent v%s downloaded but not activated: the layout migration started meanwhile", result.LatestVersion)
+			return
+		}
+
+		err := activateUpdate(manager, result.LatestVersion, result.CurrentVersion)
 		if err != nil {
 			log.Error().Err(err).Msgf("failed to activate agent update v%s", result.LatestVersion)
 			return

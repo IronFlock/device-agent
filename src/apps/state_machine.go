@@ -42,6 +42,10 @@ type StateMachine struct {
 	// outage cannot brick running apps.
 	appCredKey      string
 	appCredKeyMutex sync.RWMutex
+
+	// recreateMu serialises the writers of the recreate marker
+	// (recreate_marker.go): the apps start in parallel.
+	recreateMu sync.Mutex
 }
 
 // SetAppCredKey stores the per-device app-credential key. Safe to call on

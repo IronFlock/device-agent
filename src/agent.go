@@ -463,6 +463,16 @@ func NewAgent(generalConfig *config.Config) (agent *Agent) {
 			}
 		}
 
+		// After the agent folder moved (the Windows layout migration), the
+		// app containers are recreated from the new folder once, before any
+		// of them starts (apps/recreate_marker.go).
+		if err := appManager.RecreateContainersAfterMove(cliArgs.AgentDir); err != nil {
+			log.Error().Stack().Err(err).Msg("could not recreate the app containers after the folder move; trying again at the next start")
+		}
+		// What the migration still owes Docker (restart policies) can be
+		// settled now that it is reachable.
+		afterDockerReady()
+
 		err := stateObserver.CorrectAppStates(false)
 		if err != nil {
 			fail(err, "failed to correct local states")

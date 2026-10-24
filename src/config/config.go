@@ -120,7 +120,18 @@ func GetCliArguments() (*CommandLineArguments, error) {
 		if err != nil {
 			return nil, err
 		}
-		paths = layout.DetectHome(homeDir, runtime.GOOS)
+		if runtime.GOOS == "windows" {
+			// The Windows layout follows the running executable's name, not
+			// the folder: a legacy service that updated itself in place runs
+			// the new version as reagent.exe (see package layout).
+			exe, err := os.Executable()
+			if err != nil {
+				return nil, err
+			}
+			paths = layout.DetectWindows(homeDir, filepath.Base(exe), runningAsService())
+		} else {
+			paths = layout.DetectHome(homeDir)
+		}
 	}
 	defaultAgentDir := paths.AgentDir
 
@@ -153,6 +164,15 @@ func GetCliArguments() (*CommandLineArguments, error) {
 	cfgFile := flag.String("config", "", "ironflock configuration file")
 	flag.Parse()
 
+	// frpc's log lives in the agent dir on Windows (tunnel/frp.go starts frpc
+	// with that path): the dir the flags chose, not the console default below
+	// the home directory, which under the service's LocalSystem account would
+	// create a stray systemprofile\reagent folder.
+	frpcLog := paths.FrpcLog
+	if runtime.GOOS == "windows" {
+		frpcLog = filepath.Join(*agentDir, "frpc.log")
+	}
+
 	cliArgs := CommandLineArguments{
 		AppsDirectory:              *appsDir,
 		AppsBuildDir:               (*appsDir) + "/build",
@@ -169,7 +189,7 @@ func GetCliArguments() (*CommandLineArguments, error) {
 		PrettyLogging:              *prettyLogging,
 		DebugMessaging:             *debugMessaging,
 		LogFileLocation:            *logFile,
-		FrpcLogFileLocation:        paths.FrpcLog,
+		FrpcLogFileLocation:        frpcLog,
 		ConfigFileLocation:         *cfgFile,
 		Layout:                     paths.Kind,
 		BinaryName:                 paths.BinaryName,

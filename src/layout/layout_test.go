@@ -3,11 +3,22 @@ package layout
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+// linuxPathsOnly skips a test of Detect's Linux paths (/opt/..., /var/log/...)
+// on Windows, where filepath spells them with backslashes; Detect runs on
+// Linux only (Windows: DetectWindows).
+func linuxPathsOnly(t *testing.T) {
+	t.Helper()
+	if runtime.GOOS == "windows" {
+		t.Skip("Detect's Linux paths; the Windows layout is DetectWindows")
+	}
+}
 
 // legacyInstall lays down what ironflock-init < 1.4.0 leaves on a device.
 func legacyInstall(t *testing.T, root string) {
@@ -22,6 +33,7 @@ func legacyInstall(t *testing.T, root string) {
 }
 
 func TestFreshMachineGetsTheCurrentLayout(t *testing.T) {
+	linuxPathsOnly(t)
 	paths := Detect(t.TempDir())
 	assert.Equal(t, Current, paths.Kind)
 	assert.Equal(t, "/opt/ironflock/device-agent", paths.AgentDir)
@@ -32,6 +44,7 @@ func TestFreshMachineGetsTheCurrentLayout(t *testing.T) {
 }
 
 func TestIronflockInitLegacyInstallKeepsItsPathsUntilMigrated(t *testing.T) {
+	linuxPathsOnly(t)
 	root := t.TempDir()
 	legacyInstall(t, root)
 
@@ -97,11 +110,45 @@ func TestImageLayoutsStay(t *testing.T) {
 
 func TestHomeLayouts(t *testing.T) {
 	home := t.TempDir()
-	assert.Equal(t, filepath.Join(home, "ironflock", "device-agent"), DetectHome(home, "darwin").AgentDir)
-	assert.Equal(t, filepath.Join(home, "reagent"), DetectHome(home, "windows").AgentDir, "Windows moves with its own migration")
+	assert.Equal(t, filepath.Join(home, "ironflock", "device-agent"), DetectHome(home).AgentDir)
 
 	require.NoError(t, os.MkdirAll(filepath.Join(home, "reagent"), 0o755))
-	legacy := DetectHome(home, "darwin")
+	legacy := DetectHome(home)
 	assert.Equal(t, Legacy, legacy.Kind)
 	assert.Equal(t, filepath.Join(home, "reagent", "reagent.db"), legacy.Database)
+}
+
+// A 1.3.x Windows service updates itself in place, so the first 1.4.0 on such
+// a device runs as reagent.exe: it must keep the legacy names (the service's
+// ImagePath, reagent-prev.exe as its rollback target) until the migration
+// renames it. Anything else is the current layout, whatever the folder.
+func TestWindowsLayoutFollowsTheExeName(t *testing.T) {
+	home := t.TempDir()
+
+	legacy := DetectWindows(home, "reagent.exe", true)
+	assert.Equal(t, Legacy, legacy.Kind)
+	assert.Equal(t, "reagent", legacy.BinaryName)
+	assert.Equal(t, filepath.Join(home, "reagent"), legacy.AgentDir)
+	assert.Equal(t, filepath.Join(home, "reagent", "reagent.db"), legacy.Database)
+	assert.Equal(t, filepath.Join(home, "reagent", "reagent.log"), legacy.LogFile)
+	assert.Equal(t, filepath.Join(home, "reagent", "frpc.log"), legacy.FrpcLog)
+
+	// Windows file names are case-insensitive.
+	assert.Equal(t, Legacy, DetectWindows(home, "Reagent.EXE", true).Kind)
+
+	// No service supervises it (a console run, FlockFlasher's test device):
+	// it keeps the legacy names but can never move by itself.
+	console := DetectWindows(home, "reagent.exe", false)
+	assert.Equal(t, LegacyConsole, console.Kind)
+	assert.Equal(t, "reagent", console.BinaryName)
+
+	for _, exe := range []string{"device-agent.exe", "device-agent-v1.4.0.exe", "agent.exe"} {
+		current := DetectWindows(home, exe, true)
+		assert.Equal(t, Current, current.Kind, exe)
+		assert.Equal(t, "device-agent", current.BinaryName, exe)
+		assert.Equal(t, filepath.Join(home, "ironflock", "device-agent"), current.AgentDir, exe)
+		assert.Equal(t, filepath.Join(current.AgentDir, "device-agent.db"), current.Database, exe)
+		assert.Equal(t, filepath.Join(current.AgentDir, "device-agent.log"), current.LogFile, exe)
+		assert.Equal(t, Current, DetectWindows(home, exe, false).Kind, "a console run of the current layout is Current")
+	}
 }

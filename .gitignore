@@ -18,9 +18,11 @@ target/
 reagent-*
 src/reagent
 reagent.db
-reagent.db
 reagent.db-shm
 reagent.db-wal
+device-agent.db
+device-agent.db-shm
+device-agent.db-wal
 *.reswarm
 # *.flock
 *.tar
