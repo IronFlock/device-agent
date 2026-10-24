@@ -55,20 +55,22 @@ func (system *System) maybeActivateAgentUpdate(result UpdateResult) {
 		return
 	}
 
+	// Taken now, not read by the goroutine: a test swaps them between runs.
+	delay, inProgress, activate := activationDelay, migrationInProgress, activateUpdate
 	safe.Go(func() {
 		// Give the update_agent WAMP response and the progress publishes time
 		// to flush before the process restarts (the Linux manager has a
 		// comparable <=15s activation lag).
-		time.Sleep(activationDelay)
+		time.Sleep(delay)
 
 		// Checked again at the moment of the swap: the layout migration may
 		// have started meanwhile (its first step renames these executables).
-		if migrationInProgress() {
+		if inProgress() {
 			log.Info().Msgf("agent v%s downloaded but not activated: the layout migration started meanwhile", result.LatestVersion)
 			return
 		}
 
-		err := activateUpdate(manager, result.LatestVersion, result.CurrentVersion)
+		err := activate(manager, result.LatestVersion, result.CurrentVersion)
 		if err != nil {
 			log.Error().Err(err).Msgf("failed to activate agent update v%s", result.LatestVersion)
 			return
