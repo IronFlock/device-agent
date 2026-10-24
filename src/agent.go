@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"reagent/api"
 	"reagent/apps"
@@ -154,7 +155,8 @@ func (agent *Agent) OnConnect(reconnect bool) error {
 	// or won't connect, SuperviseStart settles the device into an
 	// unavailable-but-alive state — the agent and app starts are unaffected.
 	if !reconnect {
-		err = agent.System.DownloadFrpIfNotExists()
+		// Before frpc starts: Windows cannot replace a running frpc.exe.
+		err = acquireFrpcWithin(agent.System.DownloadFrpIfNotExists, frpcAcquireWait)
 		if err != nil {
 			log.Error().Stack().Err(err).Msg("failed to acquire frp tunnel client")
 		}
@@ -670,4 +672,25 @@ func NewAgent(generalConfig *config.Config) (agent *Agent) {
 	})
 
 	return agent
+}
+
+// frpcAcquireWait bounds how long the connect handler waits for frpc before
+// starting the tunnel client (a slow link took 1.5 minutes for frpc on
+// Windows).
+var frpcAcquireWait = 5 * time.Minute
+
+// acquireFrpcWithin runs acquire and waits for it at most wait. The update
+// check at start may be downloading frpc already, and acquire then waits for
+// that download; a download that stalls must not keep the tunnel client from
+// starting with the frpc on disk. acquire keeps running after a timeout, and
+// a frpc it puts in place later is used from the next start.
+func acquireFrpcWithin(acquire func() error, wait time.Duration) error {
+	done := make(chan error, 1)
+	safe.Go(func() { done <- acquire() })
+	select {
+	case err := <-done:
+		return err
+	case <-time.After(wait):
+		return fmt.Errorf("frpc not acquired within %s; starting the tunnel client with the frpc on disk", wait)
+	}
 }

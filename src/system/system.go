@@ -626,7 +626,26 @@ func (system *System) compareVersion(currentVersion string, latestVersion string
 	return shouldUpdate, errors, nil
 }
 
+// frpcAcquireMu serializes frpc acquisition across every System. At agent
+// start the update check (checkForUpdateAtStart, with its own System) and the
+// connect handler (OnConnect, which starts frpc right after) ensure frpc in the
+// same second. Unserialized, the second one found the download in progress,
+// gave up, and OnConnect started the old frpc; the download then finished
+// against a running frpc.exe, which Windows refuses to replace ("Access is
+// denied"), so Windows devices never got a new frpc. Serialized, the second
+// caller waits and then finds frpc current.
+var frpcAcquireMu sync.Mutex
+
+// The frpc on disk and how the pinned one gets there (tests replace them).
+var (
+	frpcVersionOnDisk = (*System).GetFrpCurrentVersion
+	acquireFrpc       = (*System).acquireFrpc
+)
+
 func (system *System) DownloadFrpIfNotExists() error {
+	frpcAcquireMu.Lock()
+	defer frpcAcquireMu.Unlock()
+
 	frpcPath := filesystem.GetTunnelBinaryPath(system.config, "frpc")
 
 	// Skip when the on-disk frpc already matches the pinned version.
@@ -635,7 +654,7 @@ func (system *System) DownloadFrpIfNotExists() error {
 		return err
 	}
 	if exists {
-		currentVersion, verErr := system.GetFrpCurrentVersion()
+		currentVersion, verErr := frpcVersionOnDisk(system)
 		if verErr != nil {
 			log.Warn().Err(verErr).Msg("Could not determine frpc version, will re-acquire")
 		} else if currentVersion == embedded.FRP_VERSION {
@@ -646,10 +665,15 @@ func (system *System) DownloadFrpIfNotExists() error {
 		}
 	}
 
+	return acquireFrpc(system, frpcPath)
+}
+
+// acquireFrpc puts the pinned frpc at frpcPath.
+func (system *System) acquireFrpc(frpcPath string) error {
 	// Platforms that embed frpc (Linux/macOS) extract the compiled-in blob.
 	if embedded.IsEmbedded() {
 		log.Info().Msgf("Extracting embedded frpc v%s to %s", embedded.FRP_VERSION, frpcPath)
-		err = embedded.ExtractFrpc(frpcPath)
+		err := embedded.ExtractFrpc(frpcPath)
 		if err != nil {
 			return fmt.Errorf("failed to extract embedded frpc: %w", err)
 		}
@@ -661,7 +685,7 @@ func (system *System) DownloadFrpIfNotExists() error {
 	// binary. It rides the existing re-agent bucket + appliance /dl proxy via
 	// the "re-agent/frpc" sub-path. The download lands at frpcPath exactly.
 	log.Info().Msgf("Downloading frpc v%s to %s", embedded.FRP_VERSION, frpcPath)
-	err = system.downloadFrpc()
+	err := system.downloadFrpc()
 	if err != nil {
 		return fmt.Errorf("failed to download frpc: %w", err)
 	}
