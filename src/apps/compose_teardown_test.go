@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -42,6 +43,9 @@ import (
 // crashes on `stop` with exit code stopExit (0 = every subcommand succeeds),
 // and returns the file the fake appends one argv line per invocation to.
 func teardownHarness(t *testing.T, stopExit int) (*StateMachine, *mocks.Container, *store.AppStore, *fakes.Messenger, string) {
+	if runtime.GOOS == "windows" {
+		t.Skip("the compose CLI stub is a POSIX shell script")
+	}
 	t.Helper()
 
 	sm, mc, st, msg := wiredStateMachine(t)

@@ -1107,14 +1107,15 @@ func (d *device) bootServices(betweenStarts func()) {
 // hostPath is the host folder of a bind source as the fake's containers
 // spell it (lower case and forward slashes stand for an engine's view).
 func (d *device) hostPath(bind string) string {
-	if _, err := os.Stat(bind); err == nil {
-		return bind
-	}
-	// Map back onto the real (case-preserving) root.
-	lower := strings.ToLower(strings.ReplaceAll(d.root, `\`, "/"))
+	// Windows paths are case-insensitive: an engine's lower-case spelling
+	// names the folder the device has (the same on a case-sensitive Linux
+	// test host). Known folders keep the device's own spelling.
 	normalized := strings.ToLower(strings.ReplaceAll(bind, `\`, "/"))
-	if rest, ok := strings.CutPrefix(normalized, lower); ok {
-		return filepath.Join(d.root, filepath.FromSlash(rest))
+	for _, dir := range []string{d.legacyDir, d.newDir(), d.root} {
+		prefix := strings.ToLower(strings.ReplaceAll(dir, `\`, "/"))
+		if rest, ok := strings.CutPrefix(normalized, prefix); ok && (rest == "" || strings.HasPrefix(rest, "/")) {
+			return filepath.Join(dir, filepath.FromSlash(rest))
+		}
 	}
 	return bind
 }
