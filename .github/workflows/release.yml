@@ -6,7 +6,7 @@
 # key is non-exportable in Cloud KMS, and only the `promote` job of a tag run
 # of this workflow may sign with it (scripts/sign-release.sh).
 #
-# On a tag it stages the version (binaries at
+# On the merge of a release pull request it stages the version (binaries at
 # gs://ironflock-downloads/device-agent/<os>/<arch>/<version>/, images pushed)
 # and then PROMOTES it (`promote` job, `just promote-ci`): every binary, the
 # pinned frpc and manifest-v2.json are signed with the Cloud KMS key
@@ -15,19 +15,28 @@
 # it is promoted by hand through OpenBao (`just promote-bridge`). See README
 # "Build, Publish and Release".
 #
-# Trigger: the tag `vX.Y.Z` that `just release-patch` puts on the merged release
-# commit. Checks are not repeated here: main is protected (pull requests whose
-# ci-ok and security / report checks passed), and `verify` only accepts a tag
-# on a commit that is part of main whose version file matches the tag. A manual
-# run (workflow_dispatch) only builds: it never logs in to Google Cloud,
-# publishes or promotes, not even when started on a tag. Only a pushed tag
+# Trigger: the merge of a release pull request (`just release-patch`: version
+# bump, title `release reagent v<version>`) into main. Checks are not repeated
+# here: main is protected (pull requests whose ci-ok and security / report
+# checks passed), and `verify` (the harness's release.sh mode) only releases
+# the squash merge of a release pull request whose title names the version in
+# src/release/version.txt. The tag v<version> comes last, set by the release
+# GitHub App once everything is published and promoted, so a tag always means
+# "released". ci.yml calls this workflow on release pull requests
+# (workflow_call), and a manual run (workflow_dispatch) only builds: neither
+# logs in to Google Cloud, publishes or promotes. Only a release run on main
 # may act as the release identities (workload identity attribute release).
-# Auth: Workload Identity Federation (keyless) — see README one-time setup.
+# A no-release merge starts nothing: `paths` holds only the version file, and
+# when a no-release pull request touches it anyway the jobs are skipped by its
+# merge title. Auth: Workload Identity Federation (keyless) — see README
+# one-time setup.
 name: release
 
 on:
   push:
-    tags: ["v*"]
+    branches: [main]
+    paths: [src/release/version.txt]
+  workflow_call:
   workflow_dispatch:
 
 permissions:
@@ -45,31 +54,45 @@ defaults:
 
 jobs:
   verify:
+    # A no-release merge that touches the version file anyway: no runner.
+    if: github.event_name != 'push' || startsWith(github.event.head_commit.message, 'release ')
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
       contents: read
     outputs:
       targets: ${{ steps.targets.outputs.json }}
+      # release: publish and promote; released: a re-run after the tag
+      # (nothing left to do); dry-run: build only.
+      mode: ${{ steps.mode.outputs.mode }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
           fetch-depth: 0
-      - name: tag matches src/release/version.txt and is on main
-        if: startsWith(github.ref, 'refs/tags/v')
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: IronFlock/workflows
+          ref: v1
+          path: .harness
+          persist-credentials: false
+          sparse-checkout: scripts
+          sparse-checkout-cone-mode: false
+      - name: what this run releases
+        id: mode
         env:
+          VERSION_FILE: src/release/version.txt
+          TAG_PREFIX: v
+          EVENT: ${{ github.event_name }}
+          REF: ${{ github.ref }}
+          REF_TYPE: ${{ github.ref_type }}
           REF_NAME: ${{ github.ref_name }}
+          RELEASE_BRANCH: main
+          COMMIT_TITLE: ${{ github.event.head_commit.message }}
           SHA: ${{ github.sha }}
         run: |
-          want="v$(tr -d '[:space:]' < src/release/version.txt)"
-          if [ "$REF_NAME" != "$want" ]; then
-            echo "::error::tag $REF_NAME does not match version.txt ($want)"; exit 1
-          fi
-          git fetch --no-tags origin refs/heads/main:refs/remotes/origin/main
-          if ! git merge-base --is-ancestor "$SHA" origin/main; then
-            echo "::error::$SHA is not part of main — only commits merged through a pull request are released"; exit 1
-          fi
+          mv .harness "$RUNNER_TEMP/harness"
+          "$RUNNER_TEMP/harness/scripts/release.sh" mode
       # Single source of truth for the build matrix: the repo's `targets` file.
       - id: targets
         run: echo "json=$(jq -R -s -c 'split("\n") | map(select(length > 0))' targets)" >> "$GITHUB_OUTPUT"
@@ -122,8 +145,8 @@ jobs:
         run: just sbom-bin "build/$BIN"
 
       - name: Attest SBOM (sigstore-signed, bound to the binary digest)
-        # Only a pushed v* tag publishes; a manual run (workflow_dispatch) is a dry run.
-        if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+        # Only a release run publishes; a pull request or manual run is a dry run.
+        if: needs.verify.outputs.mode == 'release'
         uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
         with:
           subject-path: build/${{ steps.bin.outputs.name }}
@@ -145,7 +168,7 @@ jobs:
 
   publish:
     name: publish to GCS + push images
-    needs: build
+    needs: [verify, build]
     runs-on: ubuntu-latest
     timeout-minutes: 45
     permissions:
@@ -169,7 +192,7 @@ jobs:
           merge-multiple: true
 
       - name: Authenticate to Google Cloud (Workload Identity Federation)
-        if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+        if: needs.verify.outputs.mode == 'release'
         uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3
         with:
           workload_identity_provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
@@ -201,30 +224,30 @@ jobs:
         run: scripts/sign-windows.sh build/device-agent-windows-amd64 build/frpc-windows-amd64
 
       - name: Publish agent binaries to gs://ironflock-downloads/device-agent
-        # Only a pushed v* tag publishes; a manual run (workflow_dispatch) is a dry run.
-        if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+        # Only a release run publishes; a pull request or manual run is a dry run.
+        if: needs.verify.outputs.mode == 'release'
         run: scripts/publish.sh
 
       - name: Publish frpc to gs://ironflock-downloads/device-agent/frpc
-        if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+        if: needs.verify.outputs.mode == 'release'
         run: scripts/publish-frpc.sh windows amd64 build/frpc-windows-amd64
 
       - name: Configure Docker auth for Artifact Registry
-        if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+        if: needs.verify.outputs.mode == 'release'
         run: gcloud auth configure-docker europe-docker.pkg.dev --quiet
       - uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4.4.0
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
 
       - name: Build + push multi-arch agent images
-        if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+        if: needs.verify.outputs.mode == 'release'
         run: just push-docker-image
 
   promote:
     name: sign (Cloud KMS) + promote
-    needs: publish
-    # Only a pushed v* tag on main gets here (verify). Never a manual run, not
-    # even one started on a tag: that would re-promote an old version.
-    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    needs: [verify, publish]
+    # Only the release run of a merged release pull request gets here. Never a
+    # pull request or a manual run: that would re-promote an old version.
+    if: needs.verify.outputs.mode == 'release'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
@@ -268,8 +291,9 @@ jobs:
         with:
           just-version: "1.59.0"
 
-      # Signing identity: may only sign with the KMS key, and only from a tag
-      # run of this workflow (workload identity attribute release).
+      # Signing identity: may only sign with the KMS key, and only from a
+      # release run of this workflow on main (workload identity attribute
+      # release).
       - name: Authenticate the signer (Cloud KMS only)
         id: signer
         if: steps.bridge.outputs.skip == 'false'
@@ -295,3 +319,21 @@ jobs:
       - name: Sign with Cloud KMS and promote
         if: steps.bridge.outputs.skip == 'false'
         run: just promote-ci
+
+  # The tag once the version is published and promoted (the bridge release is
+  # staged only, and tagged too); only on the merge of a release pull request.
+  # Written with the release GitHub App's token from the `release` environment
+  # (deployments from main only).
+  tag:
+    needs: [verify, publish, promote]
+    if: >-
+      !cancelled() && needs.verify.outputs.mode == 'release' && needs.publish.result == 'success' &&
+      needs.promote.result == 'success'
+    uses: IronFlock/workflows/.github/workflows/release-tag.yml@v1
+    permissions:
+      contents: read
+    # The App key is a secret of the `release` environment; environment
+    # secrets reach a reusable workflow only through `secrets: inherit`.
+    secrets: inherit # zizmor: ignore[secrets-inherit]
+    with:
+      version-file: src/release/version.txt
