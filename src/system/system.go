@@ -78,15 +78,14 @@ func (sys *System) updateBaseURL() string {
 //
 //	<base>/device-agent/manifest-v2.json                     signed channel map (updatesig.Envelope),
 //	                                                         signed in CI with the Cloud KMS key
-//	<base>/device-agent/manifest.json                        the same, frozen at the bridge release
-//	                                                         (last one signed with the OpenBao key)
+//	<base>/device-agent/manifest.json                        the same, signed with the OpenBao key and
+//	                                                         moved only by hand (`just promote-bridge`)
 //	<base>/device-agent/<os>/<arch>/<v>/device-agent[.exe]   (+ .sha256, .sig)
 //	<base>/device-agent/frpc/<os>/<arch>/<v>/frpc[.exe]      Windows only
 //
-// Agents read manifest-v2.json first. manifest.json stays frozen at the bridge
-// release: agents that trust only the OpenBao key (and device-init installs)
-// read it, land on the bridge release, which trusts both keys and reads
-// manifest-v2.json from then on.
+// Agents read manifest-v2.json first. manifest.json is for the agents that
+// trust only the OpenBao key (and older installers): they land on the version
+// it names, which trusts both keys and reads manifest-v2.json from then on.
 //
 // The legacy tree (re-agent/: availableVersions.json, binaries named reagent)
 // is frozen at the version that moves devices to the current layout. An agent

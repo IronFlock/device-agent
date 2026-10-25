@@ -427,14 +427,15 @@ promote: sign-release publish-latest-alias publish-version publish-latestVersion
 
 # What release.yml's promote job runs after the tag's binaries are staged: sign
 # through Cloud KMS (identity agent-signer, KMS_CREDENTIALS) and publish
-# manifest-v2.json. manifest.json stays frozen at the bridge release.
+# manifest-v2.json. manifest.json stays where the last `promote-bridge` put it.
 promote-ci:
     SIGNER=kms MANIFESTS=manifest-v2.json {{just_executable()}} sign-release publish-latest-alias publish-version publish-latestVersions
 
-# ONCE, for the bridge release: the last promotion signed through OpenBao. It
-# freezes manifest.json at this version (read by agents that trust only the
-# OpenBao key, and by device-init) and starts manifest-v2.json, which every
-# later release updates from CI.
+# By hand, through OpenBao: re-sign the version availableVersions.json names
+# and move manifest.json (read by agents that trust only the OpenBao key, by
+# ironflock-init up to 1.4.0 and by appliance mirrors without manifest-v2.json)
+# and manifest-v2.json to it. First for the bridge release 1.3.5; again
+# whenever those readers should catch up (1.3.8).
 promote-bridge:
     SIGNER=openbao MANIFESTS="manifest.json manifest-v2.json" {{just_executable()}} sign-release publish-latest-alias publish-version publish-latestVersions
 
@@ -476,9 +477,10 @@ publish:
 publish-version: sign-release
     gsutil -q -h "Cache-Control:public, max-age=0" cp "src/release/version.txt" gs://ironflock-downloads/device-agent/version.txt
 
-# Every channel map in MANIFESTS (signed; manifest-v2.json read by agents from the bridge
-# release on, manifest.json frozen at it) must match availableVersions.json (unsigned, kept
-# for the flasher and older tooling) before either goes live.
+# Every channel map in MANIFESTS (signed; manifest-v2.json read first by agents from the
+# bridge release on, manifest.json moved only by promote-bridge) must match
+# availableVersions.json (unsigned, kept for the flasher and older tooling) before either
+# goes live.
 publish-latestVersions: sign-release
     #!/usr/bin/env bash
     set -euo pipefail

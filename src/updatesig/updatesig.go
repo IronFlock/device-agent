@@ -69,9 +69,9 @@ import (
 //     after the bridge release, in CI (release.yml, `just promote-ci`); only
 //     device-agent's release runs on a v* tag may use it.
 //   - OpenBao transit agent-update: signed every release up to and including
-//     the bridge release, and the frozen manifest.json. Kept trusted so that
-//     everything it signed keeps verifying; it signs nothing new except in an
-//     emergency (`just promote`).
+//     the bridge release, and signs manifest.json and the version it names
+//     at each `just promote-bridge`. Kept trusted so that everything it
+//     signed keeps verifying; the emergency signer (`just promote`).
 //
 // `just agent-update-pubkeys` prints the OpenBao key's lines; the KMS line comes
 // from `gcloud kms keys versions get-public-key` (see README "Update
