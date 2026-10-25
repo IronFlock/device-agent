@@ -77,6 +77,12 @@ func TestSpawnerSupervisorRecoversFromDaemonOutage(t *testing.T) {
 	spawnerRestartBackoff = time.Millisecond
 	t.Cleanup(func() { spawnerRestartBackoff = oldBackoff })
 
+	// No docker CLI: the reconcile re-probes compose support (`docker
+	// compose`), which then fails at once instead of running the runner's
+	// real CLI — that has taken longer than the waits below on the Windows
+	// runner.
+	t.Setenv("PATH", t.TempDir())
+
 	am, mc, _, _, _, _ := amHarness(t)
 	so := am.StateObserver
 
