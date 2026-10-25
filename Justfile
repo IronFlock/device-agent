@@ -14,14 +14,13 @@ FRP_ARCH := if arch() == "x86_64" { "amd64" } else if arch() == "aarch64" { "arm
 AGENT_IMAGE_NAME := "europe-docker.pkg.dev/record-1283/eu.gcr.io/device-agent"
 AGENT_IMAGE_VERSION := "v" + `cat src/release/version.txt`
 
-# Release contract — see REDeployments/docs/RELEASE.md. Sole project in this
-# repo, so the tag is plain `v<version>` — which is also what release.yml
-# matches (`on: push: tags: ["v*"]`), so the shape is a CI contract here, not
-# just a convention.
+# Release names (see the release section below); the tag is `v<version>`,
+# set by CI once the version is published and promoted.
 VERSION := `tr -d '[:space:]' < src/release/version.txt`
 RELEASE_NAME := "reagent"
+VERSION_FILE := "src/release/version.txt"
+# Every file _write-version changes; the release commit holds exactly these.
 VERSION_FILES := "src/release/version.txt availableVersions.json"
-RELEASE_TAG := "v" + VERSION
 
 default:
     @just --list
@@ -237,177 +236,50 @@ build-all-docker: clean
     docker build --platform linux/amd64 . -t agent-builder
     docker run --name agent_builder -v {{ROOT_DIR}}/build:/app/reagent/build agent-builder
 
-# Used on its own only for a manual release; `just release-patch` and friends
-# call this for you (a manual bump still has to go through a pull request).
-# Formats src with gofmt, then bumps the patch version in src/release/version.txt.
-bump-patch:
-    #!/usr/bin/env bash
-    set -euo pipefail
-    cd {{ROOT_DIR}}
-    gofmt -w src
-    current=$(tr -d '[:space:]' < src/release/version.txt)
-    if [[ ! "$current" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-        echo "src/release/version.txt is not MAJOR.MINOR.PATCH: '$current'" >&2
-        exit 1
-    fi
-    IFS=. read -r major minor patch <<< "$current"
-    next="${major}.${minor}.$((patch + 1))"
-    printf '%s' "$next" > src/release/version.txt
-    jq --arg v "$next" 'map_values($v)' availableVersions.json > availableVersions.json.tmp && mv availableVersions.json.tmp availableVersions.json
-    echo "Bumped $current -> $next (all channels in availableVersions.json set to $next). Open a pull request with it; tag the merged commit to release."
-
-# Used on its own only for a manual release; `just release-patch` and friends
-# call this for you (a manual bump still has to go through a pull request).
-# Bump the minor version in src/release/version.txt (resets patch) and commit it.
-bump-minor:
-    #!/usr/bin/env bash
-    set -euo pipefail
-    cd {{ROOT_DIR}}
-    current=$(tr -d '[:space:]' < src/release/version.txt)
-    if [[ ! "$current" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-        echo "src/release/version.txt is not MAJOR.MINOR.PATCH: '$current'" >&2
-        exit 1
-    fi
-    IFS=. read -r major minor patch <<< "$current"
-    next="${major}.$((minor + 1)).0"
-    printf '%s' "$next" > src/release/version.txt
-    jq --arg v "$next" 'map_values($v)' availableVersions.json > availableVersions.json.tmp && mv availableVersions.json.tmp availableVersions.json
-    echo "Bumped $current -> $next (all channels in availableVersions.json set to $next). Open a pull request with it; tag the merged commit to release."
-
-# Used on its own only for a manual release; `just release-patch` and friends
-# call this for you (a manual bump still has to go through a pull request).
-# Bump the major version in src/release/version.txt (resets minor and patch) and commit it.
-bump-major:
-    #!/usr/bin/env bash
-    set -euo pipefail
-    cd {{ROOT_DIR}}
-    current=$(tr -d '[:space:]' < src/release/version.txt)
-    if [[ ! "$current" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-        echo "src/release/version.txt is not MAJOR.MINOR.PATCH: '$current'" >&2
-        exit 1
-    fi
-    IFS=. read -r major minor patch <<< "$current"
-    next="$((major + 1)).0.0"
-    printf '%s' "$next" > src/release/version.txt
-    jq --arg v "$next" 'map_values($v)' availableVersions.json > availableVersions.json.tmp && mv availableVersions.json.tmp availableVersions.json
-    echo "Bumped $current -> $next (all channels in availableVersions.json set to $next). Open a pull request with it; tag the merged commit to release."
-
 # ------------------------------------------------------------------ release --
-# Release contract — see REDeployments/docs/RELEASE.md
-#
-#   just release-patch = _require-clean -> bump-patch -> _release-pr -> _await-release
-#
-# This repo does not build anything locally: the tag on the merged release
-# commit triggers release.yml, which builds and stages the version.
-#
-# The steps run as sub-`just` processes, never as Just dependencies: just
-# evaluates variables once at parse time, so VERSION would still hold the
-# PRE-bump value if these ran as deps.
+# Pull requests into main, from IronFlock/workflows (scripts/pr.sh at v1):
+#   just merge [TITLE]      a no-release pull request from this feature branch
+#   just release-patch      a release pull request (-minor, -major): the bump
+#                           from main's version on top of this branch (or on a
+#                           new branch release/v<x> from an up-to-date main)
+# Both merge automatically once ci and security are green. The merge of a
+# release pull request runs .github/workflows/release.yml: it stages the
+# version (binaries, SBOM attestations, images), signs and promotes it
+# (`promote-ci`; agents update), then sets the tag. The bridge release is the
+# exception: staged and tagged, promoted by hand (`promote-bridge`).
 
-# Releases come off a clean tree: the release commit must carry the version
-# bump and nothing else, and a tag whose content is unprovable is worse than
-# no tag at all. Commit your work first, with a message that describes it.
-_require-clean:
+# Writes the version (all channels of availableVersions.json follow it);
+# called by pr.sh with the next version.
+_write-version version:
     #!/usr/bin/env bash
     set -euo pipefail
     cd {{ROOT_DIR}}
-    dirty=$(git status --porcelain 2>/dev/null || true)
-    if [ -n "$dirty" ]; then
-        echo "release: uncommitted changes here — commit them first, with a" >&2
-        echo "         message describing the work. The release commit that" >&2
-        echo "         follows carries the version bump alone." >&2
-        echo >&2
-        printf '%s\n' "$dirty" >&2
-        exit 1
-    fi
+    printf '%s' "{{version}}" > src/release/version.txt
+    jq --arg v "{{version}}" 'map_values($v)' availableVersions.json > availableVersions.json.tmp
+    mv availableVersions.json.tmp availableVersions.json
 
-# main is protected (changes only through pull requests with green checks):
-#   just release-patch = _require-clean -> bump-patch -> _release-pr -> _await-release
-# `_release-pr` opens a PR with the version bump, GitHub merges it (squash) once
-# ci-ok and security / report are green, and the merged commit is tagged. The
-# tag runs .github/workflows/release.yml, which stages the version (binaries,
-# SBOM attestations, images), then signs and promotes it (`promote-ci`); the
-# bridge release is the exception (`promote-bridge`, by hand).
-# Version bump through a pull request (main is protected): branch, commit only
-# the version files, open the PR, merge it automatically (squash) once the
-# required checks pass, then tag the merged commit on main and push the tag.
-_release-pr:
+[positional-arguments]
+_pr *args:
     #!/usr/bin/env bash
     set -euo pipefail
-    tag="{{RELEASE_TAG}}"
-    branch="release/${tag}"
-    title="release {{RELEASE_NAME}} v{{VERSION}}"
-    git fetch --quiet origin main
-    if [ "$(git rev-parse --abbrev-ref HEAD)" != main ] || [ "$(git rev-parse HEAD)" != "$(git rev-parse origin/main)" ]; then
-        echo "release: run from an up-to-date main (git switch main && git pull --ff-only)" >&2
-        git checkout -- {{VERSION_FILES}}
-        exit 1
-    fi
-    git switch -c "$branch"
-    git add -- {{VERSION_FILES}}
-    git commit -m "$title"
-    git push -u origin "$branch"
-    gh pr create --base main --head "$branch" --title "$title" \
-        --body "Version bump only, opened by \`just release-patch\`. Merged automatically once the required checks pass; the tag on the merged commit publishes the image."
-    gh pr merge "$branch" --squash --auto --delete-branch
-    echo "==> waiting for the required checks and the merge of ${branch}"
-    sha=""
-    for _ in $(seq 1 120); do
-        read -r state sha <<<"$(gh pr view "$branch" --json state,mergeCommit --jq '"\(.state) \(.mergeCommit.oid // "")"')"
-        case "$state" in
-            MERGED) break ;;
-            CLOSED) echo "release PR ${branch} was closed without merging" >&2; exit 1 ;;
-        esac
-        sleep 20
-    done
-    [ "${state:-}" = MERGED ] && [ -n "$sha" ] || { echo "release PR ${branch} not merged after 40 min: gh pr checks ${branch}" >&2; exit 1; }
-    git switch main
-    git pull --ff-only
-    git branch -D "$branch" 2>/dev/null || true
-    git tag -a "$tag" -m "$title" "$sha"
-    git push origin "$tag"
-    echo "==> tagged ${tag} on ${sha}"
+    script=$(mktemp)
+    trap 'rm -f "$script"' EXIT
+    gh api -H 'Accept: application/vnd.github.raw' \
+        'repos/IronFlock/workflows/contents/scripts/pr.sh?ref=v1' > "$script"
+    bash "$script" "$@"
 
-# Wait for the CI release run of the tag; fails if it fails.
-_await-release:
-    #!/usr/bin/env bash
-    set -euo pipefail
-    tag="{{RELEASE_TAG}}"
-    sha=$(git rev-parse "${tag}^{commit}")
-    echo "==> waiting for the CI release of ${tag}"
-    run=""
-    for _ in $(seq 1 30); do
-        run=$(gh run list --workflow release.yml --commit "$sha" --json databaseId,event \
-              --jq 'map(select(.event == "push")) | .[0].databaseId // empty')
-        [ -n "$run" ] && break
-        sleep 5
-    done
-    [ -n "$run" ] || { echo "no release run for ${tag} appeared; check GitHub Actions" >&2; exit 1; }
-    gh run watch "$run" --exit-status --interval 20 >/dev/null || {
-        echo "release run $run for ${tag} failed: gh run view $run --log-failed" >&2; exit 1; }
-    if [ "${tag#v}" = "$(tr -d '[:space:]' < src/release/bridge-version.txt)" ]; then
-        echo "==> ${tag} staged by CI (run $run), NOT promoted: it is the bridge release. Promote it with: just promote-bridge"
-    else
-        echo "==> ${tag} signed and promoted by CI (run $run): agents update to it now"
-    fi
+[positional-arguments]
+merge TITLE="":
+    just _pr merge {{VERSION_FILE}} "$1"
 
 release-patch:
-    just _require-clean
-    just bump-patch
-    just _release-pr
-    just _await-release
+    just _pr release patch {{RELEASE_NAME}} {{VERSION_FILE}} release.yml {{VERSION_FILES}}
 
 release-minor:
-    just _require-clean
-    just bump-minor
-    just _release-pr
-    just _await-release
+    just _pr release minor {{RELEASE_NAME}} {{VERSION_FILE}} release.yml {{VERSION_FILES}}
 
 release-major:
-    just _require-clean
-    just bump-major
-    just _release-pr
-    just _await-release
+    just _pr release major {{RELEASE_NAME}} {{VERSION_FILE}} release.yml {{VERSION_FILES}}
 
 # Do everything in one step
 rollout: build-all-docker publish promote

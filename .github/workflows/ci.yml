@@ -5,11 +5,14 @@
 #
 # Integration and coverage drive Docker and are environment-sensitive; they run
 # WITHOUT -race and self-skip when their resource (docker/dbus/frps) is absent.
+#
+# Pull requests into main only: the ruleset lets nothing reach main without
+# ci-ok. The release intent decides whether the merge releases; release pull
+# requests also run release.yml as a dry run (every target, no publish).
 name: ci
 
 on:
   pull_request:
-  push:
     branches: [main]
   workflow_dispatch:
 
@@ -37,6 +40,27 @@ jobs:
 
   workflows:
     uses: IronFlock/workflows/.github/workflows/workflows-lint.yml@v1
+
+  # The version decides: a bump makes a release PR (`just release-patch`,
+  # title `release reagent v<version>`), an unchanged version a no-release PR
+  # (`just merge`) whose merge releases nothing.
+  intent:
+    uses: IronFlock/workflows/.github/workflows/release-intent.yml@v1
+    with:
+      version-file: src/release/version.txt
+
+  # Release pull requests only: release.yml as a dry run (every target built,
+  # nothing published, signed or promoted), so a broken release build never
+  # reaches main.
+  release-build:
+    needs: [intent]
+    if: needs.intent.outputs.kind == 'release'
+    uses: ./.github/workflows/release.yml
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    # No secrets: a dry run neither signs (Authenticode) nor publishes.
 
   integration:
     runs-on: ubuntu-latest # GitHub-hosted ubuntu has Docker
@@ -114,13 +138,18 @@ jobs:
   # above succeeded (skipped or cancelled counts as failed).
   ci-ok:
     if: ${{ always() }}
-    needs: [gate, workflows, integration, coverage, windows-unit]
+    needs: [gate, workflows, intent, integration, coverage, windows-unit, release-build]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
       - name: all ci jobs succeeded
         env:
-          RESULTS: ${{ join(needs.*.result, ' ') }}
+          REQUIRED: >-
+            ${{ needs.gate.result }} ${{ needs.workflows.result }} ${{ needs.intent.result }}
+            ${{ needs.integration.result }} ${{ needs.coverage.result }} ${{ needs.windows-unit.result }}
+          RELEASE_BUILD: ${{ needs.release-build.result }}
+          KIND: ${{ needs.intent.outputs.kind }}
         run: |
-          echo "results: $RESULTS"
-          for r in $RESULTS; do [ "$r" = success ] || exit 1; done
+          echo "required: $REQUIRED, release-build: $RELEASE_BUILD ($KIND)"
+          for r in $REQUIRED; do [ "$r" = success ] || exit 1; done
+          if [ "$KIND" = release ]; then [ "$RELEASE_BUILD" = success ]; else [ "$RELEASE_BUILD" = skipped ]; fi

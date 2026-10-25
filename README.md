@@ -23,7 +23,7 @@ running in containers on the device and retrieve their result and logs.
     - [Linux layout and service](#linux-layout-and-service)
   - [Development](#development)
   - [Build, Publish and Release](#build-publish-and-release)
-    - [Release via CI (tag push)](#release-via-ci-tag-push)
+    - [Release via CI (release pull request)](#release-via-ci-release-pull-request)
     - [Promote a version](#promote-a-version)
     - [Update signatures (Ed25519)](#update-signatures-ed25519)
     - [One-time CI setup (Workload Identity Federation)](#one-time-ci-setup-workload-identity-federation)
@@ -345,17 +345,16 @@ If you encounter any privilege issues, please try removing the agent home direct
 
 ## Build, Publish and Release
 
-Building, publishing and promoting is done by **CI** (GitHub Actions), from a tag on a commit merged into `main`. Only code whose pull-request checks passed reaches a device; nobody signs or promotes from a laptop, except the one-time bridge release and emergencies (see [Promote a version](#promote-a-version)).
+Building, publishing and promoting is done by **CI** (GitHub Actions), on the merge of a release pull request into `main`. Only code whose pull-request checks passed reaches a device; nobody signs or promotes from a laptop, except the one-time bridge release and emergencies (see [Promote a version](#promote-a-version)).
 
-### Release via CI (tag push)
+### Release via CI (release pull request)
 
-1. `just release-patch` (or `release-minor` / `release-major`) — the whole local side in one command, run from an up-to-date `main`: refuses a dirty tree, bumps [`src/release/version.txt`](src/release/version.txt) + `availableVersions.json`, and opens a pull request with just those two files (`release reagent vX.Y.Z`). `main` is protected — every change, the version bump included, merges only through a pull request whose required checks (`ci-ok`, `security / report`) passed — so GitHub merges the release PR automatically once they are green. The recipe then tags the merged commit `vX.Y.Z`, pushes the tag and waits for the release run.
+1. `just release-patch` (or `release-minor` / `release-major`) — the whole local side in one command, run on a feature branch (your work plus the bump) or on an up-to-date `main` (the bump alone, on a new branch `release/vX.Y.Z`): refuses a dirty tree, bumps [`src/release/version.txt`](src/release/version.txt) + `availableVersions.json` from the version on `main`, and opens the pull request `release reagent vX.Y.Z`. `main` is protected — every change merges only through a pull request whose required checks (`ci-ok`, `security / report`) passed; a release pull request also runs the whole release as a dry run — so GitHub merges it automatically once they are green. The recipe then waits for the release run. Changes that release nothing go in with `just merge`.
 
-   Commit your own work first, with your own message — the release commit carries the version bump alone. This is the shared IronFlock release contract; see [`REDeployments/docs/RELEASE.md`](../deployments/docs/RELEASE.md).
-
-   For a hand-managed version, bump `version.txt` yourself (see [Versioning](#versioning)) in a pull request; once it is merged, tag the merged commit `vX.Y.Z` and push the tag. The release workflow only accepts a tag on a commit that is part of `main` and matches `version.txt`.
+   Commit your own work first, with your own message — the release commit carries the version bump alone. This is the shared IronFlock release process; see [`REDeployments/docs/RELEASE.md`](../deployments/docs/RELEASE.md).
 2. [`.github/workflows/release.yml`](.github/workflows/release.yml) then, for every entry in the [`targets`](targets) file: builds the binary, generates a CycloneDX SBOM, records a sigstore-signed **SBOM attestation** bound to the binary's digest, publishes the binary to `gs://ironflock-downloads/device-agent/<os>/<arch>/<version>/device-agent[.exe]`, and pushes the multi-arch agent images to Artifact Registry. This **stages** the version: the binaries exist, unsigned, and no agent updates to it yet.
-3. Its `promote` job then signs and **promotes** the version (`just promote-ci`, see the next section): from this moment agents update to it. The channels are those in the tagged `availableVersions.json`, which `just release-patch` sets to the new version.
+3. Its `promote` job then signs and **promotes** the version (`just promote-ci`, see the next section): from this moment agents update to it. The channels are those in the merged `availableVersions.json`, which `just release-patch` sets to the new version.
+4. Last, the release GitHub App sets the tag `vX.Y.Z` on the merged commit: a tag means "released". A failed run can be re-run; a re-run after the tag does nothing.
 
 A manual run from the Actions tab (`workflow_dispatch`) is a dry run: it builds, but neither publishes nor promotes.
 
@@ -368,13 +367,13 @@ gh attestation verify reagent-linux-amd64 --owner IronFlock --signer-repo Record
 
 ### Promote a version
 
-Promotion signs every binary that `availableVersions.json` names, and the pinned frpc ([Update signatures](#update-signatures-ed25519)), republishes the [`latest` alias](#the-latest-alias), then publishes `version.txt`, `availableVersions.json` and the signed channel map. The release workflow's `promote` job does this for every tag:
+Promotion signs every binary that `availableVersions.json` names, and the pinned frpc ([Update signatures](#update-signatures-ed25519)), republishes the [`latest` alias](#the-latest-alias), then publishes `version.txt`, `availableVersions.json` and the signed channel map. The release workflow's `promote` job does this for every release:
 
 ```Shell
 just promote-ci   # CI only: signs with Cloud KMS, publishes manifest-v2.json
 ```
 
-The job runs only on a pushed tag, and it refuses a version below the live `version.txt`: re-running an old release cannot roll the fleet back.
+The job runs only in the release run of a merged release pull request, and it refuses a version below the live `version.txt`: re-running an old release cannot roll the fleet back.
 
 Agents read the signed channel map `gs://ironflock-downloads/device-agent/manifest-v2.json`: an envelope `{"payload": <base64>, "signature": <.sig>}` whose payload is `{"channels": <availableVersions.json>, "issued_at": …}`, signed like a binary but with the context `device-agent-manifest:v1` and the line `device-agent/manifest-v2.json`. On a 404 (an appliance mirror or a bucket without it) they read `manifest.json`, and on a 404 there the frozen legacy tree. A map that does not verify is refused, never routed around. The plain `availableVersions.json` next to it is for the flasher and older tooling. This publish **is** the release gate.
 
@@ -468,14 +467,15 @@ SA=reagent-release@${PROJECT}.iam.gserviceaccount.com
 
 # 1. Workload Identity Pool + GitHub OIDC provider, shared by every IronFlock repository
 #    (locked to the organisation by its numeric id). attribute.release is
-#    "<repository id>:release" only for a v* tag run of the repository's own
-#    .github/workflows/release.yml (or of the shared release-image workflow).
+#    "<repository id>:release" only for a release run: the repository's own
+#    .github/workflows/release.yml on a push to main (the merge of a release
+#    pull request) or on a v* tag, or the shared release-image workflow.
 OWNER_ID=$(gh api orgs/IronFlock --jq .id)   # 340168802
 gcloud iam workload-identity-pools create $POOL --project=$PROJECT --location=global --display-name="GitHub Actions"
 gcloud iam workload-identity-pools providers create-oidc $PROVIDER \
   --project=$PROJECT --location=global --workload-identity-pool=$POOL \
   --display-name="GitHub" --issuer-uri="https://token.actions.githubusercontent.com" \
-  --attribute-mapping="google.subject=assertion.sub,attribute.repository=assertion.repository,attribute.repository_id=assertion.repository_id,attribute.release=assertion.repository_id + (assertion.ref.startsWith('refs/tags/v') && (assertion.job_workflow_ref.startsWith('IronFlock/workflows/.github/workflows/release-image.yml@refs/tags/v') || assertion.job_workflow_ref.startsWith(assertion.repository + '/.github/workflows/release.yml@refs/tags/v')) ? ':release' : ':other')" \
+  --attribute-mapping="google.subject=assertion.sub,attribute.repository=assertion.repository,attribute.repository_id=assertion.repository_id,attribute.release=assertion.repository_id + (((assertion.ref.startsWith('refs/tags/v') || assertion.ref == 'refs/heads/main') && (assertion.job_workflow_ref.startsWith('IronFlock/workflows/.github/workflows/release-image.yml@refs/tags/v') || assertion.job_workflow_ref.startsWith(assertion.repository + '/.github/workflows/release.yml@refs/tags/v'))) || (assertion.event_name == 'push' && assertion.job_workflow_ref == assertion.repository + '/.github/workflows/release.yml@refs/heads/main') ? ':release' : ':other')" \
   --attribute-condition="assertion.repository_owner_id=='${OWNER_ID}'"
 
 # 2. Service account with publish permissions
@@ -483,7 +483,7 @@ gcloud iam service-accounts create reagent-release --project=$PROJECT --display-
 gsutil iam ch "serviceAccount:${SA}:roles/storage.objectAdmin" gs://ironflock-downloads
 gcloud projects add-iam-policy-binding $PROJECT --member="serviceAccount:${SA}" --role="roles/artifactregistry.writer"
 
-# 3. Let only this repository's tag release runs act as the SA
+# 3. Let only this repository's release runs act as the SA
 PROJNUM=$(gcloud projects describe $PROJECT --format='value(projectNumber)')
 gcloud iam service-accounts add-iam-policy-binding $SA --project=$PROJECT \
   --role=roles/iam.workloadIdentityUser \
