@@ -115,6 +115,8 @@ type FrpTunnelManager struct {
 	// clientDone is closed once the current client process has exited and been
 	// reaped, i.e. its listeners (the admin port) are actually released.
 	clientDone chan struct{}
+	// clientRun decides whether the current client's exit restarts it.
+	clientRun *frpcRun
 	// startMu serializes every spawn/kill of the frpc client. Unserialized,
 	// the boot supervisor and a Reload/AllStatus-triggered restart could each
 	// spawn an frpc — the loser exits with "bind: address already in use" on
@@ -158,6 +160,55 @@ type FrpTunnelManager struct {
 	// still being established.
 	onAvailable atomic.Pointer[func()]
 }
+
+// frpcRun is the lifecycle of one spawned frpc process. Its exit restarts the
+// client only when Start had handed it over (established) and nobody stopped
+// it on purpose. A client that dies earlier is Start's failure, which
+// SuperviseStart retries a bounded number of times; restarting it from its
+// exit as well would retry an frpc that cannot run (antivirus killing it at
+// once) forever.
+type frpcRun struct {
+	mu          sync.Mutex
+	established bool
+	stopped     bool
+	exited      bool
+}
+
+// establish marks the client as handed over by Start. It reports false when
+// the process has already exited, so Start fails instead of reporting a dead
+// client as started.
+func (run *frpcRun) establish() bool {
+	run.mu.Lock()
+	defer run.mu.Unlock()
+
+	if run.exited {
+		return false
+	}
+	run.established = true
+	return true
+}
+
+// stop marks the coming exit as deliberate.
+func (run *frpcRun) stop() {
+	run.mu.Lock()
+	defer run.mu.Unlock()
+
+	run.stopped = true
+}
+
+// exit records the exit and reports whether the client was lost: established
+// and not stopped on purpose.
+func (run *frpcRun) exit() bool {
+	run.mu.Lock()
+	defer run.mu.Unlock()
+
+	run.exited = true
+	return run.established && !run.stopped
+}
+
+// errFrpcExitedDuringStart fails a Start whose client died before Start could
+// hand it over.
+var errFrpcExitedDuringStart = errors.New("frpc exited while it was starting")
 
 type UpdateType string
 
@@ -769,8 +820,8 @@ func tunnelStateFingerprint(states []TunnelState) string {
 // logs.
 //
 // GetState is called unconditionally: AllStatus already no-ops unless the device
-// is Available (so an unreachable frps cannot start a restart loop), and its
-// connection-refused branch is what re-supervises an frpc that died.
+// is Available (so an unreachable frps cannot start a restart loop). An frpc
+// that died is restarted by its own exit (onClientExit).
 func (frpTm *FrpTunnelManager) monitorTunnelState() {
 	ticker := time.NewTicker(tunnelStatePollInterval)
 	defer ticker.Stop()
@@ -865,7 +916,13 @@ func (frpTm *FrpTunnelManager) stopClientLocked() {
 	if frpTm.clientProcess == nil || frpTm.clientProcess.Process == nil {
 		frpTm.clientProcess = nil
 		frpTm.clientDone = nil
+		frpTm.clientRun = nil
 		return
+	}
+
+	// Stopped on purpose: the exit must not restart the client.
+	if frpTm.clientRun != nil {
+		frpTm.clientRun.stop()
 	}
 
 	// Kill errors just mean the process is already gone; reaping below is what
@@ -882,6 +939,22 @@ func (frpTm *FrpTunnelManager) stopClientLocked() {
 
 	frpTm.clientProcess = nil
 	frpTm.clientDone = nil
+	frpTm.clientRun = nil
+}
+
+// onClientExit restarts a client that exited on its own after Start handed it
+// over: antivirus ending it (Defender's PUA:Win32/FRProxy on a Windows PC), a
+// crash, someone killing the process. Nothing else notices on Windows — the
+// restart paths in AllStatus and Reload match a "connection refused" that
+// Windows words differently — so the tunnels stayed down until the agent
+// restarted.
+func (frpTm *FrpTunnelManager) onClientExit(run *frpcRun) {
+	if !run.exit() {
+		return
+	}
+
+	log.Warn().Msg("the tunnel client exited unexpectedly; restarting it")
+	safe.Go(frpTm.SuperviseStart)
 }
 
 // frpcEnv is the environment every frpc process is spawned with: the agent's
@@ -990,8 +1063,10 @@ func (frpTm *FrpTunnelManager) Start() error {
 	}
 
 	clientDone := make(chan struct{})
+	run := &frpcRun{}
 	frpTm.clientProcess = frpCommand
 	frpTm.clientDone = clientDone
+	frpTm.clientRun = run
 	frpTm.clientAlive.Store(true)
 
 	// A client exists from here on, so keep re-checking whether it can still
@@ -1014,6 +1089,8 @@ func (frpTm *FrpTunnelManager) Start() error {
 		// (which kills frpc if it is somehow still alive after stdout EOF),
 		// reap the process so it neither lingers as a zombie nor keeps the
 		// admin port, and only then signal done to stopClientLocked waiters.
+		// Last of all, restart a client that was lost rather than stopped.
+		defer frpTm.onClientExit(run)
 		defer close(clientDone)
 		defer func() { _ = frpCommand.Wait() }()
 		defer cancelNotifyContext()
@@ -1170,6 +1247,9 @@ func (frpTm *FrpTunnelManager) Start() error {
 
 	select {
 	case startErr := <-ackChan:
+		if startErr == nil && !run.establish() {
+			startErr = errFrpcExitedDuringStart
+		}
 		if startErr != nil {
 			frpTm.setCapability(CapabilityUnavailable, startErr)
 			return startErr
@@ -1179,6 +1259,11 @@ func (frpTm *FrpTunnelManager) Start() error {
 		return nil
 
 	case <-time.After(deadline):
+		if !run.establish() {
+			frpTm.setCapability(CapabilityUnavailable, errFrpcExitedDuringStart)
+			return errFrpcExitedDuringStart
+		}
+
 		// No login ack — which is the NORMAL case, not a failure: frpc logs to a
 		// file rather than the stdout scanned above, so the success line is
 		// invisible to us. Deciding "unavailable" here would mark every healthy
@@ -1361,9 +1446,11 @@ func (frpTm *FrpTunnelManager) Reload() error {
 
 	output, err := reloadCommand.CombinedOutput()
 	if err != nil {
-		// frpc service is not properly running
+		// frpc service is not properly running. Windows words the refusal
+		// differently (and localized), so a client known not to be running
+		// counts as well.
 		log.Error().Err(err).Msgf("Error while reloading frp client config: %s", string(output))
-		if strings.Contains(string(output), "connect: connection refused") || strings.Contains(string(output), "api status code") {
+		if !frpTm.clientAlive.Load() || strings.Contains(string(output), "connect: connection refused") || strings.Contains(string(output), "api status code") {
 			log.Warn().Msg("frpc appears to not be running, attempting to start it")
 			safe.Go(func() {
 				// Re-supervise so a binary that was quarantined/removed at
@@ -1499,7 +1586,9 @@ func (frpTm *FrpTunnelManager) AllStatus() ([]TunnelStatus, error) {
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		if strings.Contains(err.Error(), "connection refused") {
-			// frpc was Available but its admin API is gone: the process died.
+			// frpc was Available but its admin API is gone. A dead process is
+			// restarted by its exit (onClientExit); this catches a process
+			// that lives on without its admin server (Linux wording only).
 			// Re-supervise (single-flight, serialized, port re-picking) instead
 			// of a bare kill+start — the latter permanently gave up whenever
 			// the old admin port had been taken in the meantime.

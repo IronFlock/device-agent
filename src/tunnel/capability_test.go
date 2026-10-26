@@ -8,11 +8,13 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"reagent/common"
 	"reagent/config"
 	"reagent/filesystem"
 	"reagent/messenger"
 	"runtime"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"testing/synctest"
@@ -419,4 +421,97 @@ func TestSuperviseStartRepicksAdminPortAfterPreLoginExit(t *testing.T) {
 		return onDisk.WebServer.Port != initialPort && onDisk.WebServer.Port >= adminPortScanStart
 	}, 10*time.Second, 100*time.Millisecond,
 		"supervisor must persist a re-picked admin port after a pre-login exit")
+}
+
+// spawnCount reads how often a fake frpc that appends a line to path ran.
+func spawnCount(path string) int {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return 0
+	}
+	return strings.Count(string(raw), "\n")
+}
+
+// Regression (LAC PC, 2026-10-26): Defender ended a running frpc as
+// PUA:Win32/FRProxy and nothing restarted it for 13 hours — the only restart
+// path matched "connection refused" in the admin API error, which Windows words
+// differently. A client that dies after Start handed it over must come back on
+// its own.
+func TestClientLostAfterStartIsRestarted(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("fake frpc is a shell script")
+	}
+
+	m := newCapabilityTestManager(t)
+	m.loginDeadline = 200 * time.Millisecond
+	reachableFrps(t, m)
+
+	// The first frpc outlives the login deadline and then dies; its
+	// replacement stays up.
+	spawns := filepath.Join(t.TempDir(), "spawns")
+	fake := fmt.Sprintf("#!/bin/sh\nif [ -e '%[1]s' ]; then echo again >> '%[1]s'; exec sleep 30; fi\necho first >> '%[1]s'\nsleep 1\n", spawns)
+	frpcPath := filesystem.GetTunnelBinaryPath(m.config, "frpc") // frpc.exe on Windows
+	require.NoError(t, os.WriteFile(frpcPath, []byte(fake), 0o755))
+	t.Cleanup(func() { _ = m.Stop() })
+
+	require.NoError(t, m.Start())
+
+	require.Eventually(t, func() bool { return spawnCount(spawns) == 2 }, 10*time.Second, 50*time.Millisecond,
+		"a client lost after Start must be restarted without an agent restart")
+	require.Eventually(t, func() bool { return m.clientAlive.Load() }, 5*time.Second, 50*time.Millisecond)
+}
+
+// Stop is deliberate: the exit it causes must not bring the client back.
+func TestStoppedClientIsNotRestarted(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("fake frpc is a shell script")
+	}
+
+	m := newCapabilityTestManager(t)
+	m.loginDeadline = 200 * time.Millisecond
+	reachableFrps(t, m)
+
+	spawns := filepath.Join(t.TempDir(), "spawns")
+	fake := fmt.Sprintf("#!/bin/sh\necho x >> '%s'\nexec sleep 30\n", spawns)
+	frpcPath := filesystem.GetTunnelBinaryPath(m.config, "frpc") // frpc.exe on Windows
+	require.NoError(t, os.WriteFile(frpcPath, []byte(fake), 0o755))
+	t.Cleanup(func() { _ = m.Stop() })
+
+	require.NoError(t, m.Start())
+	require.Eventually(t, func() bool { return spawnCount(spawns) == 1 }, 5*time.Second, 50*time.Millisecond)
+	require.NoError(t, m.Stop())
+
+	// clientAlive turns true the moment a client is spawned, however slowly
+	// the fake script then gets going.
+	assert.Never(t, func() bool { return m.clientAlive.Load() || spawnCount(spawns) > 1 }, 2*time.Second, 20*time.Millisecond,
+		"a stopped client must stay stopped")
+}
+
+// A client that dies before Start hands it over is Start's failure, which
+// SuperviseStart retries a bounded number of times. Its exit must not restart
+// it as well: an frpc that antivirus ends at once would then be retried
+// forever instead of settling unavailable.
+func TestClientDyingDuringStartIsNotRestartedByItsExit(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("fake frpc is a shell script")
+	}
+
+	m := newCapabilityTestManager(t)
+	// Long enough that the exit always comes first (the first exec of a new
+	// script can take hundreds of milliseconds on macOS).
+	m.loginDeadline = 5 * time.Second
+	reachableFrps(t, m)
+
+	spawns := filepath.Join(t.TempDir(), "spawns")
+	fake := fmt.Sprintf("#!/bin/sh\necho x >> '%s'\nexit 1\n", spawns)
+	frpcPath := filesystem.GetTunnelBinaryPath(m.config, "frpc") // frpc.exe on Windows
+	require.NoError(t, os.WriteFile(frpcPath, []byte(fake), 0o755))
+	t.Cleanup(func() { _ = m.Stop() })
+
+	require.Error(t, m.Start())
+
+	assert.Never(t, func() bool { return spawnCount(spawns) > 1 }, time.Second, 50*time.Millisecond,
+		"only the supervisor retries a client that never started")
+	cap, _ := m.Capability()
+	assert.Equal(t, CapabilityUnavailable, cap)
 }
