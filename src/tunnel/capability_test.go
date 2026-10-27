@@ -515,3 +515,20 @@ func TestClientDyingDuringStartIsNotRestartedByItsExit(t *testing.T) {
 	cap, _ := m.Capability()
 	assert.Equal(t, CapabilityUnavailable, cap)
 }
+
+// SuperviseStart re-picks the admin port while a status publish reads it
+// (both run from AllStatus); the race detector catches it without the lock.
+func TestAdminPortIsSafeForConcurrentUse(t *testing.T) {
+	builder := newCapabilityTestManager(t).configBuilder
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for range 20 {
+			builder.SetAdminPort()
+		}
+	}()
+	for range 20 {
+		_, _ = builder.GetAdminPort()
+	}
+	<-done
+}

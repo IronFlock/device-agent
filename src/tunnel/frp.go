@@ -52,9 +52,10 @@ type TunnelConfig struct {
 
 // YAML config structures matching frp v0.65.0 format
 // frpcConfigMu guards the frpc config's route fields (ServerPort,
-// Transport.Protocol/ProxyURL) and its marshalling in SaveConfig: the
-// capability probe reads the route while a client restart moves it
-// (useRoute). One agent runs one tunnel manager, so one lock suffices; it
+// Transport.Protocol/ProxyURL), the admin port and its marshalling in
+// SaveConfig: the capability probe reads the route while a client restart
+// moves it (useRoute), and a status publish reads the admin port while a
+// restart re-picks it (SetAdminPort). One agent runs one tunnel manager, so one lock suffices; it
 // lives outside the config struct because yaml reads that by reflection.
 var frpcConfigMu sync.Mutex
 
@@ -878,7 +879,9 @@ func (builder *TunnelConfigBuilder) SetAdminPort() {
 
 	log.Debug().Msgf("Using port %d for Frp webserver", port)
 
+	frpcConfigMu.Lock()
 	builder.yamlConfig.WebServer.Port = port
+	frpcConfigMu.Unlock()
 	builder.SaveConfig()
 }
 
@@ -913,6 +916,8 @@ func (builder *TunnelConfigBuilder) SetCommonVariable(key FrpcVariable, value st
 }
 
 func (builder *TunnelConfigBuilder) GetAdminPort() (int, error) {
+	frpcConfigMu.Lock()
+	defer frpcConfigMu.Unlock()
 	if builder.yamlConfig.WebServer == nil {
 		return 0, fmt.Errorf("webServer not configured")
 	}
