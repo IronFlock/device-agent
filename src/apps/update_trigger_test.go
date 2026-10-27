@@ -655,7 +655,7 @@ func TestRequestAppStateCancelsUpdateForTeardownStates(t *testing.T) {
 			// docker-API side has no active stream here and reports so.
 			mc.EXPECT().CancelStream(mock.Anything).Return(nil).Maybe()
 
-			amSeed(t, st, 62, "cancelme", common.UPDATING, common.PROD)
+			app := amSeed(t, st, 62, "cancelme", common.UPDATING, common.PROD)
 
 			// A compose update is in flight, with its cancel func registered as
 			// updateComposeApp would.
@@ -672,6 +672,15 @@ func TestRequestAppStateCancelsUpdateForTeardownStates(t *testing.T) {
 			case <-time.After(2 * time.Second):
 				t.Fatalf("%s requested during an update must cancel the in-flight compose update", requested)
 			}
+
+			// The terminal transition goes on writing the app's files after the
+			// cancel. Wait for it, or the TempDir cleanup races it (Windows
+			// refuses to remove a directory a file is being created in).
+			require.Eventually(t, func() bool {
+				app.StateLock.Lock()
+				defer app.StateLock.Unlock()
+				return app.CurrentState == requested
+			}, 5*time.Second, 10*time.Millisecond, "the %s transition must complete", requested)
 		})
 	}
 }
