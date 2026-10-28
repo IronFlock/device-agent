@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"path/filepath"
 	"reagent/errdefs"
 	"reagent/filesystem"
 	"reagent/messenger"
@@ -46,6 +47,13 @@ func (ex *External) writeToFileHandler(ctx context.Context, response messenger.R
 	containerName, ok := containerNameArg.(string)
 	if !ok {
 		return nil, errors.New("failed to parse containerName argument")
+	}
+
+	// The file lands directly in the build directory. Joined onto it unchecked,
+	// a "../" in the caller's name wrote anywhere the agent can — as root, on
+	// most devices.
+	if fileName != filepath.Base(fileName) || !filepath.IsLocal(fileName) {
+		return nil, fmt.Errorf("invalid file name %q: must be a plain file name", fileName)
 	}
 
 	total, ok := totalArg.(uint64)

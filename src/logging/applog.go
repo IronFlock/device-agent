@@ -739,42 +739,6 @@ func (lm *LogManager) getNonAgentLogsCompose(containerName string) ([]string, er
 	return []string{}, nil
 }
 
-// CheckAppContainer refuses a container name that does not belong to an app
-// installed on this device.
-//
-// The log procedures take the name from their caller, and Docker answers for
-// any container on the host. On an appliance that host also runs the platform
-// itself — its database, router, registry — whose logs a READ privilege on the
-// device must not reach. Any other name is answered "not found", so the answer
-// does not tell a caller which other containers exist either.
-func (lm *LogManager) CheckAppContainer(containerName string) error {
-	notFound := errdefs.ContainerNotFound(fmt.Errorf("no app container %q on this device", containerName))
-
-	stage, appKey, _, err := common.ParseContainerName(containerName)
-	if err != nil || stage == "" {
-		return notFound
-	}
-
-	app, err := lm.AppStore.GetApp(appKey, stage)
-	if err != nil {
-		return err
-	}
-	if app == nil {
-		return notFound
-	}
-
-	if containerName == common.BuildContainerName(stage, appKey, app.AppName) {
-		return nil
-	}
-
-	// A DEV app's release build logs under pub_, which parses to DEV.
-	if stage == common.DEV && containerName == common.BuildContainerName("pub", appKey, app.AppName) {
-		return nil
-	}
-
-	return notFound
-}
-
 func (lm *LogManager) GetLogHistory(containerName string) ([]string, error) {
 	history, err := lm.getPersistedLogHistory(containerName)
 	if err != nil {
@@ -794,7 +758,7 @@ func (lm *LogManager) GetLogHistory(containerName string) ([]string, error) {
 	// Docker is only asked about an app's own container. Anything else keeps
 	// the empty answer it always got for an unknown app: a console that opens
 	// before the agent knows the app must still go on to subscribe.
-	if lm.CheckAppContainer(containerName) != nil {
+	if lm.AppStore.CheckAppContainer(containerName) != nil {
 		return stringLogEntries, nil
 	}
 

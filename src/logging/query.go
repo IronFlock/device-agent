@@ -84,7 +84,7 @@ type LogQueryResult struct {
 
 // QueryLogs reads a bounded, optionally time-windowed slice of a container's logs.
 func (lm *LogManager) QueryLogs(ctx context.Context, request LogQueryRequest) (LogQueryResult, error) {
-	if err := lm.CheckAppContainer(request.ContainerName); err != nil {
+	if err := lm.AppStore.CheckAppContainer(request.ContainerName); err != nil {
 		return LogQueryResult{}, err
 	}
 
