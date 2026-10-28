@@ -430,8 +430,11 @@ func initialize(cfg *config.Config) TunnelConfigBuilder {
 			frpcConfig.Transport.TLS.ServerName = serverName
 		}
 	} else {
-		log.Debug().Str("target", controlAddr).
-			Msg("Tunnel control connection is not certificate-verified (local or plain-mode appliance server)")
+		// Plain-mode appliances and local stacks: nothing can vouch for the
+		// tunnel server here (see tunnelTLSServerName). A warning whenever the
+		// config is built, so an operator sees that the mode is unverified.
+		log.Warn().Str("target", controlAddr).
+			Msg("Tunnel control connection is not certificate-verified (plain-mode appliance or local server): anyone on the network path can impersonate the tunnel server. Use the appliance's TLS mode to verify it")
 	}
 
 	configBuilder := TunnelConfigBuilder{

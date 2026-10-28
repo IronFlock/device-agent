@@ -77,7 +77,7 @@ Usage of ./device-agent:
   -prettyLogging
        enables the pretty console writing, intended for debugging
   -profiling
-       sets up a pprof webserver on the defined port
+       sets up a pprof webserver on 127.0.0.1 at the defined port
   -profilingPort uint
        port of the profiling service (default 80)
   -remoteUpdateURL string
