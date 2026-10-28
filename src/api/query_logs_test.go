@@ -48,9 +48,18 @@ func payloadOf(t *testing.T, res *messenger.InvokeResult) common.Dict {
 	return payload
 }
 
+// newAppLogsEx is a privileged External on a device where prod_1_logapp is
+// installed — the only kind of container the log procedures may read.
+func newAppLogsEx(t *testing.T) (*External, *mocks.Container) {
+	t.Helper()
+	ex, cont, db := newLogManagerEx(t, true)
+	seedApp(t, db, 1, "logapp", common.PROD)
+	return ex, cont
+}
+
 func TestQueryAppLogsHandler(t *testing.T) {
 	t.Run("returns a windowed slice with its provenance", func(t *testing.T) {
-		ex, cont, _ := newLogManagerEx(t, true)
+		ex, cont := newAppLogsEx(t)
 		expectLogs(cont, stampedBody(10))
 
 		res, err := ex.queryAppLogsHandler(context.Background(), messenger.Result{
@@ -84,7 +93,7 @@ func TestQueryAppLogsHandler(t *testing.T) {
 			"float64": float64(3),
 			"string":  "3",
 		} {
-			ex, cont, _ := newLogManagerEx(t, true)
+			ex, cont := newAppLogsEx(t)
 			expectLogs(cont, stampedBody(10))
 
 			res, err := ex.queryAppLogsHandler(context.Background(), messenger.Result{
@@ -101,7 +110,7 @@ func TestQueryAppLogsHandler(t *testing.T) {
 	})
 
 	t.Run("accepts a relative window", func(t *testing.T) {
-		ex, cont, _ := newLogManagerEx(t, true)
+		ex, cont := newAppLogsEx(t)
 		expectLogs(cont, stampedBody(4))
 
 		res, err := ex.queryAppLogsHandler(context.Background(), messenger.Result{
@@ -165,6 +174,21 @@ func TestQueryAppLogsHandler(t *testing.T) {
 			require.Error(t, err, name)
 			assert.Nil(t, res, name)
 		}
+	})
+
+	// On an appliance the agent's host also runs the platform. A READ privilege
+	// on the device reaches its apps' logs, never the platform's.
+	t.Run("answers a container that is no app here as not found, unread", func(t *testing.T) {
+		ex, _ := newAppLogsEx(t)
+
+		res, err := ex.queryAppLogsHandler(context.Background(), messenger.Result{
+			Details:   systemDetails(),
+			Arguments: []interface{}{map[string]interface{}{"containerName": "ironflock-postgres-1"}},
+		})
+
+		require.Error(t, err)
+		assert.Nil(t, res)
+		assert.True(t, errdefs.IsContainerNotFound(err))
 	})
 
 	t.Run("denies an unprivileged caller before reading anything", func(t *testing.T) {
