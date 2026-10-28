@@ -7,7 +7,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -623,36 +622,12 @@ func (c *Compose) DownRemoveOrphansContext(ctx context.Context, dockerComposePat
 // caller predating time-windowed queries expects. Since and Until are RFC3339
 // or Unix-seconds strings: resolve relative durations with common.ParseLogTime
 // before filling them in, so the device's clock is applied exactly once and the
-// same absolute window reaches both the Docker and the compose path.
+// same absolute window reaches every container a read covers.
 type LogQuery struct {
 	Tail       uint64
 	Since      string
 	Until      string
 	Timestamps bool
-}
-
-// ComposeArgs renders the query as `docker compose logs` flags.
-//
-// --no-color is unconditional: compose only auto-disables colour when it
-// detects a TTY, and an ANSI escape that survives into a log line is noise for
-// every consumer we have.
-func (q LogQuery) ComposeArgs() []string {
-	args := []string{"logs", "--no-color"}
-	if q.Tail > 0 {
-		args = append(args, "--tail", strconv.FormatUint(q.Tail, 10))
-	} else {
-		args = append(args, "--tail", "all")
-	}
-	if q.Timestamps {
-		args = append(args, "--timestamps")
-	}
-	if q.Since != "" {
-		args = append(args, "--since", q.Since)
-	}
-	if q.Until != "" {
-		args = append(args, "--until", q.Until)
-	}
-	return args
 }
 
 // DockerOptions renders the query as option keys for Container.Logs.
@@ -685,39 +660,15 @@ func ListComposeProjectContainers(ctx context.Context, cont Container, composeAp
 	project := common.NormalizeComposeProjectName(composeAppName)
 	return cont.ListContainers(ctx, common.Dict{
 		"all":     true,
-		"filters": filters.NewArgs(filters.Arg("label", "com.docker.compose.project="+project)),
+		"filters": filters.NewArgs(filters.Arg("label", ComposeProjectLabel+"="+project)),
 	})
 }
 
-// ComposeConfigFilesLabel carries the compose file(s) a container was created
-// from — the same value `docker compose ls` reports as ConfigFiles.
-const ComposeConfigFilesLabel = "com.docker.compose.project.config_files"
-
-// Logs reads the logs of a whole compose project.
-//
-// Every service in the project is included, each line prefixed with its service
-// name — for a multi-container app that prefix is the only thing identifying
-// which service spoke, so it is deliberately kept. Output is CombinedOutput, so
-// compose's own progress and warning text on stderr is interleaved with the
-// container output.
-func (c *Compose) Logs(ctx context.Context, dockerComposePath string, query LogQuery) (io.ReadCloser, error) {
-	binary := c.binary
-	if binary == "" {
-		binary = "docker"
-	}
-
-	args := append([]string{"compose", "-f", dockerComposePath}, query.ComposeArgs()...)
-
-	output, err := exec.CommandContext(ctx, binary, args...).CombinedOutput() //nolint:gosec // G204: fixed docker compose CLI; arguments are compose file paths and fixed flags, values as separate argv entries
-	if err != nil {
-		return nil, err
-	}
-
-	reader := strings.NewReader(string(output))
-	readCloser := io.NopCloser(reader)
-
-	return readCloser, nil
-}
+// Labels docker compose stamps on every container it creates.
+const (
+	ComposeProjectLabel = "com.docker.compose.project"
+	ComposeServiceLabel = "com.docker.compose.service"
+)
 
 func (c *Compose) LogStream(dockerComposePath string) (chan string, error) {
 	// c.logStreamMapMutex.Lock()

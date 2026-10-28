@@ -2,14 +2,17 @@ package logging
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"errors"
 	"io"
 	"reagent/container"
 	"reagent/errdefs"
+	"sort"
 	"strings"
 	"time"
 
+	"github.com/docker/docker/pkg/stdcopy"
 	"github.com/rs/zerolog/log"
 )
 
@@ -21,9 +24,10 @@ import (
 // SQLite LogHistory table is a single JSON blob per app/stage with no timestamp
 // column, written only when a log stream ends. Docker's json-file driver is the
 // one store on the device that stamps every record, so a query goes there
-// first, falls back to the compose CLI for multi-container apps, and only drops
-// to the agent's history when the container is gone — flagging that the
-// requested window was NOT applied rather than pretending it was.
+// first — to the app's container, or to every container of a multi-container
+// app — and only drops to the agent's history when the containers are gone,
+// flagging that the requested window was NOT applied rather than pretending it
+// was.
 
 const (
 	// MaxQueryLines bounds the lines a single query may return, before the byte
@@ -106,10 +110,12 @@ func (lm *LogManager) QueryLogs(ctx context.Context, request LogQueryRequest) (L
 		Until:      formatBound(request.Until),
 	}
 
-	lines, source, err := lm.readWindow(ctx, request.ContainerName, query)
+	read, err := lm.readWindow(ctx, request.ContainerName, query)
 	if err != nil {
 		return LogQueryResult{}, err
 	}
+
+	lines := read.Lines
 
 	// Drop the newest `Offset` lines, then keep the newest `tail` of what is left.
 	if request.Offset > 0 {
@@ -128,17 +134,12 @@ func (lm *LogManager) QueryLogs(ctx context.Context, request LogQueryRequest) (L
 
 	lines, trimmedBytes := trimToBytes(lines, MaxQueryBytes)
 
-	result := LogQueryResult{
-		Lines:     lines,
-		Source:    source,
-		Truncated: truncated || trimmedBytes,
-	}
-
-	if source == sourceDocker {
-		result.OldestAvailable = lm.oldestAvailable(ctx, request.ContainerName)
-	}
-
-	return result, nil
+	return LogQueryResult{
+		Lines:           lines,
+		Source:          read.Source,
+		Truncated:       truncated || trimmedBytes,
+		OldestAvailable: read.OldestAvailable,
+	}, nil
 }
 
 const (
@@ -147,7 +148,8 @@ const (
 	sourceHistory = "history"
 )
 
-// readWindow tries Docker, then compose, then the agent's own history.
+// readWindow tries Docker, then the containers of a compose project, then the
+// agent's own history. Its answer is not yet trimmed to the caps.
 //
 // The probe order is self-detecting rather than asking the app store what kind
 // of app this is: a compose project has no container under the plain name, so
@@ -157,59 +159,149 @@ func (lm *LogManager) readWindow(
 	ctx context.Context,
 	containerName string,
 	query container.LogQuery,
-) ([]string, string, error) {
+) (LogQueryResult, error) {
 	reader, err := lm.Container.Logs(ctx, containerName, query.DockerOptions())
 	if err == nil {
-		return scanLines(reader), sourceDocker, nil
+		return LogQueryResult{
+			Lines:           readLogLines(reader),
+			Source:          sourceDocker,
+			OldestAvailable: lm.oldestAvailable(ctx, containerName),
+		}, nil
 	}
 
 	if !errdefs.IsContainerNotFound(err) {
-		return nil, "", err
+		return LogQueryResult{}, err
 	}
 
-	composeReader, composeErr := lm.composeLogs(ctx, containerName, query)
+	lines, oldest, composeErr := lm.composeLogs(ctx, containerName, query)
 	if composeErr == nil {
-		return scanLines(composeReader), sourceCompose, nil
+		return LogQueryResult{Lines: lines, Source: sourceCompose, OldestAvailable: oldest}, nil
 	}
 
-	log.Debug().Err(composeErr).Msgf("no compose project for %s, falling back to stored history", containerName)
+	if !errors.Is(composeErr, errNoComposeProject) {
+		// The project's containers exist but could not be read. Serving history
+		// here would present an empty or stale log as the app's answer and hide
+		// the failure that matters.
+		return LogQueryResult{}, composeErr
+	}
 
 	history, historyErr := lm.GetLogHistory(containerName)
 	if historyErr != nil {
 		// Report the reason the *live* read failed: that the container is gone is
 		// the useful fact, not that a fallback store was also empty.
-		return nil, "", err
+		return LogQueryResult{}, err
 	}
 
-	return history, sourceHistory, nil
+	return LogQueryResult{Lines: history, Source: sourceHistory}, nil
 }
 
-// composeLogs reads a compose app's logs, finding its compose file through the
-// label Docker keeps on every container of the project. That lookup is one
-// Docker API call; the `docker compose ls` it replaces was a CLI spawn of its
-// own, paid before the `compose logs` spawn that does the actual read.
-func (lm *LogManager) composeLogs(ctx context.Context, containerName string, query container.LogQuery) (io.ReadCloser, error) {
+// errNoComposeProject means no container carries the app's compose project
+// label: the app is not a compose app, or its containers are gone.
+var errNoComposeProject = errors.New("compose project not found")
+
+// composeLogs reads every container of a compose app through the Docker API and
+// merges them into one timeline, newest Tail lines across the whole app. Each
+// line carries the prefix `docker compose logs` gives it ("web-1  | …"): for a
+// multi-container app that prefix is the only thing saying which service spoke,
+// and the console's live tail, which follows `compose logs -f`, prints the same.
+//
+// This used to shell out to `docker compose logs`. That re-parses the compose
+// file — without the --env-file the app was started with — and costs two
+// process spawns that run to seconds on a loaded device; any failure fell
+// through to the stored history, which for a compose app is usually empty, so
+// the logs looked absent while the containers were right there. The daemon
+// needs no compose file, and can also say how far back each container's log
+// goes, which the CLI could not.
+//
+// Every container is read with timestamps because the merge needs them; they
+// are dropped again when the caller did not ask for them.
+func (lm *LogManager) composeLogs(ctx context.Context, containerName string, query container.LogQuery) ([]string, time.Time, error) {
 	containers, err := container.ListComposeProjectContainers(ctx, lm.Container, containerName+"_compose")
 	if err != nil {
-		return nil, err
+		return nil, time.Time{}, err
 	}
 
+	if len(containers) == 0 {
+		return nil, time.Time{}, errNoComposeProject
+	}
+
+	stamped := query
+	stamped.Timestamps = true
+
+	var merged []composeLine
+	var oldest time.Time
+
 	for _, c := range containers {
-		if configFiles := c.Labels[container.ComposeConfigFilesLabel]; configFiles != "" {
-			return lm.Container.Compose().Logs(ctx, configFiles, query)
+		reader, err := lm.Container.Logs(ctx, c.ID, stamped.DockerOptions())
+		if err != nil {
+			// Removed between the listing and the read: nothing left to say.
+			if errdefs.IsContainerNotFound(err) {
+				continue
+			}
+			return nil, time.Time{}, err
+		}
+
+		prefix := composeLogPrefix(c)
+
+		// A record Docker split for length carries its own stamp, but should one
+		// arrive without, it stays next to the line it continues.
+		var last time.Time
+		for _, line := range readLogLines(reader) {
+			if at := parseLeadingTimestamp(line); !at.IsZero() {
+				last = at
+			}
+			merged = append(merged, composeLine{at: last, prefix: prefix, text: line})
+		}
+
+		// The app's log reaches back as far as its longest-lived container's.
+		first := lm.oldestAvailable(ctx, c.ID)
+		if !first.IsZero() && (oldest.IsZero() || first.Before(oldest)) {
+			oldest = first
 		}
 	}
 
-	return nil, errors.New("compose project not found")
+	sort.SliceStable(merged, func(i, j int) bool { return merged[i].at.Before(merged[j].at) })
+
+	if query.Tail > 0 && uint64(len(merged)) > query.Tail {
+		merged = merged[uint64(len(merged))-query.Tail:]
+	}
+
+	lines := make([]string, 0, len(merged))
+	for _, entry := range merged {
+		text := entry.text
+		if !query.Timestamps {
+			text = dropLeadingTimestamp(text)
+		}
+		lines = append(lines, entry.prefix+text)
+	}
+
+	return lines, oldest, nil
+}
+
+type composeLine struct {
+	at     time.Time
+	prefix string
+	text   string
+}
+
+// composeLogPrefix is what `docker compose logs` puts in front of a container's
+// lines: the container name without its project ("web-1"), or the whole name
+// when the service sets its own container_name.
+func composeLogPrefix(c container.ContainerResult) string {
+	name := c.Labels[container.ComposeServiceLabel]
+	if len(c.Names) > 0 {
+		full := strings.TrimPrefix(c.Names[0], "/")
+		name = strings.TrimPrefix(full, c.Labels[container.ComposeProjectLabel]+"-")
+	}
+
+	return name + "  | "
 }
 
 // oldestAvailable reads the first line the daemon will still serve.
 //
 // Docker offers no "head", so this opens an unbounded stream and closes it
 // after one line. Because the daemon streams, that costs a single line rather
-// than the whole log. The compose path has no equivalent — its CLI buffers the
-// entire output before returning — so compose answers leave this unset and the
-// caller reports the retention floor as unknown.
+// than the whole log.
 func (lm *LogManager) oldestAvailable(ctx context.Context, containerName string) time.Time {
 	reader, err := lm.Container.Logs(ctx, containerName, container.LogQuery{Timestamps: true}.DockerOptions())
 	if err != nil {
@@ -242,25 +334,66 @@ func parseLeadingTimestamp(line string) time.Time {
 	return parsed
 }
 
-// stripStreamHeader removes Docker's 8-byte multiplexing frame header.
-//
-// Containers the agent starts get Tty: true (apps/run_app.go), which turns
-// multiplexing off, so in practice this is a no-op. It is here for containers
-// created some other way, where the header would otherwise arrive as binary
-// inside a log line and be handed to whoever asked for the logs.
-//
-// The header is [stream, 0, 0, 0, size0..size3]. Matching on the three NUL
-// bytes rather than trimming a cutset of control characters matters: the four
-// size bytes are arbitrary and are frequently printable, so a cutset trim stops
-// in the wrong place and corrupts the line.
-func stripStreamHeader(line string) string {
-	if len(line) < 8 {
+// dropLeadingTimestamp removes the stamp parseLeadingTimestamp reads. A line
+// without one is returned unchanged.
+func dropLeadingTimestamp(line string) string {
+	field, rest, _ := strings.Cut(line, " ")
+	if _, err := time.Parse(time.RFC3339Nano, field); err != nil {
 		return line
 	}
-	if line[0] > 2 || line[1] != 0 || line[2] != 0 || line[3] != 0 {
+
+	return rest
+}
+
+// stripStreamHeader removes Docker's 8-byte multiplexing frame header from the
+// start of a line. readLogLines demultiplexes whole streams; this covers the
+// single line oldestAvailable reads without doing so.
+func stripStreamHeader(line string) string {
+	if len(line) < 8 || !isStreamHeader([]byte(line[:8])) {
 		return line
 	}
 	return line[8:]
+}
+
+// isStreamHeader reports whether head is a multiplexing frame header:
+// [stream, 0, 0, 0, size0..size3].
+//
+// Matching on the three NUL bytes rather than on a cutset of control characters
+// matters: the four size bytes are arbitrary and frequently printable. A TTY
+// stream cannot be mistaken for one when Docker stamps it — every line then
+// starts with a digit.
+func isStreamHeader(head []byte) bool {
+	return len(head) >= 8 && head[0] <= 2 && head[1] == 0 && head[2] == 0 && head[3] == 0
+}
+
+// readLogLines reads a log stream to the end, demultiplexing it first when
+// Docker framed it.
+//
+// A container without a TTY gets a multiplexed stream: every write is framed
+// behind an 8-byte header, and one frame can hold several lines or part of one,
+// so stripping a header off the front of each line is not enough. Containers
+// the agent starts itself run with Tty: true (apps/run_app.go) and stream raw;
+// compose services only get a TTY when their author asked for one.
+func readLogLines(reader io.ReadCloser) []string {
+	defer func() {
+		if err := reader.Close(); err != nil {
+			log.Debug().Err(err).Msg("failed to close log reader")
+		}
+	}()
+
+	buffered := bufio.NewReader(reader)
+	head, _ := buffered.Peek(8)
+	if !isStreamHeader(head) {
+		return scanLines(buffered)
+	}
+
+	var plain bytes.Buffer
+	if _, err := stdcopy.StdCopy(&plain, &plain, buffered); err != nil {
+		// What was demultiplexed before the failure is still worth returning.
+		log.Debug().Err(err).Msg("log demultiplexing ended early")
+	}
+
+	return scanLines(&plain)
 }
 
 // formatBound renders a window bound the way the Docker daemon and the compose
@@ -272,13 +405,7 @@ func formatBound(bound time.Time) string {
 	return bound.UTC().Format(time.RFC3339)
 }
 
-func scanLines(reader io.ReadCloser) []string {
-	defer func() {
-		if err := reader.Close(); err != nil {
-			log.Debug().Err(err).Msg("failed to close log reader")
-		}
-	}()
-
+func scanLines(reader io.Reader) []string {
 	var lines []string
 	scanner := bufio.NewScanner(reader)
 	scanner.Buffer(make([]byte, 0, 64*1024), maxLogLineBytes)
