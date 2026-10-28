@@ -31,6 +31,15 @@ func stampedLines(count int) string {
 	return strings.Join(lines, "\n") + "\n"
 }
 
+// newAppManager is a LogManager on a device where prod_1_logapp is installed —
+// the only kind of container a log read may name.
+func newAppManager(t *testing.T) (*LogManager, *mocks.Container) {
+	t.Helper()
+	lm, cont, _, db := newTestManager(t)
+	addApp(t, db, 1, "logapp", common.PROD)
+	return lm, cont
+}
+
 func reader(body string) io.ReadCloser {
 	return io.NopCloser(strings.NewReader(body))
 }
@@ -50,7 +59,7 @@ func alwaysReturn(cont *mocks.Container, containerName string, body string) {
 
 func TestQueryLogsTailAndOffset(t *testing.T) {
 	t.Run("returns the newest tail and reports the trim", func(t *testing.T) {
-		lm, cont, _, _ := newTestManager(t)
+		lm, cont := newAppManager(t)
 		alwaysReturn(cont, "prod_1_logapp", stampedLines(10))
 
 		result, err := lm.QueryLogs(context.Background(), LogQueryRequest{
@@ -69,7 +78,7 @@ func TestQueryLogsTailAndOffset(t *testing.T) {
 	// Docker has no offset, so paging back means over-reading and discarding the
 	// newest lines here. Ten lines, drop the newest two, then keep three: 5,6,7.
 	t.Run("offset pages further back", func(t *testing.T) {
-		lm, cont, _, _ := newTestManager(t)
+		lm, cont := newAppManager(t)
 		alwaysReturn(cont, "prod_1_logapp", stampedLines(10))
 
 		result, err := lm.QueryLogs(context.Background(), LogQueryRequest{
@@ -85,7 +94,7 @@ func TestQueryLogsTailAndOffset(t *testing.T) {
 	})
 
 	t.Run("an offset past the whole log yields nothing rather than the newest lines", func(t *testing.T) {
-		lm, cont, _, _ := newTestManager(t)
+		lm, cont := newAppManager(t)
 		alwaysReturn(cont, "prod_1_logapp", stampedLines(5))
 
 		result, err := lm.QueryLogs(context.Background(), LogQueryRequest{
@@ -101,7 +110,7 @@ func TestQueryLogsTailAndOffset(t *testing.T) {
 	// The read itself is bounded, not just the answer: asking to page back a
 	// million lines must not pull a million lines off the daemon.
 	t.Run("bounds the read, not only the result", func(t *testing.T) {
-		lm, cont, _, _ := newTestManager(t)
+		lm, cont := newAppManager(t)
 
 		// Capture the FIRST call only — the second is the unbounded retention
 		// probe, which legitimately asks for everything.
@@ -127,7 +136,7 @@ func TestQueryLogsTailAndOffset(t *testing.T) {
 
 func TestQueryLogsWindow(t *testing.T) {
 	t.Run("passes the window through as absolute bounds and asks for timestamps", func(t *testing.T) {
-		lm, cont, _, _ := newTestManager(t)
+		lm, cont := newAppManager(t)
 
 		// Only the FIRST call is the window; the second is the unbounded
 		// retention probe and deliberately carries no bounds.
@@ -158,7 +167,7 @@ func TestQueryLogsWindow(t *testing.T) {
 	// closed after one line — that is what separates "the device was quiet" from
 	// "your window is older than what survived rotation".
 	t.Run("reports the oldest line the device can still serve", func(t *testing.T) {
-		lm, cont, _, _ := newTestManager(t)
+		lm, cont := newAppManager(t)
 		alwaysReturn(cont, "prod_1_logapp", stampedLines(4))
 
 		result, err := lm.QueryLogs(context.Background(), LogQueryRequest{ContainerName: "prod_1_logapp"})
@@ -192,7 +201,7 @@ func TestQueryLogsFallback(t *testing.T) {
 	})
 
 	t.Run("surfaces a real docker failure instead of quietly serving history", func(t *testing.T) {
-		lm, cont, _, _ := newTestManager(t)
+		lm, cont := newAppManager(t)
 		cont.EXPECT().Logs(mock.Anything, "prod_1_logapp", mock.Anything).
 			Return(nil, errors.New("permission denied on the docker socket"))
 
@@ -207,6 +216,59 @@ func TestQueryLogsFallback(t *testing.T) {
 		_, err := lm.QueryLogs(context.Background(), LogQueryRequest{ContainerName: "  "})
 
 		assert.Error(t, err)
+	})
+}
+
+// The container name comes from the caller, and Docker answers for any
+// container on the host — on an appliance, the platform's own as well. A read
+// reaches only the containers of apps installed on this device. The container
+// mock is strict, so a refused name that still reached Docker fails the test.
+func TestLogReadsStayWithinApps(t *testing.T) {
+	foreign := []string{
+		"ironflock-postgres-1",        // a platform container on an appliance
+		"prod_9_otherapp",             // shaped like an app, but not installed
+		"prod_1_otherapp",             // an installed app's key, another name
+		"dev_1_logapp",                // the installed app, but another stage
+		"pub_1_logapp",                // a release build of a PROD-only app
+		"/prod_1_logapp",              // not the exact name the agent gives it
+		"prod_1_logapp_compose-web-1", // one service of it, not the app
+	}
+
+	t.Run("a windowed read refuses any other container as not found", func(t *testing.T) {
+		for _, name := range foreign {
+			lm, _ := newAppManager(t)
+
+			_, err := lm.QueryLogs(context.Background(), LogQueryRequest{ContainerName: name})
+
+			assert.True(t, errdefs.IsContainerNotFound(err), "%s: %v", name, err)
+		}
+	})
+
+	// A console that opens before the agent knows the app must still go on to
+	// subscribe, so an app-shaped name keeps getting the empty list an unknown
+	// app always got. A name that does not even parse was, and is, an error.
+	t.Run("the history read answers any other container with nothing", func(t *testing.T) {
+		for _, name := range foreign {
+			lm, _ := newAppManager(t)
+
+			history, err := lm.GetLogHistory(name)
+
+			if _, _, _, parseErr := common.ParseContainerName(name); parseErr == nil {
+				require.NoError(t, err, name)
+			}
+			assert.Empty(t, history, name)
+		}
+	})
+
+	t.Run("a DEV app's release build is its own", func(t *testing.T) {
+		lm, cont, _, db := newTestManager(t)
+		addApp(t, db, 1, "logapp", common.DEV)
+		alwaysReturn(cont, "pub_1_logapp", stampedLines(2))
+
+		result, err := lm.QueryLogs(context.Background(), LogQueryRequest{ContainerName: "pub_1_logapp"})
+
+		require.NoError(t, err)
+		assert.Len(t, result.Lines, 2)
 	})
 }
 
@@ -240,7 +302,7 @@ func TestQueryLogsCompose(t *testing.T) {
 	const db = "2026-08-04T09:00:00Z db starting\n2026-08-04T09:00:02Z db ready\n"
 
 	t.Run("merges every service into one timeline", func(t *testing.T) {
-		lm, cont, _, _ := newTestManager(t)
+		lm, cont := newAppManager(t)
 		composeProject(cont, composeContainer("web"), composeContainer("db"))
 		alwaysReturn(cont, "web-id", web)
 		alwaysReturn(cont, "db-id", db)
@@ -262,7 +324,7 @@ func TestQueryLogsCompose(t *testing.T) {
 	// Docker applies the tail per container, so each is over-read; the tail
 	// that matters is the app's.
 	t.Run("keeps the newest lines of the app, not of each service", func(t *testing.T) {
-		lm, cont, _, _ := newTestManager(t)
+		lm, cont := newAppManager(t)
 		composeProject(cont, composeContainer("web"), composeContainer("db"))
 		alwaysReturn(cont, "web-id", web)
 		alwaysReturn(cont, "db-id", db)
@@ -277,7 +339,7 @@ func TestQueryLogsCompose(t *testing.T) {
 	})
 
 	t.Run("drops the stamps the merge needed when none were asked for", func(t *testing.T) {
-		lm, cont, _, _ := newTestManager(t)
+		lm, cont := newAppManager(t)
 		composeProject(cont, composeContainer("web"), composeContainer("db"))
 
 		var asked []common.Dict
@@ -311,7 +373,7 @@ func TestQueryLogsCompose(t *testing.T) {
 	// Docker frames its stream — and a frame can hold several lines, or end in
 	// the middle of one.
 	t.Run("demultiplexes a service without a TTY", func(t *testing.T) {
-		lm, cont, _, _ := newTestManager(t)
+		lm, cont := newAppManager(t)
 		composeProject(cont, composeContainer("worker"))
 
 		var framed bytes.Buffer
@@ -334,7 +396,7 @@ func TestQueryLogsCompose(t *testing.T) {
 	})
 
 	t.Run("names a service with its own container_name as compose does", func(t *testing.T) {
-		lm, cont, _, _ := newTestManager(t)
+		lm, cont := newAppManager(t)
 		broker := composeContainer("broker")
 		broker.Names = []string{"/my-broker"}
 		composeProject(cont, broker)
@@ -347,7 +409,7 @@ func TestQueryLogsCompose(t *testing.T) {
 	})
 
 	t.Run("skips a container removed between listing and read", func(t *testing.T) {
-		lm, cont, _, _ := newTestManager(t)
+		lm, cont := newAppManager(t)
 		composeProject(cont, composeContainer("web"), composeContainer("db"))
 		cont.EXPECT().Logs(mock.Anything, "web-id", mock.Anything).
 			Return(nil, errdefs.ContainerNotFound(errors.New("No such container")))
@@ -363,7 +425,7 @@ func TestQueryLogsCompose(t *testing.T) {
 	// The containers are there; serving the (usually empty) stored history
 	// would present a failed read as an app that said nothing.
 	t.Run("surfaces a failed read instead of serving history", func(t *testing.T) {
-		lm, cont, _, _ := newTestManager(t)
+		lm, cont := newAppManager(t)
 		composeProject(cont, composeContainer("web"))
 		cont.EXPECT().Logs(mock.Anything, "web-id", mock.Anything).
 			Return(nil, errors.New("permission denied on the docker socket"))
@@ -405,7 +467,7 @@ func TestQueryLogsTimestampToggle(t *testing.T) {
 	// The console needs them off; a diagnosis needs them on. Either way the
 	// retention floor still comes from the separate probe.
 	t.Run("timestamps can be turned off for the window", func(t *testing.T) {
-		lm, cont, _, _ := newTestManager(t)
+		lm, cont := newAppManager(t)
 
 		var seen common.Dict
 		cont.EXPECT().Logs(mock.Anything, "prod_1_logapp", mock.Anything).

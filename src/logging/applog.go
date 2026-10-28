@@ -755,6 +755,13 @@ func (lm *LogManager) GetLogHistory(containerName string) ([]string, error) {
 
 	stringLogEntries := logEntriesToString(history)
 
+	// Docker is only asked about an app's own container. Anything else keeps
+	// the empty answer it always got for an unknown app: a console that opens
+	// before the agent knows the app must still go on to subscribe.
+	if lm.AppStore.CheckAppContainer(containerName) != nil {
+		return stringLogEntries, nil
+	}
+
 	if containsOnlyAgentLogs || len(history) == 0 {
 		ctx := context.Background()
 		options := common.Dict{"follow": false, "stdout": true, "stderr": true, "tail": "50"}

@@ -150,6 +150,12 @@ func (ex *External) requestTerminalSessHandler(ctx context.Context, response mes
 		return nil, errors.New("failed to parse containerName")
 	}
 
+	// A shell only in an app's own container: Docker would exec into any
+	// container on the host, the platform's own on an appliance.
+	if err := ex.AppManager.AppStore.CheckAppContainer(containerName); err != nil {
+		return nil, err
+	}
+
 	termSess, err := ex.TerminalManager.RequestTerminalSession(containerName, fmt.Sprint(response.Details["caller_authid"]))
 	if err != nil {
 		return nil, err

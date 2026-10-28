@@ -84,8 +84,8 @@ type LogQueryResult struct {
 
 // QueryLogs reads a bounded, optionally time-windowed slice of a container's logs.
 func (lm *LogManager) QueryLogs(ctx context.Context, request LogQueryRequest) (LogQueryResult, error) {
-	if strings.TrimSpace(request.ContainerName) == "" {
-		return LogQueryResult{}, errors.New("container name is empty")
+	if err := lm.AppStore.CheckAppContainer(request.ContainerName); err != nil {
+		return LogQueryResult{}, err
 	}
 
 	tail := request.Tail

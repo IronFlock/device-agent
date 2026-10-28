@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"reagent/common"
+	"reagent/errdefs"
 	"reagent/messenger"
 	"reagent/messenger/topics"
 	"reagent/persistence"
@@ -67,6 +68,43 @@ func (am *AppStore) GetApp(appKey uint64, stage common.Stage) (*common.App, erro
 	am.apps = append(am.apps, app)
 
 	return app, nil
+}
+
+// CheckAppContainer refuses a container name that does not belong to an app
+// installed on this device.
+//
+// Procedures that act on a container — its logs, a shell in it — take the name
+// from their caller, and Docker answers for any container on the host. On an
+// appliance that host also runs the platform itself — its database, router,
+// registry — which no privilege on the device may reach. Any other name is
+// answered "not found", so the answer does not tell a caller which other
+// containers exist either.
+func (am *AppStore) CheckAppContainer(containerName string) error {
+	notFound := errdefs.ContainerNotFound(fmt.Errorf("no app container %q on this device", containerName))
+
+	stage, appKey, _, err := common.ParseContainerName(containerName)
+	if err != nil || stage == "" {
+		return notFound
+	}
+
+	app, err := am.GetApp(appKey, stage)
+	if err != nil {
+		return err
+	}
+	if app == nil {
+		return notFound
+	}
+
+	if containerName == common.BuildContainerName(stage, appKey, app.AppName) {
+		return nil
+	}
+
+	// A DEV app's release build logs under pub_, which parses to DEV.
+	if stage == common.DEV && containerName == common.BuildContainerName("pub", appKey, app.AppName) {
+		return nil
+	}
+
+	return notFound
 }
 
 func (am *AppStore) AddApp(payload common.TransitionPayload) (*common.App, error) {

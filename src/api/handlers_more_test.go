@@ -425,6 +425,41 @@ func TestWriteToFileHandler(t *testing.T) {
 		return ex, &fs
 	}
 
+	// The name is joined onto the build dir. Anything but a plain file name
+	// would let a caller write wherever the agent can — as root, on most devices.
+	t.Run("refuses a file name that leaves the build dir", func(t *testing.T) {
+		root := t.TempDir()
+		buildDir := filepath.Join(root, "build")
+		require.NoError(t, os.Mkdir(buildDir, 0o755))
+
+		for _, fileName := range []string{
+			"../escaped.tgz",
+			"../../escaped.tgz",
+			"sub/escaped.tgz",
+			filepath.Join(root, "escaped.tgz"),
+			"..",
+			".",
+			"",
+		} {
+			ex, fs := newWriteEx(t, buildDir)
+
+			res, err := ex.writeToFileHandler(context.Background(), messenger.Result{
+				Details:   systemDetails(),
+				Arguments: []interface{}{"BEGIN", fileName, "dev_100_myapp", uint64(4), "t1"},
+			})
+
+			require.Error(t, err, fileName)
+			assert.Nil(t, res, fileName)
+			assert.Nil(t, fs.GetActiveTransfer("dev_100_myapp"), fileName)
+		}
+
+		_, statErr := os.Stat(filepath.Join(root, "escaped.tgz"))
+		assert.True(t, os.IsNotExist(statErr), "nothing was written next to the build dir")
+		entries, readErr := os.ReadDir(buildDir)
+		require.NoError(t, readErr)
+		assert.Empty(t, entries)
+	})
+
 	t.Run("writes a hex-decoded data chunk to disk", func(t *testing.T) {
 		buildDir := t.TempDir()
 		ex, fs := newWriteEx(t, buildDir)

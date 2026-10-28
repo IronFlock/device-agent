@@ -8,11 +8,13 @@ import (
 	"io"
 	"net"
 	"os/exec"
+	"reagent/apps"
 	"reagent/common"
 	"reagent/container"
 	"reagent/errdefs"
 	"reagent/messenger"
 	"reagent/messenger/topics"
+	"reagent/store"
 	"reagent/terminal"
 	"reagent/testutil/fakes"
 	"reagent/testutil/mocks"
@@ -361,19 +363,23 @@ func TestRequestTerminalSessHandlerRecordsTheOwner(t *testing.T) {
 				}
 			})
 			docker := mocks.NewContainer(t)
-			docker.EXPECT().ExecCommand(mock.Anything, "app_1_prod", []string{"cat", "/etc/shells"}).Return(container.HijackedResponse{
+			docker.EXPECT().ExecCommand(mock.Anything, "dev_1_shellapp", []string{"cat", "/etc/shells"}).Return(container.HijackedResponse{
 				Conn:   shells,
 				Reader: bufio.NewReader(strings.NewReader("/bin/sh\n/bin/bash\n")),
 			}, nil).Once()
-			docker.EXPECT().ExecAttach(mock.Anything, "app_1_prod", "/bin/bash").Return(container.HijackedResponse{
+			docker.EXPECT().ExecAttach(mock.Anything, "dev_1_shellapp", "/bin/bash").Return(container.HijackedResponse{
 				Conn:   attached,
 				Reader: bufio.NewReader(attached),
 			}, nil).Once()
 
 			tm := terminal.NewTerminalManager(fakes.NewMessenger(), docker)
 			_, m := grantPrivilege(true)
-			ex := &External{Privilege: newPrivilege(testConfig(), m), TerminalManager: &tm}
-			tc.result.Arguments = []interface{}{map[string]interface{}{"containerName": "app_1_prod"}}
+			ex := &External{
+				Privilege:       newPrivilege(testConfig(), m),
+				TerminalManager: &tm,
+				AppManager:      appManagerWith(t, 1, "shellapp", common.DEV),
+			}
+			tc.result.Arguments = []interface{}{map[string]interface{}{"containerName": "dev_1_shellapp"}}
 
 			res, err := wrapDetails(ex.requestTerminalSessHandler)(context.Background(), tc.result)
 
@@ -383,6 +389,49 @@ func TestRequestTerminalSessHandlerRecordsTheOwner(t *testing.T) {
 			require.Contains(t, tm.ActiveSessions, sessionID)
 			assert.Equal(t, tc.owner, tm.ActiveSessions[sessionID].Owner)
 			assert.Equal(t, "DEVELOP", requestedPrivilege(t, m))
+		})
+	}
+}
+
+// appManagerWith is an AppManager whose store holds one installed app.
+func appManagerWith(t *testing.T, appKey uint64, appName string, stage common.Stage) *apps.AppManager {
+	t.Helper()
+	db := newLogDB(t)
+	seedApp(t, db, appKey, appName, stage)
+	as := store.NewAppStore(db, fakes.NewMessenger())
+	return &apps.AppManager{AppStore: &as}
+}
+
+// DEVELOP on a device grants a shell in its apps' containers, never in any
+// other container on the host — on an appliance, the platform's own database.
+// The container mock is strict: a refused name that still reached Docker
+// fails the test.
+func TestRequestTerminalSessHandlerStaysWithinApps(t *testing.T) {
+	for _, name := range []string{
+		"ironflock-postgres-1",         // a platform container on an appliance
+		"prod_9_otherapp",              // shaped like an app, but not installed
+		"dev_1_otherapp",               // an installed app's key, another name
+		"prod_1_shellapp",              // the installed app, but another stage
+		"/dev_1_shellapp",              // not the exact name the agent gives it
+		"dev_1_shellapp_compose-web-1", // a container it did not start as the app
+	} {
+		t.Run(name, func(t *testing.T) {
+			tm := terminal.NewTerminalManager(fakes.NewMessenger(), mocks.NewContainer(t))
+			ex := &External{
+				Privilege:       priv(t, true),
+				TerminalManager: &tm,
+				AppManager:      appManagerWith(t, 1, "shellapp", common.DEV),
+			}
+
+			res, err := ex.requestTerminalSessHandler(context.Background(), messenger.Result{
+				Details:   systemDetails(),
+				Arguments: []interface{}{map[string]interface{}{"containerName": name}},
+			})
+
+			require.Error(t, err)
+			assert.Nil(t, res)
+			assert.True(t, errdefs.IsContainerNotFound(err))
+			assert.Empty(t, tm.ActiveSessions)
 		})
 	}
 }
