@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -18,6 +19,7 @@ import (
 
 	"runtime"
 	"runtime/debug"
+	"strconv"
 	"syscall"
 	"time"
 
@@ -110,8 +112,9 @@ func runAgent(cliArgs *config.CommandLineArguments) (*Agent, error) {
 			port = 80
 		}
 
+		server := newProfilingServer(port)
 		safe.Go(func() {
-			err := http.ListenAndServe(fmt.Sprintf(":%d", port), nil) //nolint:gosec // G114: profiling is opt-in (-profiling flag) for local debugging
+			err := server.ListenAndServe()
 			if err != nil {
 				log.Error().Stack().Err(err).Msgf("Failed to init web server")
 			}
@@ -178,6 +181,21 @@ func runAgent(cliArgs *config.CommandLineArguments) (*Agent, error) {
 	benchmark.LogBenchmarkResultsWhenFinished(&generalConfig)
 
 	return agent, nil
+}
+
+// newProfilingServer returns the pprof server (net/http/pprof on the default
+// mux). It listens on the loopback interface only, so it is reachable on the
+// device itself or through an SSH tunnel, never from the network. The write
+// timeout leaves room for the default 30 s CPU profile: pprof refuses a profile
+// longer than the server's WriteTimeout.
+func newProfilingServer(port uint) *http.Server {
+	return &http.Server{
+		Addr:              net.JoinHostPort("127.0.0.1", strconv.FormatUint(uint64(port), 10)),
+		ReadHeaderTimeout: 10 * time.Second,
+		ReadTimeout:       30 * time.Second,
+		WriteTimeout:      5 * time.Minute,
+		IdleTimeout:       2 * time.Minute,
+	}
 }
 
 func checkForUpdateAtStart(cfg *config.Config) {

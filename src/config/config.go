@@ -148,7 +148,7 @@ func GetCliArguments() (*CommandLineArguments, error) {
 	env := flag.String("env", "production", "determines in which environment the agent will operate. Possible values: (production, test, local)")
 	arch := flag.Bool("arch", false, "displays the architecture for which the binary was built")
 	version := flag.Bool("version", false, "displays the current version of the agent")
-	profiling := flag.Bool("profiling", false, "spins up a pprof webserver on the defined port")
+	profiling := flag.Bool("profiling", false, "spins up a pprof webserver on 127.0.0.1 at the defined port")
 	profilingPort := flag.Uint("profilingPort", 80, "port of the profiling service")
 	prettyLogging := flag.Bool("prettyLogging", false, "enables the pretty console writing, intended for debugging")
 	remoteUpdateURL := flag.String("remoteUpdateURL", DefaultUpdateBaseURL, "download base for agent updates (the .flock update_url wins)")
