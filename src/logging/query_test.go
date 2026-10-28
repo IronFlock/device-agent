@@ -1,22 +1,21 @@
 package logging
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
 	"io"
-	"os"
-	"path/filepath"
 	"reagent/common"
 	"reagent/container"
 	"reagent/errdefs"
-	"reagent/testutil/builders"
 	"reagent/testutil/mocks"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/docker/docker/api/types/filters"
+	"github.com/docker/docker/pkg/stdcopy"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
@@ -192,41 +191,6 @@ func TestQueryLogsFallback(t *testing.T) {
 		assert.True(t, result.OldestAvailable.IsZero())
 	})
 
-	// The project's compose file comes from the label Docker keeps on its
-	// containers. `docker compose ls` used to find it: a CLI spawn of its own,
-	// ahead of the `compose logs` spawn — on a small device, seconds of a
-	// console's first load.
-	t.Run("reads a compose project through its label, without compose ls", func(t *testing.T) {
-		lm, cont, _, _ := newTestManager(t)
-
-		dir := t.TempDir()
-		callsFile := filepath.Join(dir, "calls.log")
-		script := fmt.Sprintf("#!/bin/sh\necho \"$@\" >> %q\necho 'web-1  | hello'\n", callsFile)
-		binPath := filepath.Join(dir, "fake-docker")
-		require.NoError(t, os.WriteFile(binPath, []byte(script), 0o755))
-
-		cont.EXPECT().Logs(mock.Anything, "prod_1_logapp", mock.Anything).
-			Return(nil, errdefs.ContainerNotFound(errors.New("No such container")))
-		cont.EXPECT().ListContainers(mock.Anything, mock.MatchedBy(func(options common.Dict) bool {
-			args, ok := options["filters"].(filters.Args)
-			return ok && args.ExactMatch("label", "com.docker.compose.project=prod_1_logapp_compose")
-		})).Return([]container.ContainerResult{{
-			Labels: map[string]string{container.ComposeConfigFilesLabel: "/apps/logapp/docker-compose.json"},
-		}}, nil)
-		cont.EXPECT().Compose().Return(container.NewComposeWithBinary(builders.DefaultTestConfig(), binPath))
-
-		result, err := lm.QueryLogs(context.Background(), LogQueryRequest{ContainerName: "prod_1_logapp", Tail: 10})
-
-		require.NoError(t, err)
-		assert.Equal(t, "compose", result.Source)
-		assert.Equal(t, []string{"web-1  | hello"}, result.Lines)
-
-		calls, err := os.ReadFile(callsFile)
-		require.NoError(t, err)
-		assert.Equal(t, "compose -f /apps/logapp/docker-compose.json logs --no-color --tail 10 --timestamps\n", string(calls),
-			"exactly one CLI spawn, the read itself")
-	})
-
 	t.Run("surfaces a real docker failure instead of quietly serving history", func(t *testing.T) {
 		lm, cont, _, _ := newTestManager(t)
 		cont.EXPECT().Logs(mock.Anything, "prod_1_logapp", mock.Anything).
@@ -244,6 +208,176 @@ func TestQueryLogsFallback(t *testing.T) {
 
 		assert.Error(t, err)
 	})
+}
+
+// composeContainer is one container of the test app's compose project, as the
+// Docker API lists it: named <project>-<service>-1, with a leading slash.
+func composeContainer(service string) container.ContainerResult {
+	return container.ContainerResult{
+		ID:    service + "-id",
+		Names: []string{"/prod_1_logapp_compose-" + service + "-1"},
+		Labels: map[string]string{
+			container.ComposeProjectLabel: "prod_1_logapp_compose",
+			container.ComposeServiceLabel: service,
+		},
+	}
+}
+
+// composeProject makes prod_1_logapp a compose app: Docker knows no container
+// under the plain name, and the project label lists the given ones. Any call to
+// Compose() fails the test — the read must not need the compose CLI.
+func composeProject(cont *mocks.Container, containers ...container.ContainerResult) {
+	cont.EXPECT().Logs(mock.Anything, "prod_1_logapp", mock.Anything).
+		Return(nil, errdefs.ContainerNotFound(errors.New("No such container")))
+	cont.EXPECT().ListContainers(mock.Anything, mock.MatchedBy(func(options common.Dict) bool {
+		args, ok := options["filters"].(filters.Args)
+		return ok && args.ExactMatch("label", "com.docker.compose.project=prod_1_logapp_compose")
+	})).Return(containers, nil)
+}
+
+func TestQueryLogsCompose(t *testing.T) {
+	const web = "2026-08-04T09:00:01Z web listening\n2026-08-04T09:00:03Z web request failed\n"
+	const db = "2026-08-04T09:00:00Z db starting\n2026-08-04T09:00:02Z db ready\n"
+
+	t.Run("merges every service into one timeline", func(t *testing.T) {
+		lm, cont, _, _ := newTestManager(t)
+		composeProject(cont, composeContainer("web"), composeContainer("db"))
+		alwaysReturn(cont, "web-id", web)
+		alwaysReturn(cont, "db-id", db)
+
+		result, err := lm.QueryLogs(context.Background(), LogQueryRequest{ContainerName: "prod_1_logapp"})
+
+		require.NoError(t, err)
+		assert.Equal(t, "compose", result.Source)
+		assert.Equal(t, []string{
+			"db-1  | 2026-08-04T09:00:00Z db starting",
+			"web-1  | 2026-08-04T09:00:01Z web listening",
+			"db-1  | 2026-08-04T09:00:02Z db ready",
+			"web-1  | 2026-08-04T09:00:03Z web request failed",
+		}, result.Lines)
+		// The app's log reaches back as far as its oldest container's does.
+		assert.Equal(t, time.Date(2026, 8, 4, 9, 0, 0, 0, time.UTC), result.OldestAvailable.UTC())
+	})
+
+	// Docker applies the tail per container, so each is over-read; the tail
+	// that matters is the app's.
+	t.Run("keeps the newest lines of the app, not of each service", func(t *testing.T) {
+		lm, cont, _, _ := newTestManager(t)
+		composeProject(cont, composeContainer("web"), composeContainer("db"))
+		alwaysReturn(cont, "web-id", web)
+		alwaysReturn(cont, "db-id", db)
+
+		result, err := lm.QueryLogs(context.Background(), LogQueryRequest{ContainerName: "prod_1_logapp", Tail: 2})
+
+		require.NoError(t, err)
+		assert.Equal(t, []string{
+			"db-1  | 2026-08-04T09:00:02Z db ready",
+			"web-1  | 2026-08-04T09:00:03Z web request failed",
+		}, result.Lines)
+	})
+
+	t.Run("drops the stamps the merge needed when none were asked for", func(t *testing.T) {
+		lm, cont, _, _ := newTestManager(t)
+		composeProject(cont, composeContainer("web"), composeContainer("db"))
+
+		var asked []common.Dict
+		for _, id := range []string{"web-id", "db-id"} {
+			body := map[string]string{"web-id": web, "db-id": db}[id]
+			cont.EXPECT().Logs(mock.Anything, id, mock.Anything).
+				RunAndReturn(func(_ context.Context, _ string, options common.Dict) (io.ReadCloser, error) {
+					asked = append(asked, options)
+					return reader(body), nil
+				})
+		}
+
+		result, err := lm.QueryLogs(context.Background(), LogQueryRequest{
+			ContainerName: "prod_1_logapp",
+			NoTimestamps:  true,
+		})
+
+		require.NoError(t, err)
+		assert.Equal(t, []string{
+			"db-1  | db starting",
+			"web-1  | web listening",
+			"db-1  | db ready",
+			"web-1  | web request failed",
+		}, result.Lines)
+		for _, options := range asked {
+			assert.Equal(t, true, options["timestamps"])
+		}
+	})
+
+	// A compose service runs without a TTY unless its author asked for one, so
+	// Docker frames its stream — and a frame can hold several lines, or end in
+	// the middle of one.
+	t.Run("demultiplexes a service without a TTY", func(t *testing.T) {
+		lm, cont, _, _ := newTestManager(t)
+		composeProject(cont, composeContainer("worker"))
+
+		var framed bytes.Buffer
+		stdout := stdcopy.NewStdWriter(&framed, stdcopy.Stdout)
+		stderr := stdcopy.NewStdWriter(&framed, stdcopy.Stderr)
+		_, _ = stdout.Write([]byte("2026-08-04T09:00:00Z first\n2026-08-04T09:00:01Z sec"))
+		_, _ = stdout.Write([]byte("ond\n"))
+		_, _ = stderr.Write([]byte("2026-08-04T09:00:02Z boom\n"))
+		alwaysReturn(cont, "worker-id", framed.String())
+
+		result, err := lm.QueryLogs(context.Background(), LogQueryRequest{ContainerName: "prod_1_logapp"})
+
+		require.NoError(t, err)
+		assert.Equal(t, []string{
+			"worker-1  | 2026-08-04T09:00:00Z first",
+			"worker-1  | 2026-08-04T09:00:01Z second",
+			"worker-1  | 2026-08-04T09:00:02Z boom",
+		}, result.Lines)
+		assert.False(t, result.OldestAvailable.IsZero())
+	})
+
+	t.Run("names a service with its own container_name as compose does", func(t *testing.T) {
+		lm, cont, _, _ := newTestManager(t)
+		broker := composeContainer("broker")
+		broker.Names = []string{"/my-broker"}
+		composeProject(cont, broker)
+		alwaysReturn(cont, "broker-id", "2026-08-04T09:00:00Z up\n")
+
+		result, err := lm.QueryLogs(context.Background(), LogQueryRequest{ContainerName: "prod_1_logapp"})
+
+		require.NoError(t, err)
+		assert.Equal(t, []string{"my-broker  | 2026-08-04T09:00:00Z up"}, result.Lines)
+	})
+
+	t.Run("skips a container removed between listing and read", func(t *testing.T) {
+		lm, cont, _, _ := newTestManager(t)
+		composeProject(cont, composeContainer("web"), composeContainer("db"))
+		cont.EXPECT().Logs(mock.Anything, "web-id", mock.Anything).
+			Return(nil, errdefs.ContainerNotFound(errors.New("No such container")))
+		alwaysReturn(cont, "db-id", db)
+
+		result, err := lm.QueryLogs(context.Background(), LogQueryRequest{ContainerName: "prod_1_logapp"})
+
+		require.NoError(t, err)
+		assert.Equal(t, "compose", result.Source)
+		assert.Len(t, result.Lines, 2)
+	})
+
+	// The containers are there; serving the (usually empty) stored history
+	// would present a failed read as an app that said nothing.
+	t.Run("surfaces a failed read instead of serving history", func(t *testing.T) {
+		lm, cont, _, _ := newTestManager(t)
+		composeProject(cont, composeContainer("web"))
+		cont.EXPECT().Logs(mock.Anything, "web-id", mock.Anything).
+			Return(nil, errors.New("permission denied on the docker socket"))
+
+		_, err := lm.QueryLogs(context.Background(), LogQueryRequest{ContainerName: "prod_1_logapp"})
+
+		assert.Error(t, err)
+	})
+}
+
+func TestDropLeadingTimestamp(t *testing.T) {
+	assert.Equal(t, "hello world", dropLeadingTimestamp("2026-08-04T09:12:04.123456789Z hello world"))
+	assert.Equal(t, "", dropLeadingTimestamp("2026-08-04T09:12:04Z "))
+	assert.Equal(t, "no timestamp here", dropLeadingTimestamp("no timestamp here"))
 }
 
 func TestParseLeadingTimestamp(t *testing.T) {

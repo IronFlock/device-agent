@@ -7,11 +7,10 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-// The two renderers below are the whole contract between a windowed log query
-// and the two very different things that can serve it — the Docker API and the
-// compose CLI. Getting a flag name or a zero-value default wrong here is
-// invisible at compile time and shows up as "the time range was ignored", so
-// they are asserted directly rather than through a daemon.
+// The renderer below is the whole contract between a windowed log query and the
+// Docker API that serves it. Getting an option name or a zero-value default
+// wrong here is invisible at compile time and shows up as "the time range was
+// ignored", so it is asserted directly rather than through a daemon.
 
 func TestLogQueryDockerOptions(t *testing.T) {
 	t.Run("zero value reads everything without timestamps", func(t *testing.T) {
@@ -38,31 +37,6 @@ func TestLogQueryDockerOptions(t *testing.T) {
 		assert.Equal(t, "2026-08-04T09:00:00Z", options["since"])
 		assert.Equal(t, "2026-08-04T09:15:00Z", options["until"])
 		assert.Equal(t, true, options["timestamps"])
-	})
-}
-
-func TestLogQueryComposeArgs(t *testing.T) {
-	t.Run("zero value reads everything", func(t *testing.T) {
-		args := LogQuery{}.ComposeArgs()
-
-		assert.Equal(t, []string{"logs", "--no-color", "--tail", "all"}, args)
-	})
-
-	t.Run("renders every bound as a flag", func(t *testing.T) {
-		args := LogQuery{
-			Tail:       50,
-			Since:      "2026-08-04T09:00:00Z",
-			Until:      "2026-08-04T09:15:00Z",
-			Timestamps: true,
-		}.ComposeArgs()
-
-		assert.Equal(t, []string{
-			"logs", "--no-color",
-			"--tail", "50",
-			"--timestamps",
-			"--since", "2026-08-04T09:00:00Z",
-			"--until", "2026-08-04T09:15:00Z",
-		}, args)
 	})
 }
 

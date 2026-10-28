@@ -727,21 +727,10 @@ func (lm *LogManager) getNonAgentLogsCompose(containerName string) ([]string, er
 	}
 
 	if containsOnlyAgentLogs || len(history) == 0 {
-		reader, err := lm.composeLogs(context.Background(), containerName, container.LogQuery{Tail: 50})
+		containerHistory, _, err := lm.composeLogs(context.Background(), containerName, container.LogQuery{Tail: 50})
 		if err != nil {
 			log.Warn().Err(err).Msgf("No log history found for: %s", containerName)
 			return []string{}, nil
-		}
-
-		var containerHistory []string
-		scanner := bufio.NewScanner(reader)
-		for scanner.Scan() {
-			containerHistory = append(containerHistory, scanner.Text())
-		}
-
-		err = reader.Close()
-		if err != nil {
-			log.Error().Err(err).Msg("failed to close reader after getting logs")
 		}
 
 		return containerHistory, nil
