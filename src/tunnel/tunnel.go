@@ -80,6 +80,15 @@ const (
 const defaultLoginDeadline = 30 * time.Second
 
 const (
+	// fastStartAttempts is how many failures the supervisor retries on the short
+	// backoff (defaultStartRetryBackoff, doubling) before it settles on
+	// defaultStartRetryInterval (see startRetryDelay).
+	fastStartAttempts         = 6
+	defaultStartRetryBackoff  = 2 * time.Second
+	defaultStartRetryInterval = 10 * time.Minute
+)
+
+const (
 	// frpsProbeTimeout bounds a single reachability dial to the frps control port.
 	frpsProbeTimeout = 5 * time.Second
 	// capabilityProbeInterval re-checks reachability so the reported capability
@@ -124,7 +133,20 @@ type FrpTunnelManager struct {
 	startMu sync.Mutex
 	// supervising makes SuperviseStart single-flight; a second caller returns
 	// instead of running a competing retry loop.
-	supervising   atomic.Bool
+	supervising atomic.Bool
+	// startFailures counts the client's consecutive failures to start or to
+	// keep running (see countStartFailure); it paces the supervisor's next
+	// attempt (startRetryDelay).
+	startFailures atomic.Int32
+	// startRetryBackoff and startRetryInterval pace those attempts (see
+	// startRetryDelay). Fields so tests can shorten them; zero falls back to
+	// the defaults.
+	startRetryBackoff  time.Duration
+	startRetryInterval time.Duration
+	// supervisionStop is closed by Stop, which ends a supervisor waiting to
+	// retry: a client stopped on purpose stays stopped. Guarded by startMu.
+	supervisionStop chan struct{}
+
 	configBuilder TunnelConfigBuilder
 	config        *config.Config
 	messenger     messenger.Messenger
@@ -163,12 +185,12 @@ type FrpTunnelManager struct {
 
 // frpcRun is the lifecycle of one spawned frpc process. Its exit restarts the
 // client only when Start had handed it over (established) and nobody stopped
-// it on purpose. A client that dies earlier is Start's failure, which
-// SuperviseStart retries a bounded number of times; restarting it from its
-// exit as well would retry an frpc that cannot run (antivirus killing it at
-// once) forever.
+// it on purpose. A client that dies earlier is Start's failure, which only
+// SuperviseStart retries; restarting it from its exit as well would retry an
+// frpc that antivirus kills at once without any backoff.
 type frpcRun struct {
 	mu          sync.Mutex
+	spawned     time.Time
 	established bool
 	stopped     bool
 	exited      bool
@@ -196,14 +218,14 @@ func (run *frpcRun) stop() {
 	run.stopped = true
 }
 
-// exit records the exit and reports whether the client was lost: established
-// and not stopped on purpose.
-func (run *frpcRun) exit() bool {
+// exit records the exit. It reports whether the client was lost (established
+// and not stopped on purpose) and how long it ran.
+func (run *frpcRun) exit() (lost bool, ranFor time.Duration) {
 	run.mu.Lock()
 	defer run.mu.Unlock()
 
 	run.exited = true
-	return run.established && !run.stopped
+	return run.established && !run.stopped, time.Since(run.spawned)
 }
 
 // errFrpcExitedDuringStart fails a Start whose client died before Start could
@@ -303,8 +325,8 @@ type TunnelManager interface {
 	Status(tunnelID string) (TunnelStatus, error)
 	Reload() error
 	Start() error
-	// SuperviseStart brings the client up with bounded ret/backoff; on
-	// exhaustion the device settles into an unavailable-but-alive state.
+	// SuperviseStart brings the client up and keeps retrying until it runs;
+	// meanwhile the device is in an unavailable-but-alive state.
 	SuperviseStart()
 	SaveRemotePorts(payload common.TransitionPayload) error
 	// TunnelCapable reports whether tunnels can run on this device (true unless
@@ -948,12 +970,26 @@ func (frpTm *FrpTunnelManager) stopClientLocked() {
 // restart paths in AllStatus and Reload match a "connection refused" that
 // Windows words differently — so the tunnels stayed down until the agent
 // restarted.
+//
+// A client that ran for the retry interval worked, so whatever ends it (or a
+// deliberate stop) starts the failure count over. One lost sooner counts as a
+// failed start. Restarted at once instead, an frpc that antivirus lets log in
+// and ends under a minute later came back every minute: on the LAC PC that was
+// a Defender detection a minute, all night (2026-10-27).
 func (frpTm *FrpTunnelManager) onClientExit(run *frpcRun) {
-	if !run.exit() {
+	lost, ranFor := run.exit()
+	worked := ranFor >= frpTm.retryInterval()
+	if worked {
+		frpTm.startFailures.Store(0)
+	}
+	if !lost {
 		return
 	}
 
-	log.Warn().Msg("the tunnel client exited unexpectedly; restarting it")
+	if !worked {
+		frpTm.countStartFailure()
+	}
+	log.Warn().Dur("ranFor", ranFor).Msg("the tunnel client exited unexpectedly; restarting it")
 	safe.Go(frpTm.SuperviseStart)
 }
 
@@ -1063,7 +1099,7 @@ func (frpTm *FrpTunnelManager) Start() error {
 	}
 
 	clientDone := make(chan struct{})
-	run := &frpcRun{}
+	run := &frpcRun{spawned: time.Now()}
 	frpTm.clientProcess = frpCommand
 	frpTm.clientDone = clientDone
 	frpTm.clientRun = run
@@ -1097,8 +1133,10 @@ func (frpTm *FrpTunnelManager) Start() error {
 		// No process left to speak for: park the capability probe until the
 		// supervisor spawns a replacement.
 		defer frpTm.clientAlive.Store(false)
-		// If the loop exits without a prior ack, frpc died before login.
-		defer ack(errors.New("frpc exited before logging in to the server"))
+		// If the loop exits without a prior ack, frpc died during Start. Not
+		// necessarily before it logged in: its login line goes to the log
+		// file, not to this pipe (see defaultLoginDeadline).
+		defer ack(errFrpcExitedDuringStart)
 
 		scanner := bufio.NewScanner(stdout)
 
@@ -1278,11 +1316,12 @@ func (frpTm *FrpTunnelManager) Start() error {
 	}
 }
 
-// SuperviseStart brings the tunnel client up with bounded exponential backoff.
-// It replaces "call Start() once and hope": a permanently-failing frpc (missing
-// binary that can't be re-acquired, repeated login failures) settles into
-// CapabilityUnavailable instead of hanging or spinning forever, so the device
-// degrades cleanly. Runs to completion (success or exhaustion) — call it from a
+// SuperviseStart brings the tunnel client up and keeps trying until it runs,
+// paced by startRetryDelay; the device reports CapabilityUnavailable while it
+// fails, so it degrades cleanly instead of hanging. It used to give up after six
+// attempts, which left a Windows PC whose antivirus had ended frpc for a few
+// minutes without tunnels until the agent restarted (LAC PC, 2026-10-29).
+// Returns once a client is handed over, or when Stop ends it — call it from a
 // goroutine.
 func (frpTm *FrpTunnelManager) SuperviseStart() {
 	// Single-flight: the boot path, a failed Reload and a dead admin API can
@@ -1296,38 +1335,90 @@ func (frpTm *FrpTunnelManager) SuperviseStart() {
 	}
 	defer frpTm.supervising.Store(false)
 
-	const maxAttempts = 6
-	backoff := 2 * time.Second
+	frpTm.startMu.Lock()
+	stopped := frpTm.supervisionStop
+	frpTm.startMu.Unlock()
 
-	for attempt := 1; attempt <= maxAttempts; attempt++ {
+	for {
+		if failures := int(frpTm.startFailures.Load()); failures > 0 {
+			// A client lost soon after it started (onClientExit) left the
+			// capability Available, though nothing runs while this waits.
+			if failures >= fastStartAttempts {
+				if capability, _ := frpTm.Capability(); capability != CapabilityUnavailable {
+					frpTm.setCapability(CapabilityUnavailable, errors.New("the tunnel client keeps exiting soon after it starts"))
+				}
+			}
+
+			select {
+			case <-time.After(frpTm.startRetryDelay(failures)):
+			case <-stopped:
+				return
+			}
+		}
+
 		err := frpTm.Start()
 		if err == nil {
 			log.Info().Msg("tunnel client started")
 			return
 		}
 
-		log.Warn().Err(err).Msgf("tunnel client start attempt %d/%d failed", attempt, maxAttempts)
-		if attempt < maxAttempts {
-			// A pre-login exit is regularly the admin port having been taken
-			// while frpc was down (any outbound localhost connection can hold
-			// it). Retrying on the same port then fails identically all the
-			// way to exhaustion — re-pick a free one for the next attempt.
-			frpTm.configBuilder.SetAdminPort()
+		failures := frpTm.countStartFailure()
+		log.Warn().Err(err).Msgf("tunnel client start attempt failed (%d in a row); retrying in %s", failures, frpTm.startRetryDelay(failures))
 
-			time.Sleep(backoff)
-			if backoff < 32*time.Second {
-				backoff *= 2
-			}
-		}
+		// A pre-login exit is regularly the admin port having been taken
+		// while frpc was down (any outbound localhost connection can hold
+		// it). Retrying on the same port then fails identically every time
+		// — re-pick a free one for the next attempt.
+		frpTm.configBuilder.SetAdminPort()
+	}
+}
+
+// startRetryDelay is the supervisor's wait after failures (at least one)
+// consecutive failures: the backoff doubling from startRetryBackoff (2 s to
+// 32 s) for the first fastStartAttempts, then the retry interval, for as long
+// as it takes.
+// Antivirus that ends frpc does so in the minutes after a scan or a definitions
+// update, and starts outside that window survive; an interval longer than the
+// window lets the next attempt outlive it without a new detection a minute.
+func (frpTm *FrpTunnelManager) startRetryDelay(failures int) time.Duration {
+	if failures >= fastStartAttempts {
+		return frpTm.retryInterval()
 	}
 
-	frpTm.setCapability(CapabilityUnavailable, errors.New("tunnel client failed to start after repeated attempts"))
-	log.Error().Msg("giving up starting the tunnel client; tunnels are unavailable on this device")
+	backoff := frpTm.startRetryBackoff
+	if backoff <= 0 {
+		backoff = defaultStartRetryBackoff
+	}
+	return backoff << (failures - 1)
+}
+
+// retryInterval is how often the supervisor retries after the fast attempts,
+// and how long a client has to run to count as having worked (onClientExit).
+func (frpTm *FrpTunnelManager) retryInterval() time.Duration {
+	if frpTm.startRetryInterval <= 0 {
+		return defaultStartRetryInterval
+	}
+	return frpTm.startRetryInterval
+}
+
+// countStartFailure counts a client that failed to start or did not run for
+// the retry interval, and returns the count.
+func (frpTm *FrpTunnelManager) countStartFailure() int {
+	failures := int(frpTm.startFailures.Add(1))
+	if failures == fastStartAttempts {
+		log.Error().Msgf("the tunnel client keeps failing; tunnels are unavailable on this device, retrying every %s", frpTm.retryInterval())
+	}
+	return failures
 }
 
 func (frpTm *FrpTunnelManager) Stop() error {
 	frpTm.startMu.Lock()
 	defer frpTm.startMu.Unlock()
+
+	if frpTm.supervisionStop != nil {
+		close(frpTm.supervisionStop)
+	}
+	frpTm.supervisionStop = make(chan struct{})
 
 	frpTm.stopClientLocked()
 	return nil
@@ -1390,6 +1481,9 @@ func NewFrpTunnelManager(messenger messenger.Messenger, config *config.Config) (
 		loginChan:           make(chan bool, 10), // Buffered to avoid blocking
 		isLoggedIn:          false,
 		loginDeadline:       defaultLoginDeadline,
+		startRetryBackoff:   defaultStartRetryBackoff,
+		startRetryInterval:  defaultStartRetryInterval,
+		supervisionStop:     make(chan struct{}),
 	}
 
 	return frpTunnelManager, nil

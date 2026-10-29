@@ -407,6 +407,8 @@ func TestSuperviseStartRepicksAdminPortAfterPreLoginExit(t *testing.T) {
 	require.NoError(t, err)
 	defer ln.Close()
 
+	// The supervisor never gives up on this frpc; Stop ends it.
+	t.Cleanup(func() { _ = m.Stop() })
 	go m.SuperviseStart()
 
 	require.Eventually(t, func() bool {
@@ -444,6 +446,7 @@ func TestClientLostAfterStartIsRestarted(t *testing.T) {
 
 	m := newCapabilityTestManager(t)
 	m.loginDeadline = 200 * time.Millisecond
+	m.startRetryBackoff = time.Millisecond // lost within the retry interval: restarted after the backoff
 	reachableFrps(t, m)
 
 	// The first frpc outlives the login deadline and then dies; its
@@ -487,10 +490,9 @@ func TestStoppedClientIsNotRestarted(t *testing.T) {
 		"a stopped client must stay stopped")
 }
 
-// A client that dies before Start hands it over is Start's failure, which
-// SuperviseStart retries a bounded number of times. Its exit must not restart
-// it as well: an frpc that antivirus ends at once would then be retried
-// forever instead of settling unavailable.
+// A client that dies before Start hands it over is Start's failure, which only
+// SuperviseStart retries, with its backoff. Its exit must not restart it as
+// well: an frpc that antivirus ends at once would then be retried without any.
 func TestClientDyingDuringStartIsNotRestartedByItsExit(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("fake frpc is a shell script")
@@ -514,6 +516,117 @@ func TestClientDyingDuringStartIsNotRestartedByItsExit(t *testing.T) {
 		"only the supervisor retries a client that never started")
 	cap, _ := m.Capability()
 	assert.Equal(t, CapabilityUnavailable, cap)
+}
+
+// The supervisor's pacing: the fast backoff, then the retry interval for good.
+func TestStartRetryDelay(t *testing.T) {
+	m := newCapabilityTestManager(t)
+
+	want := []time.Duration{2 * time.Second, 4 * time.Second, 8 * time.Second, 16 * time.Second, 32 * time.Second}
+	for i, delay := range want {
+		assert.Equal(t, delay, m.startRetryDelay(i+1), "failure %d", i+1)
+	}
+	for _, failures := range []int{fastStartAttempts, fastStartAttempts + 1, 1000} {
+		assert.Equal(t, 10*time.Minute, m.startRetryDelay(failures), "failure %d", failures)
+	}
+}
+
+// Regression (LAC PC, 2026-10-29): Defender ends every frpc started in the
+// minutes after a scan or a definitions update. The supervisor gave up after six
+// such attempts and the tunnels stayed down until the agent was restarted, two
+// hours later — though the next start after the window survived. It must keep
+// trying, with the device unavailable meanwhile.
+func TestSuperviseStartNeverGivesUp(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("fake frpc is a shell script")
+	}
+
+	m := newCapabilityTestManager(t)
+	m.startRetryBackoff = time.Millisecond
+	m.startRetryInterval = 50 * time.Millisecond
+
+	spawns := filepath.Join(t.TempDir(), "spawns")
+	fake := fmt.Sprintf("#!/bin/sh\necho x >> '%s'\nexit 1\n", spawns)
+	frpcPath := filesystem.GetTunnelBinaryPath(m.config, "frpc") // frpc.exe on Windows
+	require.NoError(t, os.WriteFile(frpcPath, []byte(fake), 0o755))
+
+	supervised := make(chan struct{})
+	go func() {
+		defer close(supervised)
+		m.SuperviseStart()
+	}()
+
+	require.Eventually(t, func() bool { return spawnCount(spawns) >= fastStartAttempts+3 }, 20*time.Second, 50*time.Millisecond,
+		"the supervisor must go on after the fast attempts")
+
+	// Stop ends the supervisor, waiting or not.
+	require.NoError(t, m.Stop())
+	select {
+	case <-supervised:
+	case <-time.After(5 * time.Second):
+		t.Fatal("Stop must end a supervisor waiting to retry")
+	}
+	cap, _ := m.Capability()
+	assert.Equal(t, CapabilityUnavailable, cap)
+}
+
+// Regression (LAC PC, 2026-10-27): Defender let each frpc log in and ended it
+// under a minute later. Handed over by then, every one was restarted at once —
+// a new frpc, and a new Defender detection, every minute all night. A client
+// lost before it ran for the retry interval must count as a failed start.
+func TestClientLostSoonAfterStartBacksOff(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("fake frpc is a shell script")
+	}
+
+	m := newCapabilityTestManager(t)
+	m.loginDeadline = 100 * time.Millisecond
+	m.startRetryBackoff = time.Millisecond
+	m.startRetryInterval = time.Minute // never reached: the test ends first
+	reachableFrps(t, m)
+
+	// Every frpc outlives the login deadline and then dies.
+	spawns := filepath.Join(t.TempDir(), "spawns")
+	fake := fmt.Sprintf("#!/bin/sh\necho x >> '%s'\nsleep 0.5\n", spawns)
+	frpcPath := filesystem.GetTunnelBinaryPath(m.config, "frpc") // frpc.exe on Windows
+	require.NoError(t, os.WriteFile(frpcPath, []byte(fake), 0o755))
+	t.Cleanup(func() { _ = m.Stop() })
+
+	go m.SuperviseStart()
+
+	require.Eventually(t, func() bool { return spawnCount(spawns) == fastStartAttempts }, 20*time.Second, 50*time.Millisecond)
+	assert.Never(t, func() bool { return spawnCount(spawns) > fastStartAttempts }, 2*time.Second, 50*time.Millisecond,
+		"after the fast attempts a client that keeps dying waits the retry interval")
+	cap, _ := m.Capability()
+	assert.Equal(t, CapabilityUnavailable, cap, "nothing runs while the supervisor waits")
+}
+
+// A client that ran for the retry interval worked: whatever ends it is a new
+// problem, retried from the fast end — not after another interval because of
+// failures before it ran.
+func TestClientThatRanLongStartsTheFailureCountOver(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("fake frpc is a shell script")
+	}
+
+	m := newCapabilityTestManager(t)
+	m.loginDeadline = 200 * time.Millisecond
+	m.startRetryInterval = 300 * time.Millisecond
+	reachableFrps(t, m)
+	m.startFailures.Store(fastStartAttempts) // the failures before it ran
+
+	// The first frpc runs past the retry interval and then dies; its
+	// replacement stays up.
+	spawns := filepath.Join(t.TempDir(), "spawns")
+	fake := fmt.Sprintf("#!/bin/sh\nif [ -e '%[1]s' ]; then echo again >> '%[1]s'; exec sleep 30; fi\necho first >> '%[1]s'\nsleep 1\n", spawns)
+	frpcPath := filesystem.GetTunnelBinaryPath(m.config, "frpc") // frpc.exe on Windows
+	require.NoError(t, os.WriteFile(frpcPath, []byte(fake), 0o755))
+	t.Cleanup(func() { _ = m.Stop() })
+
+	require.NoError(t, m.Start())
+
+	require.Eventually(t, func() bool { return spawnCount(spawns) == 2 }, 10*time.Second, 50*time.Millisecond)
+	assert.Zero(t, m.startFailures.Load(), "a client that ran for the retry interval starts the failure count over")
 }
 
 // SuperviseStart re-picks the admin port while a status publish reads it
