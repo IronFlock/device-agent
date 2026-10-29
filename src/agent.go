@@ -152,8 +152,9 @@ func (agent *Agent) OnConnect(reconnect bool) error {
 
 	// frpc is delivered on every supported platform: embedded on Linux/macOS,
 	// downloaded (separate signed binary) on Windows. If it can't be acquired
-	// or won't connect, SuperviseStart settles the device into an
-	// unavailable-but-alive state — the agent and app starts are unaffected.
+	// or won't connect, SuperviseStart keeps the device in an
+	// unavailable-but-alive state while it retries — the agent and app starts
+	// are unaffected.
 	if !reconnect {
 		// Before frpc starts: Windows cannot replace a running frpc.exe.
 		err = acquireFrpcWithin(agent.System.DownloadFrpIfNotExists, frpcAcquireWait)
