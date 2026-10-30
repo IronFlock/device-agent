@@ -147,7 +147,7 @@ func TestTunnelLifecycleAgainstLiveServer(t *testing.T) {
 
 	require.NoError(t, tm.Reset(), "reset should clear any pre-existing tunnel config")
 
-	subdomain := CreateSubdomain(HTTP, 1, "LifecycleTest", 18080)
+	subdomain := CreateSubdomain(HTTP, 1, "LifecycleTest", 18080, common.PROD)
 	want := TunnelConfig{Protocol: HTTP, Subdomain: subdomain, LocalPort: 18080, RemotePort: 0}
 	tunnelID := CreateTunnelID(subdomain, string(HTTP))
 
@@ -213,7 +213,7 @@ func TestStatusUnknownTunnelAgainstLiveServer(t *testing.T) {
 
 	require.NoError(t, tm.Reset())
 
-	unknownID := CreateTunnelID(CreateSubdomain(HTTP, 999, "no-such-app", 65000), string(HTTP))
+	unknownID := CreateTunnelID(CreateSubdomain(HTTP, 999, "no-such-app", 65000, common.PROD), string(HTTP))
 
 	_, err := tm.Status(unknownID)
 	assert.ErrorIs(t, err, errdefs.ErrNotFound, "Status of an unknown tunnel should be not-found")

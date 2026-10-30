@@ -74,15 +74,6 @@ else
 EOF
 fi
 
-# ------------------------------------------------------------------
-# Start dbus (required by the agent for some system bus operations).
-# Non-fatal: not every host grants the permissions we need and the
-# agent copes without dbus in most local scenarios.
-# ------------------------------------------------------------------
-dbus-uuidgen > /var/lib/dbus/machine-id 2>/dev/null || true
-mkdir -p /var/run/dbus
-dbus-daemon --config-file=/usr/share/dbus-1/system.conf --print-address 2>/dev/null || true
-
 AGENT_ENV="${AGENT_ENV:-local}"
 AGENT_NMW="${AGENT_NMW:-false}"
 

@@ -26,11 +26,10 @@ func (sm *StateMachine) uninstallApp(payload common.TransitionPayload, app *comm
 		// Tunnels first, while their configs still name the app: leaving them
 		// standing kept frpc dialing the just-freed host ports, and their
 		// bookkeeping made a later reinstall skip recreating them (the
-		// "tunnel already exists" deadlock). PROD only — DEV apps never get
-		// tunnels (syncPortState skips DEV).
-		if payload.Stage == common.PROD {
-			am.RemoveAppTunnels(payload.AppName)
-		}
+		// "tunnel already exists" deadlock). Only this stage's: the PROD
+		// install and the development run of an app have tunnels of their
+		// own, and uninstalling one leaves the other's.
+		am.RemoveAppTunnels(payload.AppName, payload.Stage)
 		am.hostPorts.ReleaseApp(payload.Stage, payload.AppKey)
 	}
 

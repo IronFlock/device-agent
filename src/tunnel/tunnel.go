@@ -366,6 +366,9 @@ type TunnelState struct {
 	Error        bool          `json:"error"`
 	ErrorMessage string        `json:"error_message"`
 	URL          string        `json:"url"`
+	// Stage tells a development run's tunnel (DEV) from the PROD install's of
+	// the same app and port.
+	Stage common.Stage `json:"stage"`
 }
 
 func parseProxyStatus(text string) ([]TunnelStatus, error) {
@@ -1617,6 +1620,7 @@ func (frpTm *FrpTunnelManager) GetState() ([]TunnelState, error) {
 				// number.
 				Port:         tunnelConfig.DeclaredPort,
 				AppName:      tunnelConfig.AppName,
+				Stage:        tunnelConfig.Stage,
 				Error:        tunnelStatus.Error != "",
 				ErrorMessage: tunnelStatus.Error,
 				Active:       tunnelStatus.Status == "running",

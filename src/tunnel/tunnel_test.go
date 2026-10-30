@@ -93,7 +93,7 @@ func TestAddTunnel(t *testing.T) {
 		t.Fatalf("Failed to reset tunnel %s", err.Error())
 	}
 
-	subdomain := CreateSubdomain(HTTP, 1, "Test", 8080)
+	subdomain := CreateSubdomain(HTTP, 1, "Test", 8080, common.PROD)
 	initialConfig := TunnelConfig{Protocol: HTTP, Subdomain: subdomain, LocalPort: 8080, RemotePort: 0}
 	cfg, err := tunnelManager.AddTunnel(initialConfig)
 	if err != nil {

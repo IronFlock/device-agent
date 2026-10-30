@@ -52,6 +52,11 @@ type AppManager struct {
 	reservationNotes    map[hostPortKey]uint64
 	reservationNoteLock sync.Mutex
 
+	// labelTooLongNotes holds the development-run tunnels whose too-long
+	// label was already reported in the app log for the current run of the
+	// container (see noteLabelTooLong). Guarded by tunnelRebuildLock.
+	labelTooLongNotes map[string]struct{}
+
 	// databaseUnsynced is set when this start created the database file.
 	// Until the first sync with the backend fills it, an empty database says
 	// nothing about which containers are orphans: an agent that opened the
@@ -189,11 +194,6 @@ func (am *AppManager) syncPortState(payload common.TransitionPayload, app *commo
 	log.Debug().Str("app", payload.AppName).Msg("syncPortState called")
 	globalConfig := am.StateMachine.Container.GetConfig()
 
-	if payload.Stage == common.DEV {
-		log.Debug().Msg("Skipping syncPortState for DEV stage")
-		return nil
-	}
-
 	// Degrade cleanly when tunnels are unavailable (frpc missing/quarantined,
 	// or the device can't reach the tunnel server): skip the frpc calls, never
 	// error, so app starts are not blocked by an absent tunnel feature.
@@ -212,6 +212,16 @@ func (am *AppManager) syncPortState(payload common.TransitionPayload, app *commo
 	curAppState := app.CurrentState
 	requestedState := app.RequestedState
 	app.StateLock.Unlock()
+
+	// Whether the app's tunnels should stand. A PROD install's come up with
+	// the request to run (the crashloop restarts a failed app) and stay while
+	// it runs. A development run is never restarted, so its tunnels follow
+	// the container: up only while it runs, gone once it stopped or crashed.
+	// The pass after a successful run transition (VerifyState) brings them up.
+	appRunning := requestedState == common.RUNNING || curAppState == common.RUNNING
+	if payload.Stage == common.DEV {
+		appRunning = curAppState == common.RUNNING
+	}
 
 	portRules, err := tunnel.InterfaceToPortForwardRule(payload.Ports)
 	if err != nil {
@@ -239,7 +249,7 @@ func (am *AppManager) syncPortState(payload common.TransitionPayload, app *commo
 	}
 
 	for _, portRule := range portRules {
-		subdomain := tunnel.CreateSubdomain(tunnel.Protocol(portRule.Protocol), uint64(globalConfig.ReswarmConfig.DeviceKey), payload.AppName, portRule.Port)
+		subdomain := tunnel.CreateSubdomain(tunnel.Protocol(portRule.Protocol), uint64(globalConfig.ReswarmConfig.DeviceKey), payload.AppName, portRule.Port, payload.Stage)
 		tunnelID := tunnel.CreateTunnelID(subdomain, portRule.Protocol)
 		newConfig := tunnel.TunnelConfig{}
 
@@ -263,8 +273,32 @@ func (am *AppManager) syncPortState(payload common.TransitionPayload, app *commo
 			dialPort, dialPortKnown, reservationFailure = am.resolveTunnelHostPort(payload, portRule)
 		}
 
-		if portRule.Active {
-			if tunnelsAvailable && (requestedState == common.RUNNING || curAppState == common.RUNNING) {
+		// A development run tunnels its web ports only: what it serves there
+		// is what a developer inspects in the browser. Its tcp/udp ports are
+		// published on the device's network (computePortBindings) but take no
+		// port from the tunnel server's shared pool.
+		devNoTunnel := payload.Stage == common.DEV && !isWebProtocol(portRule.Protocol)
+		// A DEV label is four characters longer than the PROD one, and an app
+		// name of 40 characters can push it past what a DNS label may hold:
+		// such a tunnel could never be reached, so it is not opened.
+		devLabelTooLong := payload.Stage == common.DEV && !devNoTunnel && len(subdomain) > tunnel.MaxLabelLength
+
+		if devNoTunnel {
+			log.Debug().Str("app", payload.AppName).Uint64("port", portRule.Port).Str("protocol", portRule.Protocol).
+				Msg("No tunnel for a tcp/udp port of a development run")
+		} else if devLabelTooLong {
+			if portRule.Active && appRunning && tunnelsAvailable {
+				log.Warn().Str("app", payload.AppName).Str("subdomain", subdomain).
+					Msg("No tunnel for a port of a development run: its label exceeds 63 characters")
+				if am.noteLabelTooLong(tunnelID) {
+					am.writeAppLog(payload.ContainerName.Dev, fmt.Sprintf("Port %d of %s gets no tunnel: its address %s is longer than the %d characters a part of a domain name may have. A shorter app name makes it reachable.", portRule.Port, payload.AppName, subdomain, tunnel.MaxLabelLength))
+				}
+			} else if !appRunning {
+				// Said again at the next run.
+				am.forgetLabelTooLong(tunnelID)
+			}
+		} else if portRule.Active {
+			if tunnelsAvailable && appRunning {
 				if !dialPortKnown {
 					// Fresh app that has not been started under managed ports
 					// yet. The post-transition syncPortState creates the
@@ -279,6 +313,7 @@ func (am *AppManager) syncPortState(payload common.TransitionPayload, app *commo
 						LocalIP:    portRule.LocalIP,
 						RemotePort: wantRemote,
 						Reserved:   reservedRemote != 0,
+						Stage:      payload.Stage,
 					}
 
 					tnl := am.tunnelManager.Get(tunnelID)
@@ -376,6 +411,27 @@ func (am *AppManager) syncPortState(payload common.TransitionPayload, app *commo
 					}
 				}
 				// continue
+			} else if tunnelsAvailable && payload.Stage == common.DEV {
+				// A development run that is not running keeps no tunnel: it
+				// would only answer with a gateway error, and nothing restarts
+				// the container behind it. Nothing to do (no config rewrite, no
+				// reload) when there is none.
+				if am.tunnelManager.Get(tunnelID) != nil || am.tunnelInConfigFile(tunnelID) {
+					log.Info().Str("tunnelID", tunnelID).Str("state", string(curAppState)).
+						Msg("Removing the tunnel of a development run that is not running")
+					err := am.tunnelManager.RemoveTunnel(tunnel.TunnelConfig{
+						Subdomain:  subdomain,
+						AppName:    payload.AppName,
+						Protocol:   tunnel.Protocol(portRule.Protocol),
+						LocalPort:  portRule.Port,
+						LocalIP:    portRule.LocalIP,
+						RemotePort: portRule.RemotePort,
+						Stage:      payload.Stage,
+					})
+					if err != nil {
+						log.Error().Stack().Err(err).Msg("Failed to remove the tunnel of a development run")
+					}
+				}
 			}
 		} else if tunnelsAvailable {
 			// Remove tunnel when it's not active (regardless of app state).
@@ -395,6 +451,7 @@ func (am *AppManager) syncPortState(payload common.TransitionPayload, app *commo
 				LocalPort:  portRule.Port,
 				LocalIP:    portRule.LocalIP,
 				RemotePort: portRule.RemotePort,
+				Stage:      payload.Stage,
 			}
 
 			log.Info().Str("tunnelID", tunnelID).Msg("Removing tunnel as it is not active")
@@ -466,8 +523,11 @@ func (am *AppManager) syncPortState(payload common.TransitionPayload, app *commo
 	}
 
 	// Live-update the bind-mounted env files ({NAME}.txt / {NAME}_CLOUD.txt)
-	// so running containers see fresh tunnel ports without a restart.
-	refreshRemotePortEnvFiles(globalConfig, payload.Stage, payload.AppName, newPorts)
+	// so running containers see fresh tunnel ports without a restart. A
+	// development run has no remote ports (remotePortEnvVars).
+	if payload.Stage != common.DEV {
+		refreshRemotePortEnvFiles(globalConfig, payload.Stage, payload.AppName, newPorts)
+	}
 
 	// err = am.AppStore.UpdateLocalRequestedState(payload)
 	// if err != nil {
@@ -586,6 +646,39 @@ func (am *AppManager) noteReservationFailure(tunnelID string, failure string) bo
 	return true
 }
 
+// noteLabelTooLong reports whether the app-log line about a development run's
+// tunnel label being too long still has to be written, and records it as
+// written. syncPortState runs on every sync pass; the line is said once per
+// run of the container (forgetLabelTooLong clears it when the run ends).
+func (am *AppManager) noteLabelTooLong(tunnelID string) bool {
+	am.tunnelRebuildLock.Lock()
+	defer am.tunnelRebuildLock.Unlock()
+	if am.labelTooLongNotes == nil {
+		am.labelTooLongNotes = make(map[string]struct{})
+	}
+	if _, said := am.labelTooLongNotes[tunnelID]; said {
+		return false
+	}
+	am.labelTooLongNotes[tunnelID] = struct{}{}
+	return true
+}
+
+func (am *AppManager) forgetLabelTooLong(tunnelID string) {
+	am.tunnelRebuildLock.Lock()
+	defer am.tunnelRebuildLock.Unlock()
+	delete(am.labelTooLongNotes, tunnelID)
+}
+
+// isWebProtocol reports whether a port rule serves http or https (an empty
+// protocol is http, as InterfaceToPortForwardRule normalizes it).
+func isWebProtocol(protocol string) bool {
+	switch tunnel.Protocol(protocol) {
+	case tunnel.HTTP, tunnel.HTTPS, "":
+		return true
+	}
+	return false
+}
+
 // noteTunnelHealthy clears the backoff for a tunnel that is serving again, so
 // the next genuine failure starts from the base delay rather than a stale one.
 func (am *AppManager) noteTunnelHealthy(tunnelID string) {
@@ -687,9 +780,12 @@ func (am *AppManager) retryPortSync(appKey uint64, stage common.Stage) {
 	}
 }
 
-// SyncAllPortStates re-syncs the tunnels of every PROD app from its stored
-// requested state, one app after another. The tunnel manager runs it whenever
-// the device becomes able to tunnel (see tunnel.FrpTunnelManager.SetOnAvailable):
+// SyncAllPortStates re-syncs the tunnels of every app — PROD installs and
+// development runs — from its stored requested state, one app after another.
+// frpc.yaml starts empty on every agent start, so this is also what brings a
+// still-running development run's tunnels back after an agent restart. The
+// tunnel manager runs it whenever the device becomes able to tunnel (see
+// tunnel.FrpTunnelManager.SetOnAvailable):
 // tunnels skipped while it could not, and adds that failed while frpc was
 // starting, are reconciled the moment it can tunnel again. Nothing else would
 // ask for them. diskguard's OnRecover runs it when a disk emergency clears,
@@ -709,10 +805,6 @@ func (am *AppManager) SyncAllPortStates() {
 
 	log.Info().Msg("Reconciling the tunnels of every app")
 	for _, payload := range payloads {
-		// syncPortState never tunnels DEV apps.
-		if payload.Stage != common.PROD {
-			continue
-		}
 		am.retryPortSync(payload.AppKey, payload.Stage)
 	}
 }
@@ -734,14 +826,17 @@ func (am *AppManager) tunnelInConfigFile(tunnelID string) bool {
 	return false
 }
 
-// RemoveAppTunnels tears down every tunnel belonging to an app — memory,
-// config file and frpc alike. Called on uninstall: without it the app's
-// proxies survived removal, kept dialing freed host ports, and their stale
-// bookkeeping made the next install of the same app skip recreating them.
+// RemoveAppTunnels tears down every tunnel belonging to one install of an app
+// (its PROD install, or its development run) — memory, config file and frpc
+// alike. Called on uninstall: without it the app's proxies survived removal,
+// kept dialing freed host ports, and their stale bookkeeping made the next
+// install of the same app skip recreating them. Called for a development run
+// whenever its container stops, crashes or is removed: its tunnels live only
+// while it runs. The other stage's tunnels of the same app are left alone.
 // File-driven (GetTunnelConfig) so proxies left over from a previous agent
 // run are removed too.
-func (am *AppManager) RemoveAppTunnels(appName string) {
-	if !am.tunnelManager.TunnelCapable() {
+func (am *AppManager) RemoveAppTunnels(appName string, stage common.Stage) {
+	if am == nil || am.tunnelManager == nil || !am.tunnelManager.TunnelCapable() {
 		return
 	}
 	configs, err := am.tunnelManager.GetTunnelConfig()
@@ -753,8 +848,15 @@ func (am *AppManager) RemoveAppTunnels(appName string) {
 		if !strings.EqualFold(cfg.AppName, appName) {
 			continue
 		}
+		cfgStage := cfg.Stage
+		if cfgStage == "" {
+			cfgStage = common.PROD
+		}
+		if cfgStage != stage {
+			continue
+		}
 		if err := am.tunnelManager.RemoveTunnel(cfg); err != nil {
-			log.Error().Stack().Err(err).Str("app", appName).Str("subdomain", cfg.Subdomain).Msg("Failed to remove app tunnel on uninstall")
+			log.Error().Stack().Err(err).Str("app", appName).Str("stage", string(stage)).Str("subdomain", cfg.Subdomain).Msg("Failed to remove app tunnel")
 		}
 	}
 }
@@ -837,8 +939,9 @@ func (am *AppManager) RequestAppState(payload common.TransitionPayload) error {
 		}
 	}
 
-	// Its own call, not folded into syncPortState: that one early-returns for
-	// DEV, and DEV apps need their credential refreshed just as much.
+	// Its own call, not folded into syncPortState: that one returns early
+	// when an app has no port rules, and every app needs its credential
+	// refreshed.
 	refreshAppCredentialEnvFiles(am.StateMachine.Container.GetConfig(), am.StateMachine.AppCredKey(), payload)
 
 	err = am.syncPortState(payload, app)
@@ -1530,6 +1633,10 @@ func (am *AppManager) EnsureRemoteRequestedStates() error {
 			app.StateLock.Unlock()
 			if !devStopOutstanding(payload.RequestedState, currentState) {
 				log.Debug().Str("app", payload.AppName).Msg("Skipping reconnect reconcile for DEV")
+				// Its tunnels still follow the container and the port rules
+				// the cloud holds (UpdateLocalRequestedAppStatesWithRemote
+				// adopted them): a sync pass, no transition.
+				safe.Go(func() { am.retryPortSync(payload.AppKey, payload.Stage) })
 				continue
 			}
 		} else if payload.RequestedState == common.PUBLISHED || payload.RequestedState == common.BUILT {
@@ -1584,10 +1691,48 @@ func (am *AppManager) UpdateLocalRequestedAppStatesWithRemote(newestPayloads []c
 			if err != nil {
 				return err
 			}
+			continue
+		}
+
+		// Not fatal: a development run's port rules must not hold up the
+		// reconcile of the apps after it in the list.
+		if err := am.adoptRemoteDevPorts(payload); err != nil {
+			log.Error().Err(err).Str("app", payload.AppName).Msg("Failed to store the port rules of a development run")
 		}
 	}
 
 	return nil
+}
+
+// adoptRemoteDevPorts takes a development run's port rules from the cloud's
+// requested state into the stored one, and nothing else of it. A developer's
+// Active switch made while the device was offline never arrives otherwise:
+// the cloud pushes only to a connected device, and the bulk sync leaves DEV
+// apps to the developer's interactive requests. The reconnect pass
+// (EnsureRemoteRequestedStates) then re-syncs the run's tunnels from it.
+func (am *AppManager) adoptRemoteDevPorts(remote common.TransitionPayload) error {
+	local, err := am.AppStore.GetRequestedState(remote.AppKey, remote.Stage)
+	if err != nil {
+		// Nothing stored: the next interactive request brings the rules.
+		return nil
+	}
+	if samePortRules(local.Ports, remote.Ports) {
+		return nil
+	}
+	log.Info().Str("app", remote.AppName).Msg("Taking the port rules of a development run from the cloud")
+	local.Ports = remote.Ports
+	return am.AppStore.UpdateLocalRequestedState(local)
+}
+
+// samePortRules compares two payloads' port rules by their meaning: the
+// stored and the fetched ones decode from JSON through different paths.
+func samePortRules(a, b []interface{}) bool {
+	ra, errA := tunnel.InterfaceToPortForwardRule(a)
+	rb, errB := tunnel.InterfaceToPortForwardRule(b)
+	if errA != nil || errB != nil {
+		return reflect.DeepEqual(a, b)
+	}
+	return reflect.DeepEqual(ra, rb)
 }
 
 // devStopOutstanding reports whether a DEV app still runs although the
