@@ -27,6 +27,8 @@ func (sm *StateMachine) removeApp(payload common.TransitionPayload, app *common.
 }
 
 func (sm *StateMachine) removeComposeApp(payload common.TransitionPayload, app *common.App) error {
+	defer sm.dropDevTunnels(payload)
+
 	containerName := payload.ContainerName.Dev
 	if payload.Stage == common.PROD {
 		containerName = payload.ContainerName.Prod
@@ -119,6 +121,7 @@ func (sm *StateMachine) removeComposeApp(payload common.TransitionPayload, app *
 }
 
 func (sm *StateMachine) removeDevApp(payload common.TransitionPayload, app *common.App) error {
+	defer sm.dropDevTunnels(payload)
 
 	err := sm.LogManager.ClearLogHistory(payload.ContainerName.Dev)
 	if err != nil {

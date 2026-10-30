@@ -880,7 +880,14 @@ func buildDefaultEnvironmentVariables(config *config.Config, payload common.Tran
 // internet-facing cloud port an instance backend patched into the sync
 // payload); a rule's custom remote_port_environment name is emitted alongside
 // for backward compatibility.
-func (sm *StateMachine) remotePortEnvVars(config *config.Config, appName string, portRules []common.PortForwardRule) []string {
+//
+// A development run gets none: its only tunnels are http(s) ones, which have
+// no remote port, and the PROD install's tunnel of the same port is not its
+// own.
+func (sm *StateMachine) remotePortEnvVars(config *config.Config, appName string, stage common.Stage, portRules []common.PortForwardRule) []string {
+	if stage == common.DEV {
+		return nil
+	}
 	var envs []string
 	for _, portRule := range portRules {
 		names := []string{fmt.Sprintf("REMOTE_PORT_FOR_%d", portRule.Port)}
@@ -888,7 +895,7 @@ func (sm *StateMachine) remotePortEnvVars(config *config.Config, appName string,
 			names = append(names, portRule.RemotePortEnvironment)
 		}
 
-		subdomain := tunnel.CreateSubdomain(tunnel.Protocol(portRule.Protocol), uint64(config.ReswarmConfig.DeviceKey), appName, portRule.Port)
+		subdomain := tunnel.CreateSubdomain(tunnel.Protocol(portRule.Protocol), uint64(config.ReswarmConfig.DeviceKey), appName, portRule.Port, stage)
 		tunnelID := tunnel.CreateTunnelID(subdomain, portRule.Protocol)
 		activeTunnel := sm.StateObserver.AppManager.tunnelManager.Get(tunnelID)
 
@@ -997,7 +1004,7 @@ func (sm *StateMachine) computeContainerConfigs(payload common.TransitionPayload
 			}
 		}
 
-		remotePortEnvs := sm.remotePortEnvVars(config, app.AppName, portRules)
+		remotePortEnvs := sm.remotePortEnvVars(config, app.AppName, app.Stage, portRules)
 
 		// Write all environment variables to files
 		allEnvVars := append(environmentVariables, append(remotePortEnvs, missingDefaultEnvs...)...)

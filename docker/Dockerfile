@@ -30,14 +30,17 @@ ENV DEBIAN_FRONTEND=noninteractive
 # plain `install` never touches (it only resolves the named packages). This is a
 # dev-stack image, but keeping the base current is cheap. See
 # docs/SECURITY-SCANNING.md.
+#
+# No dbus (nor network-manager, which pulls it in): the agent binds the host's
+# /run/dbus into every app when it finds one, and a /run/dbus of this container
+# does not exist on the Docker host, so container creation would fail. The
+# agent needs D-Bus only for NetworkManager (-nmw, off here) and RAUC.
 RUN apt-get update && apt-get -y upgrade && apt-get install -y --no-install-recommends \
         apt-transport-https \
         ca-certificates \
         curl \
         gnupg \
         lsb-release \
-        dbus \
-        network-manager \
         jq \
         libc6 \
         musl \

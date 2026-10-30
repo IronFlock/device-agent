@@ -50,7 +50,7 @@ func TestSyncPortStateUsesManagedHostPort(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, uint64(41234), hostPort)
 
-	expectedSubdomain := tunnel.CreateSubdomain(tunnel.Protocol("http"), uint64(cfg.ReswarmConfig.DeviceKey), "portapp", 8080)
+	expectedSubdomain := tunnel.CreateSubdomain(tunnel.Protocol("http"), uint64(cfg.ReswarmConfig.DeviceKey), "portapp", 8080, common.PROD)
 	tunnelID := tunnel.CreateTunnelID(expectedSubdomain, "http")
 
 	mockTunnel.EXPECT().Get(tunnelID).Return(nil).Once()
@@ -151,7 +151,7 @@ func TestSyncPortStateReplacesStaleTunnel(t *testing.T) {
 	_, err := am.hostPorts.RecoverOrReserve(hostPortKey{Stage: common.PROD, AppKey: 10, Protocol: "tcp", Port: 8080}, 41300)
 	require.NoError(t, err)
 
-	subdomain := tunnel.CreateSubdomain(tunnel.Protocol("http"), uint64(cfg.ReswarmConfig.DeviceKey), "staleapp", 8080)
+	subdomain := tunnel.CreateSubdomain(tunnel.Protocol("http"), uint64(cfg.ReswarmConfig.DeviceKey), "staleapp", 8080, common.PROD)
 	staleConfig := tunnel.TunnelConfig{Subdomain: subdomain, Protocol: tunnel.Protocol("http"), LocalPort: 40000}
 
 	mockTunnel.EXPECT().Get(mock.Anything).Return(&tunnel.Tunnel{Config: staleConfig}).Once()
@@ -185,7 +185,7 @@ func TestSyncPortStateKeepsReservedRemotePort(t *testing.T) {
 	_, err := am.hostPorts.RecoverOrReserve(hostPortKey{Stage: common.PROD, AppKey: 12, Protocol: "tcp", Port: 1883}, 40001)
 	require.NoError(t, err)
 
-	subdomain := tunnel.CreateSubdomain(tunnel.Protocol("tcp"), uint64(cfg.ReswarmConfig.DeviceKey), "mqttapp", 1883)
+	subdomain := tunnel.CreateSubdomain(tunnel.Protocol("tcp"), uint64(cfg.ReswarmConfig.DeviceKey), "mqttapp", 1883, common.PROD)
 	existing := tunnel.TunnelConfig{
 		Subdomain:  subdomain,
 		Protocol:   tunnel.Protocol("tcp"),
@@ -316,7 +316,7 @@ func TestSyncPortStateRebuildsDeadTunnel(t *testing.T) {
 	_, err := am.hostPorts.RecoverOrReserve(hostPortKey{Stage: common.PROD, AppKey: 21, Protocol: "tcp", Port: 9090}, 41500)
 	require.NoError(t, err)
 
-	subdomain := tunnel.CreateSubdomain(tunnel.Protocol("http"), uint64(cfg.ReswarmConfig.DeviceKey), "deadtunnel", 9090)
+	subdomain := tunnel.CreateSubdomain(tunnel.Protocol("http"), uint64(cfg.ReswarmConfig.DeviceKey), "deadtunnel", 9090, common.PROD)
 	tunnelID := tunnel.CreateTunnelID(subdomain, "http")
 	stale := tunnel.TunnelConfig{Subdomain: subdomain, AppName: "deadtunnel", Protocol: tunnel.Protocol("http"), LocalPort: 41500}
 
@@ -352,7 +352,7 @@ func TestUninstallRemovesAppTunnels(t *testing.T) {
 	// Only the uninstalled app's tunnel is removed; the bystander stays.
 	mockTunnel.EXPECT().RemoveTunnel(mine).Return(nil).Once()
 
-	am.RemoveAppTunnels("victim")
+	am.RemoveAppTunnels("victim", common.PROD)
 }
 
 // A tunnel frps keeps refusing must be retried, but PACED. The refusal is
@@ -375,7 +375,7 @@ func TestSyncPortStatePacesRepeatedDeadTunnelRebuilds(t *testing.T) {
 	_, err := am.hostPorts.RecoverOrReserve(hostPortKey{Stage: common.PROD, AppKey: 22, Protocol: "tcp", Port: 9091}, 41501)
 	require.NoError(t, err)
 
-	subdomain := tunnel.CreateSubdomain(tunnel.Protocol("http"), uint64(cfg.ReswarmConfig.DeviceKey), "flappy", 9091)
+	subdomain := tunnel.CreateSubdomain(tunnel.Protocol("http"), uint64(cfg.ReswarmConfig.DeviceKey), "flappy", 9091, common.PROD)
 	tunnelID := tunnel.CreateTunnelID(subdomain, "http")
 	stale := tunnel.TunnelConfig{Subdomain: subdomain, AppName: "flappy", Protocol: tunnel.Protocol("http"), LocalPort: 41501, RemotePort: 30222}
 
@@ -452,7 +452,7 @@ func TestSyncPortStateReservedRemoteDrivesConfig(t *testing.T) {
 	mockContainer.EXPECT().GetContainerPortBindings(mock.Anything, payload.ContainerName.Prod).
 		Return(map[string]uint64{"1883/tcp": 15000}, nil).Once()
 
-	subdomain := tunnel.CreateSubdomain(tunnel.Protocol("tcp"), uint64(cfg.ReswarmConfig.DeviceKey), "reservedapp", 1883)
+	subdomain := tunnel.CreateSubdomain(tunnel.Protocol("tcp"), uint64(cfg.ReswarmConfig.DeviceKey), "reservedapp", 1883, common.PROD)
 	tunnelID := tunnel.CreateTunnelID(subdomain, "tcp")
 
 	mockTunnel.EXPECT().Get(tunnelID).Return(nil).Once()
@@ -501,7 +501,7 @@ func TestSyncPortStateMovesLiveTunnelToReservedRemote(t *testing.T) {
 	mockContainer.EXPECT().GetContainerPortBindings(mock.Anything, payload.ContainerName.Prod).
 		Return(map[string]uint64{"1883/tcp": 15000}, nil).Once()
 
-	subdomain := tunnel.CreateSubdomain(tunnel.Protocol("tcp"), uint64(cfg.ReswarmConfig.DeviceKey), "moveapp", 1883)
+	subdomain := tunnel.CreateSubdomain(tunnel.Protocol("tcp"), uint64(cfg.ReswarmConfig.DeviceKey), "moveapp", 1883, common.PROD)
 	tunnelID := tunnel.CreateTunnelID(subdomain, "tcp")
 	existing := tunnel.TunnelConfig{Subdomain: subdomain, AppName: "moveapp", Protocol: tunnel.Protocol("tcp"), LocalPort: 15000, RemotePort: 30001}
 
@@ -547,7 +547,7 @@ func TestSyncPortStateWriteBackGuardKeepsReservedRemote(t *testing.T) {
 	mockContainer.EXPECT().GetContainerPortBindings(mock.Anything, payload.ContainerName.Prod).
 		Return(map[string]uint64{"1883/tcp": 15000}, nil).Once()
 
-	subdomain := tunnel.CreateSubdomain(tunnel.Protocol("tcp"), uint64(cfg.ReswarmConfig.DeviceKey), "guardapp", 1883)
+	subdomain := tunnel.CreateSubdomain(tunnel.Protocol("tcp"), uint64(cfg.ReswarmConfig.DeviceKey), "guardapp", 1883, common.PROD)
 	tunnelID := tunnel.CreateTunnelID(subdomain, "tcp")
 
 	mockTunnel.EXPECT().Get(tunnelID).Return(nil).Once()
@@ -590,7 +590,7 @@ func TestSyncPortStateReservedAddFailureSetsReservationError(t *testing.T) {
 	mockContainer.EXPECT().GetContainerPortBindings(mock.Anything, payload.ContainerName.Prod).
 		Return(map[string]uint64{"1883/tcp": 15000}, nil).Times(2)
 
-	subdomain := tunnel.CreateSubdomain(tunnel.Protocol("tcp"), uint64(cfg.ReswarmConfig.DeviceKey), "failapp", 1883)
+	subdomain := tunnel.CreateSubdomain(tunnel.Protocol("tcp"), uint64(cfg.ReswarmConfig.DeviceKey), "failapp", 1883, common.PROD)
 	tunnelID := tunnel.CreateTunnelID(subdomain, "tcp")
 
 	mockTunnel.EXPECT().Get(tunnelID).Return(nil).Times(2)
@@ -661,7 +661,7 @@ func TestSyncPortStateReservedNoopRoundTrip(t *testing.T) {
 	mockContainer.EXPECT().GetContainerPortBindings(mock.Anything, payload.ContainerName.Prod).
 		Return(map[string]uint64{"1883/tcp": 15000}, nil).Once()
 
-	subdomain := tunnel.CreateSubdomain(tunnel.Protocol("tcp"), uint64(cfg.ReswarmConfig.DeviceKey), "noopapp", 1883)
+	subdomain := tunnel.CreateSubdomain(tunnel.Protocol("tcp"), uint64(cfg.ReswarmConfig.DeviceKey), "noopapp", 1883, common.PROD)
 	tunnelID := tunnel.CreateTunnelID(subdomain, "tcp")
 	existing := tunnel.TunnelConfig{Subdomain: subdomain, AppName: "noopapp", Protocol: tunnel.Protocol("tcp"), LocalPort: 15000, RemotePort: 30500}
 
@@ -695,7 +695,7 @@ func TestSyncPortStateHttpRuleIgnoresReservations(t *testing.T) {
 	_, err := am.hostPorts.RecoverOrReserve(hostPortKey{Stage: common.PROD, AppKey: 45, Protocol: "tcp", Port: 8080}, 41234)
 	require.NoError(t, err)
 
-	subdomain := tunnel.CreateSubdomain(tunnel.Protocol("http"), uint64(cfg.ReswarmConfig.DeviceKey), "webapp", 8080)
+	subdomain := tunnel.CreateSubdomain(tunnel.Protocol("http"), uint64(cfg.ReswarmConfig.DeviceKey), "webapp", 8080, common.PROD)
 	tunnelID := tunnel.CreateTunnelID(subdomain, "http")
 
 	mockTunnel.EXPECT().Get(tunnelID).Return(nil).Once()
@@ -739,7 +739,7 @@ func TestSyncPortStateReservationOnRunningAppKeepsLiveDialPort(t *testing.T) {
 	mockContainer.EXPECT().GetContainerPortBindings(mock.Anything, payload.ContainerName.Prod).
 		Return(map[string]uint64{"1883/tcp": 41234}, nil).Times(3)
 
-	subdomain := tunnel.CreateSubdomain(tunnel.Protocol("tcp"), uint64(cfg.ReswarmConfig.DeviceKey), "pendingapp", 1883)
+	subdomain := tunnel.CreateSubdomain(tunnel.Protocol("tcp"), uint64(cfg.ReswarmConfig.DeviceKey), "pendingapp", 1883, common.PROD)
 	tunnelID := tunnel.CreateTunnelID(subdomain, "tcp")
 	existing := tunnel.TunnelConfig{Subdomain: subdomain, AppName: "pendingapp", Protocol: tunnel.Protocol("tcp"), LocalPort: 41234, RemotePort: 30001}
 
@@ -860,7 +860,7 @@ func TestSyncPortStateRetriesFailedAddWithoutTrigger(t *testing.T) {
 	_, err := am.hostPorts.RecoverOrReserve(hostPortKey{Stage: common.PROD, AppKey: 50, Protocol: "tcp", Port: 1883}, 41600)
 	require.NoError(t, err)
 
-	subdomain := tunnel.CreateSubdomain(tunnel.Protocol("tcp"), uint64(cfg.ReswarmConfig.DeviceKey), "relayapp", 1883)
+	subdomain := tunnel.CreateSubdomain(tunnel.Protocol("tcp"), uint64(cfg.ReswarmConfig.DeviceKey), "relayapp", 1883, common.PROD)
 	tunnelID := tunnel.CreateTunnelID(subdomain, "tcp")
 	up := tunnel.TunnelConfig{Subdomain: subdomain, AppName: "relayapp", Protocol: tunnel.Protocol("tcp"), LocalPort: 41600, RemotePort: 30778}
 
@@ -935,7 +935,7 @@ func TestSyncPortStateRetriesDeferredRebuild(t *testing.T) {
 	_, err := am.hostPorts.RecoverOrReserve(hostPortKey{Stage: common.PROD, AppKey: 51, Protocol: "udp", Port: 51820}, 41700)
 	require.NoError(t, err)
 
-	subdomain := tunnel.CreateSubdomain(tunnel.Protocol("udp"), uint64(cfg.ReswarmConfig.DeviceKey), "refusedapp", 51820)
+	subdomain := tunnel.CreateSubdomain(tunnel.Protocol("udp"), uint64(cfg.ReswarmConfig.DeviceKey), "refusedapp", 51820, common.PROD)
 	tunnelID := tunnel.CreateTunnelID(subdomain, "udp")
 	stale := tunnel.TunnelConfig{Subdomain: subdomain, AppName: "refusedapp", Protocol: tunnel.Protocol("udp"), LocalPort: 41700, RemotePort: 30801}
 
@@ -993,7 +993,7 @@ func TestSyncPortStateFirstAddSchedulesNoRetry(t *testing.T) {
 	_, err := am.hostPorts.RecoverOrReserve(hostPortKey{Stage: common.PROD, AppKey: 52, Protocol: "tcp", Port: 1883}, 41800)
 	require.NoError(t, err)
 
-	subdomain := tunnel.CreateSubdomain(tunnel.Protocol("tcp"), uint64(cfg.ReswarmConfig.DeviceKey), "freshtunnel", 1883)
+	subdomain := tunnel.CreateSubdomain(tunnel.Protocol("tcp"), uint64(cfg.ReswarmConfig.DeviceKey), "freshtunnel", 1883, common.PROD)
 	tunnelID := tunnel.CreateTunnelID(subdomain, "tcp")
 
 	mockTunnel.EXPECT().Get(tunnelID).Return(nil).Once()
@@ -1025,7 +1025,7 @@ func TestPortSyncRetryStopsForRemovedApp(t *testing.T) {
 	_, err := am.hostPorts.RecoverOrReserve(hostPortKey{Stage: common.PROD, AppKey: 53, Protocol: "tcp", Port: 1883}, 41900)
 	require.NoError(t, err)
 
-	subdomain := tunnel.CreateSubdomain(tunnel.Protocol("tcp"), uint64(cfg.ReswarmConfig.DeviceKey), "goneapp", 1883)
+	subdomain := tunnel.CreateSubdomain(tunnel.Protocol("tcp"), uint64(cfg.ReswarmConfig.DeviceKey), "goneapp", 1883, common.PROD)
 	tunnelID := tunnel.CreateTunnelID(subdomain, "tcp")
 
 	// Exactly the first pass's calls: the strict mock fails the test on any
@@ -1073,7 +1073,7 @@ func TestPortSyncRetryStandsDownInDiskEmergency(t *testing.T) {
 	_, err := am.hostPorts.RecoverOrReserve(hostPortKey{Stage: common.PROD, AppKey: 55, Protocol: "tcp", Port: 1883}, 42000)
 	require.NoError(t, err)
 
-	subdomain := tunnel.CreateSubdomain(tunnel.Protocol("tcp"), uint64(cfg.ReswarmConfig.DeviceKey), "fullapp", 1883)
+	subdomain := tunnel.CreateSubdomain(tunnel.Protocol("tcp"), uint64(cfg.ReswarmConfig.DeviceKey), "fullapp", 1883, common.PROD)
 	tunnelID := tunnel.CreateTunnelID(subdomain, "tcp")
 
 	// The first pass's add fails and schedules a retry.
@@ -1138,7 +1138,7 @@ func TestSyncPortStateRetryLogsReservationFailureOnce(t *testing.T) {
 	mockContainer.EXPECT().GetContainerPortBindings(mock.Anything, mock.Anything).
 		Return(map[string]uint64{"1883/tcp": 15000}, nil).Times(3)
 
-	subdomain := tunnel.CreateSubdomain(tunnel.Protocol("tcp"), uint64(cfg.ReswarmConfig.DeviceKey), "pinnedapp", 1883)
+	subdomain := tunnel.CreateSubdomain(tunnel.Protocol("tcp"), uint64(cfg.ReswarmConfig.DeviceKey), "pinnedapp", 1883, common.PROD)
 	tunnelID := tunnel.CreateTunnelID(subdomain, "tcp")
 
 	mockTunnel.EXPECT().Get(tunnelID).Return(nil).Times(3)

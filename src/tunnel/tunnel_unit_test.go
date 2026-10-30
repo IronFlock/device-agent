@@ -103,7 +103,7 @@ func TestCreateSubdomain(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := CreateSubdomain(tt.protocol, tt.deviceKey, tt.appName, tt.localPort)
+			got := CreateSubdomain(tt.protocol, tt.deviceKey, tt.appName, tt.localPort, common.PROD)
 			assert.Equal(t, tt.expected, got)
 		})
 	}
@@ -115,7 +115,7 @@ func TestCreateSubdomainParsableByGetTunnelConfig(t *testing.T) {
 	cfg := builderConfig(t, &config.ReswarmConfig{Environment: string(common.PRODUCTION)})
 	builder := NewTunnelConfigBuilder(cfg)
 
-	subdomain := CreateSubdomain(HTTP, 9, "MyApp", 8080)
+	subdomain := CreateSubdomain(HTTP, 9, "MyApp", 8080, common.PROD)
 	builder.AddTunnelConfig(TunnelConfig{
 		Subdomain: subdomain,
 		Protocol:  HTTP,
@@ -703,13 +703,13 @@ func TestConfigBuilderAddAndGetTunnelConfig(t *testing.T) {
 	builder := NewTunnelConfigBuilder(cfg)
 
 	httpConf := TunnelConfig{
-		Subdomain: CreateSubdomain(HTTP, 9, "web", 8080),
+		Subdomain: CreateSubdomain(HTTP, 9, "web", 8080, common.PROD),
 		Protocol:  HTTP,
 		LocalPort: 8080,
 		LocalIP:   "127.0.0.1",
 	}
 	tcpConf := TunnelConfig{
-		Subdomain:  CreateSubdomain(TCP, 9, "ssh", 22),
+		Subdomain:  CreateSubdomain(TCP, 9, "ssh", 22, common.PROD),
 		Protocol:   TCP,
 		LocalPort:  22,
 		RemotePort: 30022,
@@ -751,7 +751,7 @@ func TestConfigBuilderAddTunnelConfigDeduplicates(t *testing.T) {
 	builder := NewTunnelConfigBuilder(cfg)
 
 	conf := TunnelConfig{
-		Subdomain: CreateSubdomain(HTTP, 9, "web", 8080),
+		Subdomain: CreateSubdomain(HTTP, 9, "web", 8080, common.PROD),
 		Protocol:  HTTP,
 		LocalPort: 8080,
 	}
@@ -769,7 +769,7 @@ func TestConfigBuilderRemoveTunnelConfig(t *testing.T) {
 	builder := NewTunnelConfigBuilder(cfg)
 
 	conf := TunnelConfig{
-		Subdomain: CreateSubdomain(HTTP, 9, "web", 8080),
+		Subdomain: CreateSubdomain(HTTP, 9, "web", 8080, common.PROD),
 		Protocol:  HTTP,
 		LocalPort: 8080,
 	}
@@ -790,7 +790,7 @@ func TestConfigBuilderSetTunnelVariable(t *testing.T) {
 	builder := NewTunnelConfigBuilder(cfg)
 
 	conf := TunnelConfig{
-		Subdomain:  CreateSubdomain(TCP, 9, "ssh", 22),
+		Subdomain:  CreateSubdomain(TCP, 9, "ssh", 22, common.PROD),
 		Protocol:   TCP,
 		LocalPort:  22,
 		RemotePort: 30022,
@@ -893,7 +893,7 @@ func TestGetTunnelConfigRoundTripsTunnelIdentity(t *testing.T) {
 		{UDP, 51820},
 	} {
 		builder.AddTunnelConfig(TunnelConfig{
-			Subdomain:  CreateSubdomain(tc.protocol, 4749, "trumpfqds", tc.port),
+			Subdomain:  CreateSubdomain(tc.protocol, 4749, "trumpfqds", tc.port, common.PROD),
 			Protocol:   tc.protocol,
 			LocalPort:  40000 + tc.port,
 			RemotePort: 30000,
@@ -904,7 +904,7 @@ func TestGetTunnelConfigRoundTripsTunnelIdentity(t *testing.T) {
 	require.Len(t, configs, 4)
 
 	for _, got := range configs {
-		expectedName := CreateTunnelID(CreateSubdomain(got.Protocol, 4749, "trumpfqds", got.DeclaredPort), string(got.Protocol))
+		expectedName := CreateTunnelID(CreateSubdomain(got.Protocol, 4749, "trumpfqds", got.DeclaredPort, common.PROD), string(got.Protocol))
 
 		// The name frpc reports status under, carried through verbatim.
 		assert.Equal(t, expectedName, got.Name, "%s: proxy name must survive the round-trip", got.Protocol)
@@ -923,7 +923,7 @@ func TestGetTunnelConfigRecoversSubdomainFromName(t *testing.T) {
 	cfg := builderConfig(t, &config.ReswarmConfig{Environment: string(common.PRODUCTION)})
 	builder := NewTunnelConfigBuilder(cfg)
 
-	subdomain := CreateSubdomain(HTTP, 4749, "trumpfqds", 55000)
+	subdomain := CreateSubdomain(HTTP, 4749, "trumpfqds", 55000, common.PROD)
 	builder.AddTunnelConfig(TunnelConfig{Subdomain: subdomain, Protocol: HTTP, LocalPort: 40003})
 
 	// Simulate the subdomain key being absent from the stored proxy.
@@ -953,12 +953,12 @@ func TestGetTunnelConfigParsesDeclaredPort(t *testing.T) {
 	builder := NewTunnelConfigBuilder(cfg)
 
 	builder.AddTunnelConfig(TunnelConfig{
-		Subdomain: CreateSubdomain(HTTP, 9, "web", 8080),
+		Subdomain: CreateSubdomain(HTTP, 9, "web", 8080, common.PROD),
 		Protocol:  HTTP,
 		LocalPort: 41234, // managed host port, not the declared port
 	})
 	builder.AddTunnelConfig(TunnelConfig{
-		Subdomain:  CreateSubdomain(TCP, 9, "ssh", 22),
+		Subdomain:  CreateSubdomain(TCP, 9, "ssh", 22, common.PROD),
 		Protocol:   TCP,
 		LocalPort:  41235,
 		RemotePort: 30022,
@@ -1045,7 +1045,7 @@ func TestConfigBuilderAddTunnelConfigUpdatesStaleLocalPort(t *testing.T) {
 	cfg := builderConfig(t, &config.ReswarmConfig{Environment: string(common.PRODUCTION)})
 	builder := NewTunnelConfigBuilder(cfg)
 
-	subdomain := CreateSubdomain(TCP, 9, "ssh", 22)
+	subdomain := CreateSubdomain(TCP, 9, "ssh", 22, common.PROD)
 	builder.AddTunnelConfig(TunnelConfig{
 		Subdomain:  subdomain,
 		Protocol:   TCP,
@@ -1075,7 +1075,7 @@ func TestConfigBuilderAddTunnelConfigNonZeroRemoteWins(t *testing.T) {
 	builder := NewTunnelConfigBuilder(cfg)
 
 	conf := TunnelConfig{
-		Subdomain:  CreateSubdomain(TCP, 9, "ssh", 22),
+		Subdomain:  CreateSubdomain(TCP, 9, "ssh", 22, common.PROD),
 		Protocol:   TCP,
 		LocalPort:  22,
 		RemotePort: 30022,

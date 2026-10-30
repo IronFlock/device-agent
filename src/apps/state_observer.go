@@ -723,6 +723,10 @@ func (so *StateObserver) observeAppState(observerCtx context.Context, stage comm
 					}
 				}
 
+				if stage == common.DEV {
+					so.followDevRun(appKey, appName, latestAppState)
+				}
+
 				// try to transition to the state it's supposed to be at
 				if stage == common.PROD && so.driveCorrectedProdApp(app, latestAppState, containerName) {
 					return
@@ -739,6 +743,25 @@ func (so *StateObserver) observeAppState(observerCtx context.Context, stage comm
 	})
 
 	return errorC
+}
+
+// followDevRun keeps a development run's tunnels in step with what its
+// containers show, right after an observer corrected the app's state: a run
+// that stopped or crashed loses them (nothing restarts it, and a tunnel in
+// front of nothing answers with a gateway error); one seen running again — a
+// Compose service's own restart policy, a stop that failed half-way — gets
+// them back from its stored requested state. The observer is the only party
+// that sees either happen: no transition runs.
+func (so *StateObserver) followDevRun(appKey uint64, appName string, state common.AppState) {
+	am := so.AppManager
+	if am == nil {
+		return
+	}
+	if state == common.RUNNING {
+		am.retryPortSync(appKey, common.DEV)
+		return
+	}
+	am.RemoveAppTunnels(appName, common.DEV)
 }
 
 // driveCorrectedProdApp is what a PROD observer does right after it has
@@ -920,6 +943,10 @@ func (so *StateObserver) observeComposeAppState(observerCtx context.Context, sta
 					errorC <- err
 					log.Error().Err(err).Msg("failed to notify state")
 					return
+				}
+
+				if stage == common.DEV {
+					so.followDevRun(appKey, appName, latestAppState)
 				}
 
 				// try to transition to the state it's supposed to be at

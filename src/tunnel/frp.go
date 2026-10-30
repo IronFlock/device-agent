@@ -48,6 +48,10 @@ type TunnelConfig struct {
 	// falling back to an allocated port. Not serialized to frpc.yaml, so it
 	// does not survive a config read-back.
 	Reserved bool
+	// Stage is the install the tunnel belongs to: DEV for a development run
+	// (its label ends in -dev), PROD otherwise. Not written to frpc.yaml;
+	// GetTunnelConfig parses it back from the proxy name.
+	Stage common.Stage
 }
 
 // YAML config structures matching frp v0.65.0 format
@@ -206,11 +210,22 @@ const TEST_SERVER_ADDR = "app.ironflock.dev"
 // warning is logged every time the config is built while it is set.
 const TUNNEL_TLS_INSECURE_SKIP_VERIFY = "TUNNEL_TLS_INSECURE_SKIP_VERIFY"
 
-// Matches "{deviceKey}-{appName}-{declaredPort}" (with an optional "secure-"
-// prefix and, in TCP/UDP proxy names, a "-{protocol}" suffix — both ignored
-// by the unanchored match). Group 1 is the app name, group 2 the declared
-// port.
-var subdomainRegex = regexp.MustCompile(`\d+-(.*)-(\d+)`)
+// Matches a tunnel label, "[secure-]{deviceKey}-{appName}-{declaredPort}[-dev]",
+// tolerating a trailing "-{protocol}" (a proxy name) as well. Group 1 is the
+// app name, group 2 the declared port, group 3 the development-run marker.
+// Anchored, so the marker cannot be mistaken for part of the app name or the
+// other way round: a PROD label always ends in digits, a DEV label in -dev
+// ("12-x-dev-80" is PROD app x-dev, "12-x-80-dev" DEV app x).
+var subdomainRegex = regexp.MustCompile(`^(?:secure-)?\d+-(.+)-(\d+)(-dev)?(?:-(?:http|https|tcp|udp))?$`)
+
+// devLabelSuffix marks the tunnel of a development run: the PROD install of
+// the same app on the same device keeps its own label, URL and proxy. The
+// tunnel server, the backend and Studio parse the same grammar.
+const devLabelSuffix = "-dev"
+
+// MaxLabelLength is the longest DNS label. An http(s) tunnel's subdomain is a
+// label of its URL's host; a longer one never resolves.
+const MaxLabelLength = 63
 
 func NewTunnelConfigBuilder(cfg *config.Config) TunnelConfigBuilder {
 	return initialize(cfg)
@@ -231,12 +246,37 @@ func tunnelAuthProof(secret string, deviceKey int) string {
 	return base64.RawURLEncoding.EncodeToString(mac.Sum(nil))
 }
 
-func CreateSubdomain(protocol Protocol, deviceKey uint64, appName string, localPort uint64) string {
+// CreateSubdomain builds a tunnel's label: "{deviceKey}-{appName}-{port}",
+// lower case, with "-dev" appended for a development run and "secure-"
+// prefixed for https. PROD labels are unchanged by the stage.
+func CreateSubdomain(protocol Protocol, deviceKey uint64, appName string, localPort uint64, stage common.Stage) string {
 	baseSubdomain := strings.ToLower(fmt.Sprintf("%d-%s-%d", deviceKey, appName, localPort))
+	if stage == common.DEV {
+		baseSubdomain += devLabelSuffix
+	}
 	if protocol == HTTPS {
 		return fmt.Sprintf("%s-%s", "secure", baseSubdomain)
 	}
 	return baseSubdomain
+}
+
+// ParseSubdomain reads the app name, declared port and stage back from a
+// tunnel label (or a proxy name, see subdomainRegex). ok is false for a label
+// of another shape.
+func ParseSubdomain(subdomain string) (appName string, declaredPort uint64, stage common.Stage, ok bool) {
+	result := subdomainRegex.FindStringSubmatch(subdomain)
+	if result == nil {
+		return "", 0, "", false
+	}
+	port, err := strconv.ParseUint(result[2], 10, 64)
+	if err != nil {
+		return "", 0, "", false
+	}
+	stage = common.PROD
+	if result[3] != "" {
+		stage = common.DEV
+	}
+	return result[1], port, stage, true
 }
 
 func initialize(cfg *config.Config) TunnelConfigBuilder {
@@ -734,13 +774,10 @@ func (builder *TunnelConfigBuilder) GetTunnelConfig() ([]TunnelConfig, error) {
 			DeclaredPort: uint64(proxy.LocalPort),
 		}
 
-		result := subdomainRegex.FindStringSubmatch(subdomain)
-		if len(result) > 2 {
-			tunnelConfig.AppName = result[1]
-			declaredPort, err := strconv.ParseUint(result[2], 10, 64)
-			if err == nil {
-				tunnelConfig.DeclaredPort = declaredPort
-			}
+		if appName, declaredPort, stage, ok := ParseSubdomain(subdomain); ok {
+			tunnelConfig.AppName = appName
+			tunnelConfig.DeclaredPort = declaredPort
+			tunnelConfig.Stage = stage
 		} else {
 			log.Error().Str("subdomain", subdomain).Str("name", proxy.Name).Msg("Failed to parse app name from tunnel subdomain")
 		}

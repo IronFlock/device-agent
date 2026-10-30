@@ -98,7 +98,7 @@ func (sm *StateMachine) generateDotEnvContents(config *config.Config, payload co
 			return "", nil, err
 		}
 
-		remotePortEnvs := sm.remotePortEnvVars(config, app.AppName, portRules)
+		remotePortEnvs := sm.remotePortEnvVars(config, app.AppName, app.Stage, portRules)
 
 		envLines = append(environmentVariables, append(remotePortEnvs, missingDefaultEnvs...)...)
 	}

@@ -146,7 +146,21 @@ func (sm *StateMachine) stopProdComposeApp(payload common.TransitionPayload, app
 	return sm.LogManager.Write(payload.ContainerName.Prod, fmt.Sprintf("Successfully stopped %s", payload.AppName))
 }
 
+// dropDevTunnels removes a development run's tunnels: they live only while
+// its container runs (see syncPortState), and a stop or a removal ends that.
+// Unconditional, also when the stop or removal fails half-way: a container
+// that is in fact still running is seen by its state observer, which brings
+// the tunnels back (StateObserver.followDevRun).
+func (sm *StateMachine) dropDevTunnels(payload common.TransitionPayload) {
+	if payload.Stage != common.DEV || sm.StateObserver == nil || sm.StateObserver.AppManager == nil {
+		return
+	}
+	sm.StateObserver.AppManager.RemoveAppTunnels(payload.AppName, common.DEV)
+}
+
 func (sm *StateMachine) stopDevApp(payload common.TransitionPayload, app *common.App) error {
+	defer sm.dropDevTunnels(payload)
+
 	if payload.DockerCompose != nil {
 		return sm.stopDevComposeApp(payload, app)
 	}
