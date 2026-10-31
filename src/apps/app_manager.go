@@ -236,6 +236,7 @@ func (am *AppManager) syncPortState(payload common.TransitionPayload, app *commo
 	}
 
 	newPorts := make([]common.PortForwardRule, 0)
+	liveRules := make([]common.PortForwardRule, 0, len(portRules))
 
 	// The earliest any tunnel of this app needs another look: one that failed
 	// to come up in this pass is retried by the agent itself (see "Retry
@@ -273,20 +274,17 @@ func (am *AppManager) syncPortState(payload common.TransitionPayload, app *commo
 			dialPort, dialPortKnown, reservationFailure = am.resolveTunnelHostPort(payload, portRule)
 		}
 
-		// A development run tunnels its web ports only: what it serves there
-		// is what a developer inspects in the browser. Its tcp/udp ports are
-		// published on the device's network (computePortBindings) but take no
-		// port from the tunnel server's shared pool.
-		devNoTunnel := payload.Stage == common.DEV && !isWebProtocol(portRule.Protocol)
+		// A development run tunnels every port of its template while it runs.
+		// Its tcp/udp ports have no switch: their tunnels come and go with the
+		// run, so a stale Active flag on such a rule does not hold them off.
+		active := portRule.Active || (payload.Stage == common.DEV && !isWebProtocol(portRule.Protocol))
 		// A DEV label is four characters longer than the PROD one, and an app
 		// name of 40 characters can push it past what a DNS label may hold:
-		// such a tunnel could never be reached, so it is not opened.
-		devLabelTooLong := payload.Stage == common.DEV && !devNoTunnel && len(subdomain) > tunnel.MaxLabelLength
+		// such a tunnel could never be reached, so it is not opened. Only an
+		// http(s) tunnel is reached by its label; a tcp/udp one by its port.
+		devLabelTooLong := payload.Stage == common.DEV && isWebProtocol(portRule.Protocol) && len(subdomain) > tunnel.MaxLabelLength
 
-		if devNoTunnel {
-			log.Debug().Str("app", payload.AppName).Uint64("port", portRule.Port).Str("protocol", portRule.Protocol).
-				Msg("No tunnel for a tcp/udp port of a development run")
-		} else if devLabelTooLong {
+		if devLabelTooLong {
 			if portRule.Active && appRunning && tunnelsAvailable {
 				log.Warn().Str("app", payload.AppName).Str("subdomain", subdomain).
 					Msg("No tunnel for a port of a development run: its label exceeds 63 characters")
@@ -297,7 +295,7 @@ func (am *AppManager) syncPortState(payload common.TransitionPayload, app *commo
 				// Said again at the next run.
 				am.forgetLabelTooLong(tunnelID)
 			}
-		} else if portRule.Active {
+		} else if active {
 			if tunnelsAvailable && appRunning {
 				if !dialPortKnown {
 					// Fresh app that has not been started under managed ports
@@ -440,6 +438,9 @@ func (am *AppManager) syncPortState(payload common.TransitionPayload, app *commo
 			// inactive rule on every sync, forever.
 			if am.tunnelManager.Get(tunnelID) == nil && !am.tunnelInConfigFile(tunnelID) {
 				newPorts = append(newPorts, portRule)
+				liveRule := portRule
+				liveRule.RemotePort, liveRule.CloudRemotePort = 0, 0
+				liveRules = append(liveRules, liveRule)
 				continue
 			}
 
@@ -491,6 +492,13 @@ func (am *AppManager) syncPortState(payload common.TransitionPayload, app *commo
 		}
 		newPorts = append(newPorts, newPort)
 
+		// The remote port a development run announces is that of the tunnel
+		// standing right now, not the one its rule remembers from an earlier
+		// run (kept so the next run asks for the same port again).
+		liveRule := newPort
+		liveRule.RemotePort = newConfig.RemotePort
+		liveRule.CloudRemotePort = 0
+		liveRules = append(liveRules, liveRule)
 	}
 
 	// A pass that looked at the tunnels and found none needing another look
@@ -524,8 +532,11 @@ func (am *AppManager) syncPortState(payload common.TransitionPayload, app *commo
 
 	// Live-update the bind-mounted env files ({NAME}.txt / {NAME}_CLOUD.txt)
 	// so running containers see fresh tunnel ports without a restart. A
-	// development run has no remote ports (remotePortEnvVars).
-	if payload.Stage != common.DEV {
+	// development run's tcp/udp tunnels come up only once its container runs,
+	// so the files are how it learns their ports.
+	if payload.Stage == common.DEV {
+		refreshRemotePortEnvFiles(globalConfig, payload.Stage, payload.AppName, liveRules)
+	} else {
 		refreshRemotePortEnvFiles(globalConfig, payload.Stage, payload.AppName, newPorts)
 	}
 

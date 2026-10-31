@@ -66,6 +66,30 @@ func TestRefreshRemotePortEnvFiles(t *testing.T) {
 	assert.True(t, ok)
 }
 
+// A development run announces only the tunnel standing right now: a rule
+// without one removes its port file. A PROD install keeps its file, as its
+// rule's port stays its address.
+func TestRefreshRemotePortEnvFilesDevRemovesGonePort(t *testing.T) {
+	cfg := envFilesTestConfig(t)
+	read := func(stage common.Stage, name string) bool {
+		_, err := os.Stat(filepath.Join(appEnvFilesHostDir(cfg, stage, "MyApp"), name+".txt"))
+		return err == nil
+	}
+	up := []common.PortForwardRule{{RuleName: "media", Port: 10000, Protocol: "udp", RemotePortEnvironment: "MEDIA_PORT", RemotePort: 30400}}
+	gone := []common.PortForwardRule{{RuleName: "media", Port: 10000, Protocol: "udp", RemotePortEnvironment: "MEDIA_PORT"}}
+
+	for _, stage := range []common.Stage{common.DEV, common.PROD} {
+		refreshRemotePortEnvFiles(cfg, stage, "MyApp", up)
+		assert.True(t, read(stage, "REMOTE_PORT_FOR_10000"), stage)
+		assert.True(t, read(stage, "MEDIA_PORT"), stage)
+		refreshRemotePortEnvFiles(cfg, stage, "MyApp", gone)
+	}
+	assert.False(t, read(common.DEV, "REMOTE_PORT_FOR_10000"))
+	assert.False(t, read(common.DEV, "MEDIA_PORT"))
+	assert.True(t, read(common.PROD, "REMOTE_PORT_FOR_10000"))
+	assert.True(t, read(common.PROD, "MEDIA_PORT"))
+}
+
 // Apps without remote-port env rules must not even get an env dir created.
 func TestRefreshRemotePortEnvFilesNoRelevantRules(t *testing.T) {
 	cfg := envFilesTestConfig(t)

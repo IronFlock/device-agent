@@ -82,6 +82,11 @@ func writeEnvValue(envDir string, name string, value string) error {
 // allocating a cloud port — so running containers see fresh values within
 // seconds, without a restart. A cloud port that disappeared (forwarding off)
 // removes the file, flipping SDK URL composition back to the LAN fallback.
+//
+// A development run's tunnels stand only while it runs, and its rules carry
+// the remote port of the tunnel standing right now (0: none). Its {NAME}.txt
+// is removed when there is none, so an SDK never announces the address of a
+// tunnel that is gone or not yet up.
 func refreshRemotePortEnvFiles(cfg *config.Config, stage common.Stage, appName string, rules []common.PortForwardRule) {
 	envDir := appEnvFilesHostDir(cfg, stage, appName)
 
@@ -113,6 +118,8 @@ func refreshRemotePortEnvFiles(cfg *config.Config, stage common.Stage, appName s
 		for _, name := range names {
 			if rule.RemotePort > 0 {
 				writeEnvFile(envDir, name, fmt.Sprintf("%d", rule.RemotePort))
+			} else if stage == common.DEV {
+				removeEnvFile(envDir, name)
 			}
 
 			cloudName := name + "_CLOUD"
