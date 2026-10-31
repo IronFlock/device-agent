@@ -881,9 +881,13 @@ func buildDefaultEnvironmentVariables(config *config.Config, payload common.Tran
 // payload); a rule's custom remote_port_environment name is emitted alongside
 // for backward compatibility.
 //
-// A development run gets none: its only tunnels are http(s) ones, which have
-// no remote port, and the PROD install's tunnel of the same port is not its
-// own.
+// A development run gets none. Its tunnels come up only after its container
+// runs and go when it stops, so a tunnel standing when the container is
+// created belongs to the run before, and a variable can never be withdrawn:
+// once the tunnel went, the SDKs (file first) would fall back to it. It
+// learns its tcp/udp tunnels' ports from the env files alone, which follow
+// the live tunnel (refreshRemotePortEnvFiles). The PROD install's tunnel of
+// the same port is not its own either.
 func (sm *StateMachine) remotePortEnvVars(config *config.Config, appName string, stage common.Stage, portRules []common.PortForwardRule) []string {
 	if stage == common.DEV {
 		return nil
