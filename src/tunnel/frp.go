@@ -2,6 +2,7 @@ package tunnel
 
 import (
 	"crypto/hmac"
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/base64"
 	"fmt"
@@ -56,7 +57,7 @@ type TunnelConfig struct {
 
 // YAML config structures matching frp v0.65.0 format
 // frpcConfigMu guards the frpc config's route fields (ServerPort,
-// Transport.Protocol/ProxyURL), the admin port and its marshalling in
+// Transport.Protocol/ProxyURL), the admin port and credentials and their marshalling in
 // SaveConfig: the capability probe reads the route while a client restart
 // moves it (useRoute), and a status publish reads the admin port while a
 // restart re-picks it (SetAdminPort). One agent runs one tunnel manager, so one lock suffices; it
@@ -119,9 +120,17 @@ type TLSConfig struct {
 	ServerName    string `yaml:"serverName,omitempty"`
 }
 
+// WebServer is frpc's admin API (reload, stop, status, read and replace the
+// whole config). Loopback alone does not protect it: any local process,
+// without admin rights, could otherwise upload a config, for example a socks5
+// plugin on a granted port, or read the tunnel_proof. frpc requires Basic auth
+// on every /api route once User and Password are set; `frpc reload -c` reads
+// both from the config file, and AllStatus sends them.
 type WebServer struct {
-	Addr string `yaml:"addr"`
-	Port int    `yaml:"port"`
+	Addr     string `yaml:"addr"`
+	Port     int    `yaml:"port"`
+	User     string `yaml:"user,omitempty"`
+	Password string `yaml:"password,omitempty"`
 }
 
 type LogConfig struct {
@@ -395,6 +404,10 @@ func initialize(cfg *config.Config) TunnelConfigBuilder {
 		WebServer: &WebServer{
 			Addr: "127.0.0.1",
 			Port: port,
+			// New for every agent start; frpc runs only as the agent's
+			// child, so nothing else needs to know it.
+			User:     adminUser,
+			Password: rand.Text(),
 		},
 		Log: &LogConfig{
 			To:      frpcLogPath,
@@ -877,8 +890,19 @@ func (builder *TunnelConfigBuilder) RemoveTunnelVariable(tunnelID string) {
 }
 
 func (builder *TunnelConfigBuilder) Reset() {
+	// The running frpc keeps the admin credentials it started with; the
+	// reload that follows a reset must present those.
+	webServer := builder.yamlConfig.WebServer
 	*builder = initialize(builder.appConfig)
+	if webServer != nil {
+		builder.yamlConfig.WebServer.User = webServer.User
+		builder.yamlConfig.WebServer.Password = webServer.Password
+		builder.SaveConfig()
+	}
 }
+
+// adminUser is the user name of frpc's admin API; the password is random.
+const adminUser = "admin"
 
 // adminPortScanStart is the base of the dedicated range for frpc's loopback
 // admin webserver. It sits below every contested pool on a device: the OS
@@ -962,6 +986,16 @@ func (builder *TunnelConfigBuilder) GetAdminPort() (int, error) {
 		return 0, fmt.Errorf("webServer not configured")
 	}
 	return builder.yamlConfig.WebServer.Port, nil
+}
+
+// GetAdminAuth returns the Basic auth credentials of frpc's admin API.
+func (builder *TunnelConfigBuilder) GetAdminAuth() (user, password string) {
+	frpcConfigMu.Lock()
+	defer frpcConfigMu.Unlock()
+	if builder.yamlConfig.WebServer == nil {
+		return "", ""
+	}
+	return builder.yamlConfig.WebServer.User, builder.yamlConfig.WebServer.Password
 }
 
 func (builder *TunnelConfigBuilder) RemoveTunnelConfig(port TunnelConfig) {
