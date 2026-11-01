@@ -1680,6 +1680,7 @@ func (frpTm *FrpTunnelManager) AllStatus() ([]TunnelStatus, error) {
 		log.Error().Err(err).Msg("Failed to create HTTP request")
 		return []TunnelStatus{}, err
 	}
+	req.SetBasicAuth(frpTm.configBuilder.GetAdminAuth())
 
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
