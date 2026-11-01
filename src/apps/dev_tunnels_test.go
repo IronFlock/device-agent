@@ -48,10 +48,10 @@ func devEnvFile(t *testing.T, cfg *config.Config, app, name string) (string, boo
 	return string(data), true
 }
 
-// A running development run gets a tunnel for every port of its template. Its
-// tcp/udp ports have no switch: a rule flagged inactive is tunneled all the
-// same. Their remote ports reach the container through its env files, and
-// stay on the rules so the next run asks for the same ports again.
+// A running development run gets a tunnel for every active port of its
+// template. The remote ports of its tcp/udp tunnels reach the container
+// through its env files, and stay on the rules so the next run asks for the
+// same ports again.
 func TestSyncPortStateDevTunnelsAllPorts(t *testing.T) {
 	am, _, mockTunnel, appStore, _, cfg := amHarness(t)
 	mockTunnel.EXPECT().TunnelCapable().Return(true).Maybe()
@@ -63,7 +63,7 @@ func TestSyncPortStateDevTunnelsAllPorts(t *testing.T) {
 	payload.Ports, _ = tunnel.PortForwardRuleToInterface([]common.PortForwardRule{
 		{RuleName: "ui", Port: 8080, Protocol: "http", Active: true},
 		{RuleName: "mqtt", Port: 1883, Protocol: "tcp", Active: true, RemotePortEnvironment: "MQTT_PORT"},
-		{RuleName: "media", Port: 10000, Protocol: "udp", Active: false},
+		{RuleName: "media", Port: 10000, Protocol: "udp", Active: true},
 	})
 
 	// The launch path published all three on host ports.
@@ -111,7 +111,7 @@ func TestSyncPortStateDevTunnelsAllPorts(t *testing.T) {
 	assert.Equal(t, uint64(41800), added[sub].LocalPort, "frpc dials the DEV container's host port")
 	require.Contains(t, added, tcpSub)
 	assert.Equal(t, uint64(41801), added[tcpSub].LocalPort)
-	require.Contains(t, added, udpSub, "a DEV udp port has no switch: an inactive flag does not hold it off")
+	require.Contains(t, added, udpSub)
 
 	rules := spsRules(t, saved)
 	require.Len(t, rules, 3)
@@ -129,9 +129,9 @@ func TestSyncPortStateDevTunnelsAllPorts(t *testing.T) {
 	assert.False(t, ok, "an http tunnel has no remote port")
 }
 
-// Once a development run stops, its tcp/udp tunnel goes and so does the port
-// announced to the container. The rule keeps the port, and the next run asks
-// frps for it again.
+// Once a development run stops, or its port is switched off, its tcp/udp
+// tunnel goes and so does the port announced to the container. The rule keeps
+// the port, and the next run asks frps for it again.
 func TestSyncPortStateDevTcpTunnelFollowsRun(t *testing.T) {
 	am, _, mockTunnel, appStore, _, cfg := amHarness(t)
 	mockTunnel.EXPECT().TunnelCapable().Return(true).Maybe()
@@ -176,6 +176,18 @@ func TestSyncPortStateDevTcpTunnelFollowsRun(t *testing.T) {
 	got, ok := devEnvFile(t, cfg, "devmedia", "REMOTE_PORT_FOR_10000")
 	assert.True(t, ok)
 	assert.Equal(t, "30200", got)
+
+	// Switched off while it runs: the tunnel goes as on a stop. Nothing
+	// changed on the rule, so nothing is saved.
+	payload.Ports = spsPorts(t, common.PortForwardRule{RuleName: "media", Port: 10000, Protocol: "udp", Active: false, HostPort: 41850, RemotePort: 30200})
+	mockTunnel.EXPECT().Get(id).Return(&tunnel.Tunnel{Config: tunnel.TunnelConfig{Subdomain: sub, RemotePort: 30200}}).Once()
+	mockTunnel.EXPECT().RemoveTunnel(mock.MatchedBy(func(c tunnel.TunnelConfig) bool {
+		return c.Subdomain == sub && c.Protocol == tunnel.UDP && c.Stage == common.DEV
+	})).Return(nil).Once()
+	mockTunnel.EXPECT().GetState().Return([]tunnel.TunnelState{}, nil).Once()
+	require.NoError(t, am.syncPortState(payload, app))
+	_, ok = devEnvFile(t, cfg, "devmedia", "REMOTE_PORT_FOR_10000")
+	assert.False(t, ok, "a switched-off port is not announced")
 }
 
 // Only an http(s) tunnel is reached by its label: a tcp/udp port of an app
