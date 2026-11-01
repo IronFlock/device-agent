@@ -274,10 +274,6 @@ func (am *AppManager) syncPortState(payload common.TransitionPayload, app *commo
 			dialPort, dialPortKnown, reservationFailure = am.resolveTunnelHostPort(payload, portRule)
 		}
 
-		// A development run tunnels every port of its template while it runs.
-		// Its tcp/udp ports have no switch: their tunnels come and go with the
-		// run, so a stale Active flag on such a rule does not hold them off.
-		active := portRule.Active || (payload.Stage == common.DEV && !isWebProtocol(portRule.Protocol))
 		// A DEV label is four characters longer than the PROD one, and an app
 		// name of 40 characters can push it past what a DNS label may hold:
 		// such a tunnel could never be reached, so it is not opened. Only an
@@ -295,7 +291,7 @@ func (am *AppManager) syncPortState(payload common.TransitionPayload, app *commo
 				// Said again at the next run.
 				am.forgetLabelTooLong(tunnelID)
 			}
-		} else if active {
+		} else if portRule.Active {
 			if tunnelsAvailable && appRunning {
 				if !dialPortKnown {
 					// Fresh app that has not been started under managed ports
