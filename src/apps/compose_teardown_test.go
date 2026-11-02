@@ -94,7 +94,7 @@ func runningRelayContainer() []containerpkg.ContainerResult {
 // publishedAppLogContaining reports whether an app-log chunk carrying text was
 // published (LogManager.Write publishes each line as {"chunk": text}).
 func publishedAppLogContaining(msg *fakes.Messenger, text string) bool {
-	for _, call := range msg.PublishCalls {
+	for _, call := range msg.GetPublishCalls() {
 		if len(call.Args) == 0 {
 			continue
 		}
