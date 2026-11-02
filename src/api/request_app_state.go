@@ -64,6 +64,8 @@ func responseToTransitionPayload(config *config.Config, result messenger.Result)
 	environmentTemplateKw := kwargs["environment_template"]
 	dockerComposeKw := kwargs["docker_compose"]
 	newDockerComposeKw := kwargs["new_docker_compose"]
+	privilegedKw := kwargs["privileged"]
+	newPrivilegedKw := kwargs["new_privileged"]
 	dockerCredentialsKw := kwargs["docker_credentials"]
 	instanceKeyKw := kwargs["instance_key"]
 	appCredEpochKw := kwargs["app_cred_epoch"]
@@ -93,6 +95,8 @@ func responseToTransitionPayload(config *config.Config, result messenger.Result)
 	var environment map[string]interface{}
 	var dockerCompose map[string]interface{}
 	var newDockerCompose map[string]interface{}
+	var privileged *bool
+	var newPrivileged *bool
 	var dockerCredentials map[string]common.DockerCredential
 
 	// TODO: can be simplified with parser function, but unneccessary
@@ -328,6 +332,24 @@ func responseToTransitionPayload(config *config.Config, result messenger.Result)
 		}
 	}
 
+	// privileged / new_privileged: absent or null (a backend that predates the
+	// grant) stays nil, which keeps the app's privileges as they always were.
+	if privilegedKw != nil {
+		value, ok := privilegedKw.(bool)
+		if !ok {
+			return common.TransitionPayload{}, fmt.Errorf("%w privileged", errdefs.ErrFailedToParse)
+		}
+		privileged = &value
+	}
+
+	if newPrivilegedKw != nil {
+		value, ok := newPrivilegedKw.(bool)
+		if !ok {
+			return common.TransitionPayload{}, fmt.Errorf("%w new privileged", errdefs.ErrFailedToParse)
+		}
+		newPrivileged = &value
+	}
+
 	if dockerCredentialsKw != nil {
 		// Output map to store the parsed credentials
 		dockerCredentials = make(map[string]common.DockerCredential)
@@ -416,6 +438,8 @@ func responseToTransitionPayload(config *config.Config, result messenger.Result)
 	payload.Ports = ports
 	payload.DockerCompose = dockerCompose
 	payload.NewDockerCompose = newDockerCompose
+	payload.Privileged = privileged
+	payload.NewPrivileged = newPrivileged
 
 	payload.CancelTransition = cancelTransition
 

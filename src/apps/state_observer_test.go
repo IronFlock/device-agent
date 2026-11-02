@@ -73,7 +73,7 @@ func observerSeedApp(t *testing.T, st *store.AppStore, name string, state, reque
 // remoteAppStates extracts every state pushed via SetActualAppOnDeviceState.
 func remoteAppStates(msg *fakes.Messenger) []common.AppState {
 	states := make([]common.AppState, 0)
-	for _, call := range msg.CallCalls {
+	for _, call := range msg.GetCallCalls() {
 		if call.Topic != topics.SetActualAppOnDeviceState {
 			continue
 		}

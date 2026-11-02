@@ -165,7 +165,7 @@ func TestAppDataDirWritableByAnyUser(t *testing.T) {
 	keyFile := filepath.Join(dataDir, "key.pem")
 	require.NoError(t, os.WriteFile(keyFile, []byte("k"), 0600))
 
-	mounts, err := computeMounts(common.PROD, "MyApp", cfg)
+	mounts, err := computeMounts(common.PROD, "MyApp", cfg, true)
 	require.NoError(t, err)
 
 	var source string

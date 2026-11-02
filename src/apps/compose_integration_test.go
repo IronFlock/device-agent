@@ -371,3 +371,57 @@ func TestIntegrationComposeOneShotServiceStarts(t *testing.T) {
 	assert.Equal(t, map[string]string{"migrate": "exited", "web": "running"}, states,
 		"the one-shot must have finished while web runs — the case the start used to fail on")
 }
+
+// =============================================================================
+// Test 3: the privileged label reaches the containers, and only a changed
+// grant reads as a change
+// =============================================================================
+
+func TestIntegrationComposePrivilegedLabel(t *testing.T) {
+	docker := composeITDocker(t)
+	sm, _, st, _ := composeITStateMachine(t, docker)
+
+	appName := composeITAppName(t)
+	const appKey = uint64(3)
+	const stage = common.DEV
+
+	revoked := false
+	payload := builders.BuildTransitionPayload(appName, common.RUNNING, stage)
+	payload.AppKey = appKey
+	payload.CurrentState = common.STARTING
+	payload.DockerCompose = composeITTwoServiceCompose()
+	payload.DockerCompose["services"].(map[string]any)["svc_a"].(map[string]any)["cap_add"] = []any{"NET_ADMIN"}
+	payload.Privileged = &revoked
+	payload.ContainerName = common.StageBasedResult{
+		Dev:  common.BuildContainerName(common.DEV, appKey, appName),
+		Prod: common.BuildContainerName(common.PROD, appKey, appName),
+	}
+
+	app, err := st.AddApp(payload)
+	require.NoError(t, err)
+
+	composePath, err := sm.SetupComposeFiles(payload, app, false)
+	require.NoError(t, err)
+	t.Cleanup(func() { composeITForceDown(composePath) })
+
+	compose := docker.Compose()
+	outputChan, upCmd, err := compose.Up(composePath)
+	require.NoError(t, err)
+	require.NoError(t, composeITDrainUp(outputChan, upCmd), "compose up should exit 0")
+	composeITRequireStarted(t, compose, composePath)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	containers, err := container.ListComposeProjectContainers(ctx, docker, common.BuildComposeContainerName(stage, appKey, appName))
+	require.NoError(t, err)
+	require.Len(t, containers, 2)
+	for _, cont := range containers {
+		assert.Equal(t, "false", cont.Labels[privilegedLabel], "container %s", cont.Names)
+	}
+
+	assert.False(t, sm.privilegedAccessChanged(payload, app), "the grant the app started with is no change")
+
+	granted := true
+	payload.Privileged = &granted
+	assert.True(t, sm.privilegedAccessChanged(payload, app), "granting it afterwards is")
+}

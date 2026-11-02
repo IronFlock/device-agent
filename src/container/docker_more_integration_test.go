@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reagent/errdefs"
 	"strings"
 	"testing"
 	"time"
@@ -242,6 +243,38 @@ func TestIntegrationDockerGetAndListContainersFiltering(t *testing.T) {
 		}
 	}
 	assert.True(t, matched, "filtered list should contain the created container id")
+}
+
+// TestIntegrationDockerGetContainerPrivileged reads HostConfig.Privileged back
+// from created (never started) containers; a missing container is reported as
+// ContainerNotFound.
+func TestIntegrationDockerGetContainerPrivileged(t *testing.T) {
+	docker := newIntegrationDocker(t)
+
+	pullImage(t, docker, busyboxImage)
+
+	for _, privileged := range []bool{true, false} {
+		name := strings.ToLower(uniqueName(t, fmt.Sprintf("reagent-privileged-%t", privileged)))
+
+		createCtx, cancelCreate := context.WithTimeout(context.Background(), 30*time.Second)
+		id, err := docker.CreateContainer(
+			createCtx,
+			bcontainer.Config{Image: busyboxImage, Cmd: []string{"true"}},
+			bcontainer.HostConfig{Privileged: privileged},
+			network.NetworkingConfig{},
+			name,
+		)
+		cancelCreate()
+		require.NoError(t, err, "create container should succeed")
+		t.Cleanup(func() { forceRemoveContainer(docker, id) })
+
+		got, err := docker.GetContainerPrivileged(context.Background(), name)
+		require.NoError(t, err)
+		assert.Equal(t, privileged, got)
+	}
+
+	_, err := docker.GetContainerPrivileged(context.Background(), strings.ToLower(uniqueName(t, "reagent-privileged-missing")))
+	assert.True(t, errdefs.IsContainerNotFound(err), "expected ContainerNotFound, got %v", err)
 }
 
 // TestIntegrationDockerWaitForContainerByName creates a container that exits

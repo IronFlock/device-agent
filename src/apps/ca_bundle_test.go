@@ -141,7 +141,7 @@ func TestComputeMountsCarriesTheCABundle(t *testing.T) {
 	cfg := caTestConfig(t, "tls-sf015.corp.trumpf.com", true)
 	cfg.CommandLineArguments.AppsSharedDir = filepath.Join(cfg.CommandLineArguments.AppsDirectory, "shared")
 
-	mounts, err := computeMounts(common.PROD, "myapp", cfg)
+	mounts, err := computeMounts(common.PROD, "myapp", cfg, true)
 	require.NoError(t, err)
 
 	var found bool
@@ -156,7 +156,7 @@ func TestComputeMountsCarriesTheCABundle(t *testing.T) {
 
 	cloudCfg := caTestConfig(t, "", true)
 	cloudCfg.CommandLineArguments.AppsSharedDir = filepath.Join(cloudCfg.CommandLineArguments.AppsDirectory, "shared")
-	cloudMounts, err := computeMounts(common.PROD, "myapp", cloudCfg)
+	cloudMounts, err := computeMounts(common.PROD, "myapp", cloudCfg, true)
 	require.NoError(t, err)
 	for _, mount := range cloudMounts {
 		assert.NotEqual(t, trust.ContainerDir, mount.Target)

@@ -145,10 +145,15 @@ func (sm *StateMachine) SetupComposeFiles(payload common.TransitionPayload, app 
 	dockerComposeFilePath := targetAppDir + "/" + DockerFileName
 	dotEnvFilePath := targetAppDir + "/" + DotEnvFileName
 
+	// The privileged access belongs to the release whose definition is
+	// rendered: the newest one for an update, the present one otherwise.
 	sourceCompose := payload.DockerCompose
+	sourcePrivileged := payload.Privileged
 	if payload.NewDockerCompose != nil && updatingApp {
 		sourceCompose = payload.NewDockerCompose
+		sourcePrivileged = payload.NewPrivileged
 	}
+	privileged := grantsPrivileged(sourcePrivileged)
 
 	// Work on a copy: the payload map holds the authored definition, and the
 	// host-port rewrite below must not leak into it — rewriting an already
@@ -156,6 +161,14 @@ func (sm *StateMachine) SetupComposeFiles(payload common.TransitionPayload, app 
 	dockerCompose, err := deepCopyCompose(sourceCompose)
 	if err != nil {
 		return "", err
+	}
+
+	// Without privileged access the app's privileged settings go, before the
+	// agent adds its own binds below (those are not the app's to lose). The
+	// start writes what was removed to the app log
+	// (writeUnprivilegedStartNotice).
+	if !privileged {
+		stripComposePrivileges(dockerCompose)
 	}
 
 	dockerCompose["name"] = common.BuildComposeContainerName(payload.Stage, app.AppKey, app.AppName)
@@ -182,6 +195,7 @@ func (sm *StateMachine) SetupComposeFiles(payload common.TransitionPayload, app 
 		}
 
 		service["env_file"] = DotEnvFileName
+		setComposePrivilegedLabel(service, privileged)
 		addComposeExtraHost(service)
 		addComposeEnvFilesMount(service, envFilesHostDir)
 		addComposeCABundleMount(service, caBundleHostDir)

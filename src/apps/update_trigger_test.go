@@ -91,7 +91,7 @@ func updExpectPull(mc *mocks.Container, payload common.TransitionPayload, supers
 // not) confirmed. Mirrors remoteStatesFor, which reads the state field instead.
 func updSentUpdateStatuses(msg *fakes.Messenger) []common.UpdateStatus {
 	statuses := make([]common.UpdateStatus, 0)
-	for _, call := range msg.CallCalls {
+	for _, call := range msg.GetCallCalls() {
 		if string(call.Topic) != string(topics.SetActualAppOnDeviceState) {
 			continue
 		}

@@ -1,0 +1,1 @@
+ALTER TABLE RequestedAppStates ADD COLUMN new_privileged BOOLEAN

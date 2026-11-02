@@ -379,10 +379,12 @@ func (ast *AppStateDatabase) GetRequestedStates() ([]common.TransitionPayload, e
 		var portsString *string
 		var dockerComposeString *string
 		var newDockerComposeString *string
+		var privileged *bool
+		var newPrivileged *bool
 		var currentState common.AppState
 		var requestedState common.AppState
 
-		err = rows.Scan(&appName, &appKey, &stage, &version, &presentVersion, &newestVersion, &currentState, &requestedState, &requestorAccountKey, &deviceOwnerAccountKey, &releaseKey, &newReleaseKey, &requestUpdate, &environmentVariablesString, &environmentTemplateString, &portsString, &dockerComposeString, &newDockerComposeString)
+		err = rows.Scan(&appName, &appKey, &stage, &version, &presentVersion, &newestVersion, &currentState, &requestedState, &requestorAccountKey, &deviceOwnerAccountKey, &releaseKey, &newReleaseKey, &requestUpdate, &environmentVariablesString, &environmentTemplateString, &portsString, &dockerComposeString, &newDockerComposeString, &privileged, &newPrivileged)
 		if err != nil {
 			return nil, err
 		}
@@ -393,6 +395,8 @@ func (ast *AppStateDatabase) GetRequestedStates() ([]common.TransitionPayload, e
 		payload.NewestVersion = newestVersion
 		payload.PresentVersion = presentVersion
 		payload.RequestUpdate = requestUpdate
+		payload.Privileged = privileged
+		payload.NewPrivileged = newPrivileged
 
 		environmentVariables := make(map[string]interface{})
 		if environmentVariablesString != "" {
@@ -489,8 +493,10 @@ func (ast *AppStateDatabase) GetRequestedState(aKey uint64, aStage common.Stage)
 	var dockerComposeString *string
 	var newDockerComposeString *string
 	var portsString *string
+	var privileged *bool
+	var newPrivileged *bool
 
-	err = rows.Scan(&appName, &appKey, &stage, &version, &presentVersion, &newestVersion, &currentState, &requestedState, &requestorAccountKey, &deviceOwnerAccountKey, &releaseKey, &newReleaseKey, &requestUpdate, &environmentVariablesString, &environmentTemplateString, &portsString, &dockerComposeString, &newDockerComposeString)
+	err = rows.Scan(&appName, &appKey, &stage, &version, &presentVersion, &newestVersion, &currentState, &requestedState, &requestorAccountKey, &deviceOwnerAccountKey, &releaseKey, &newReleaseKey, &requestUpdate, &environmentVariablesString, &environmentTemplateString, &portsString, &dockerComposeString, &newDockerComposeString, &privileged, &newPrivileged)
 	if err != nil {
 		return common.TransitionPayload{}, err
 	}
@@ -506,6 +512,8 @@ func (ast *AppStateDatabase) GetRequestedState(aKey uint64, aStage common.Stage)
 	payload.NewestVersion = newestVersion
 	payload.PresentVersion = presentVersion
 	payload.RequestUpdate = requestUpdate
+	payload.Privileged = privileged
+	payload.NewPrivileged = newPrivileged
 
 	environmentVariables := make(map[string]interface{})
 	if environmentVariablesString != "" {
@@ -618,7 +626,7 @@ func (ast *AppStateDatabase) BulkUpsertRequestedStateChanges(payloads []common.T
 		newDockerComposeJSONString := string(newDockerComposeJSONBytes)
 
 		_, err = upsertStatement.Exec(payload.AppName, payload.AppKey, payload.Stage, payload.Version, payload.PresentVersion, payload.NewestVersion,
-			payload.CurrentState, payload.RequestedState, payload.RequestorAccountKey, payload.DeviceOwnerAccountKey, payload.ReleaseKey, payload.NewReleaseKey, payload.RequestUpdate, environmentsJSONString, environmentTemplateJSONString, portsJSONString, dockerComposeJSONString, newDockerComposeJSONString,
+			payload.CurrentState, payload.RequestedState, payload.RequestorAccountKey, payload.DeviceOwnerAccountKey, payload.ReleaseKey, payload.NewReleaseKey, payload.RequestUpdate, environmentsJSONString, environmentTemplateJSONString, portsJSONString, dockerComposeJSONString, newDockerComposeJSONString, payload.Privileged, payload.NewPrivileged,
 			time.Now().Format(time.RFC3339),
 		)
 
@@ -686,7 +694,7 @@ func (ast *AppStateDatabase) UpsertRequestedStateChange(payload common.Transitio
 	newDockerComposeJSONString := string(newDockerComposeJSONBytes)
 
 	_, err = upsertStatement.Exec(payload.AppName, payload.AppKey, payload.Stage, payload.Version, payload.PresentVersion, payload.NewestVersion,
-		payload.CurrentState, payload.RequestedState, payload.RequestorAccountKey, payload.DeviceOwnerAccountKey, payload.ReleaseKey, payload.NewReleaseKey, payload.RequestUpdate, environmentsJSONString, environmentTemplateJSONString, portsJSONString, dockerComposeJSONString, newDockerComposeJSONString,
+		payload.CurrentState, payload.RequestedState, payload.RequestorAccountKey, payload.DeviceOwnerAccountKey, payload.ReleaseKey, payload.NewReleaseKey, payload.RequestUpdate, environmentsJSONString, environmentTemplateJSONString, portsJSONString, dockerComposeJSONString, newDockerComposeJSONString, payload.Privileged, payload.NewPrivileged,
 		time.Now().Format(time.RFC3339),
 	)
 

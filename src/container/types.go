@@ -80,6 +80,7 @@ type Container interface {
 	GetContainerPortBindings(ctx context.Context, containerName string) (map[string]uint64, error)
 	GetComposePublishedPorts(ctx context.Context, projectName string) (map[string]uint64, error)
 	GetContainerNetworkMode(ctx context.Context, containerName string) (string, error)
+	GetContainerPrivileged(ctx context.Context, containerName string) (bool, error)
 	ListenForContainerEvents(ctx context.Context) (<-chan events.Message, <-chan error)
 	GetContainer(ctx context.Context, containerName string) (container.Summary, error)
 	GetContainers(ctx context.Context) ([]container.Summary, error)

@@ -217,6 +217,12 @@ func TestRunProdApp(t *testing.T) {
 			GetContainer(mock.Anything, payload.ContainerName.Prod).
 			Return(dockercontainer.Summary{ID: containerID}, nil).
 			Once()
+		// Same privileged mode as the desired host config (nil grant ->
+		// privileged), so the container is kept.
+		mc.EXPECT().
+			GetContainerPrivileged(mock.Anything, payload.ContainerName.Prod).
+			Return(true, nil).
+			Once()
 		mc.EXPECT().
 			StartContainer(mock.Anything, containerID).
 			Return(nil).

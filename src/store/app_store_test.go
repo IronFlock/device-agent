@@ -339,6 +339,35 @@ func TestFetchRequestedAppStates(t *testing.T) {
 		assert.Equal(t, common.PRESENT, beta.RequestedState)
 	})
 
+	t.Run("maps privileged access, absent and null stay nil", func(t *testing.T) {
+		st, msg := newTestStore(t)
+
+		// Raw rows as the backend sends them: an old backend has no fields.
+		rows := []interface{}{
+			map[string]interface{}{"app_key": 1, "app_name": "old", "stage": "PROD", "current_state": "RUNNING", "target_state": "RUNNING"},
+			map[string]interface{}{"app_key": 2, "app_name": "nulls", "stage": "PROD", "current_state": "RUNNING", "target_state": "RUNNING",
+				"privileged": nil, "new_privileged": nil},
+			map[string]interface{}{"app_key": 3, "app_name": "set", "stage": "PROD", "current_state": "RUNNING", "target_state": "RUNNING",
+				"privileged": false, "new_privileged": true},
+		}
+		msg.SetCallResponse(string(topics.GetRequestedAppStates), messenger.Result{
+			Arguments: []interface{}{rows},
+		}, nil)
+
+		payloads, err := st.FetchRequestedAppStates()
+		require.NoError(t, err)
+		require.Len(t, payloads, 3)
+
+		assert.Nil(t, payloads[0].Privileged)
+		assert.Nil(t, payloads[0].NewPrivileged)
+		assert.Nil(t, payloads[1].Privileged)
+		assert.Nil(t, payloads[1].NewPrivileged)
+		require.NotNil(t, payloads[2].Privileged)
+		require.NotNil(t, payloads[2].NewPrivileged)
+		assert.False(t, *payloads[2].Privileged)
+		assert.True(t, *payloads[2].NewPrivileged)
+	})
+
 	t.Run("empty response yields empty slice", func(t *testing.T) {
 		st, msg := newTestStore(t)
 

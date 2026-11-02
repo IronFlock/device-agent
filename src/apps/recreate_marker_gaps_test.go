@@ -116,6 +116,7 @@ func TestCreateContainerMarksAReusedContainerRecreated(t *testing.T) {
 		Containers: map[string]*recreateEntry{name: {Volumes: []recordedVolume{{Name: "v", Target: "/v"}}}},
 	}))
 	mc.EXPECT().GetContainer(mock.Anything, name).Return(dockercontainer.Summary{ID: "existing", Names: []string{"/" + name}}, nil).Once()
+	mc.EXPECT().GetContainerPrivileged(mock.Anything, name).Return(false, nil).Once()
 	app := createTestApp("app1", common.PRESENT, common.PROD)
 	payload := createTestPayload("app1", common.RUNNING, common.PROD)
 	payload.ContainerName.Prod = name

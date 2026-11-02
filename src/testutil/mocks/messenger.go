@@ -20,10 +20,19 @@ func NewMessenger(t interface {
 	mock.TestingT
 	Cleanup(func())
 }) *Messenger {
+	if helper, ok := t.(interface{ Helper() }); ok {
+		helper.Helper()
+	}
+
 	mock := &Messenger{}
 	mock.Mock.Test(t)
 
-	t.Cleanup(func() { mock.AssertExpectations(t) })
+	t.Cleanup(func() {
+		if helper, ok := t.(interface{ Helper() }); ok {
+			helper.Helper()
+		}
+		mock.AssertExpectations(t)
+	})
 
 	return mock
 }
@@ -121,8 +130,8 @@ func (_c *Messenger_Call_Call) Run(run func(ctx context.Context, topic topics.To
 	return _c
 }
 
-func (_c *Messenger_Call_Call) Return(v messenger.Result, err error) *Messenger_Call_Call {
-	_c.Call.Return(v, err)
+func (_c *Messenger_Call_Call) Return(result messenger.Result, err error) *Messenger_Call_Call {
+	_c.Call.Return(result, err)
 	return _c
 }
 
@@ -364,6 +373,39 @@ func (_c *Messenger_Publish_Call) Return(err error) *Messenger_Publish_Call {
 
 func (_c *Messenger_Publish_Call) RunAndReturn(run func(topic topics.Topic, args []interface{}, kwargs common.Dict, options common.Dict) error) *Messenger_Publish_Call {
 	_c.Call.Return(run)
+	return _c
+}
+
+// Reconnect provides a mock function for the type Messenger
+func (_mock *Messenger) Reconnect() {
+	_mock.Called()
+	return
+}
+
+// Messenger_Reconnect_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'Reconnect'
+type Messenger_Reconnect_Call struct {
+	*mock.Call
+}
+
+// Reconnect is a helper method to define mock.On call
+func (_e *Messenger_Expecter) Reconnect() *Messenger_Reconnect_Call {
+	return &Messenger_Reconnect_Call{Call: _e.mock.On("Reconnect")}
+}
+
+func (_c *Messenger_Reconnect_Call) Run(run func()) *Messenger_Reconnect_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		run()
+	})
+	return _c
+}
+
+func (_c *Messenger_Reconnect_Call) Return() *Messenger_Reconnect_Call {
+	_c.Call.Return()
+	return _c
+}
+
+func (_c *Messenger_Reconnect_Call) RunAndReturn(run func()) *Messenger_Reconnect_Call {
+	_c.Run(run)
 	return _c
 }
 

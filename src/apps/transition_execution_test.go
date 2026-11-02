@@ -412,7 +412,7 @@ func TestCancelHandlers(t *testing.T) {
 
 func remoteStatesFor(msg *fakes.Messenger) []common.AppState {
 	states := make([]common.AppState, 0)
-	for _, call := range msg.CallCalls {
+	for _, call := range msg.GetCallCalls() {
 		if string(call.Topic) != string(topics.SetActualAppOnDeviceState) {
 			continue
 		}

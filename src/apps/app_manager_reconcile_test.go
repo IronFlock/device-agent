@@ -294,14 +294,14 @@ func TestHandleTransferFailure(t *testing.T) {
 		app := amSeed(t, st, 41, "running-app", common.RUNNING, common.DEV)
 		containerName := common.BuildContainerName(common.DEV, 41, "running-app")
 
-		before := len(msg.CallCalls)
+		before := msg.GetCallCount()
 		am.HandleTransferFailure(containerName, assertErr("transfer canceled"))
 
 		app.StateLock.Lock()
 		final := app.CurrentState
 		app.StateLock.Unlock()
 		assert.Equal(t, common.RUNNING, final, "a non-TRANSFERING app is left untouched")
-		assert.Equal(t, before, len(msg.CallCalls), "no remote notification should be sent")
+		assert.Equal(t, before, msg.GetCallCount(), "no remote notification should be sent")
 	})
 
 	t.Run("is a no-op for an unknown container", func(t *testing.T) {

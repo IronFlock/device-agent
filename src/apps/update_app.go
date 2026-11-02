@@ -200,6 +200,8 @@ func (sm *StateMachine) persistPostUpdateRequestedState(payload common.Transitio
 	// a compose app that updated to a single-container release must come back
 	// as a legacy app, not keep managing a project that no longer exists.
 	payload.DockerCompose = payload.NewDockerCompose
+	// The privileged access travels with the release it was granted for.
+	payload.Privileged = payload.NewPrivileged
 
 	app.StateLock.Lock()
 	payload.RequestedState = app.RequestedState

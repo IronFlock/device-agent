@@ -541,19 +541,26 @@ func (sm *StateMachine) rewriteComposeHostPorts(payload common.TransitionPayload
 }
 
 // containerNetworkConfigOutdated reports whether an existing container must
-// be recreated because its network mode or published ports no longer match
-// the desired host config.
+// be recreated because its network mode, published ports or privileged mode
+// no longer match the desired host config.
 func (sm *StateMachine) containerNetworkConfigOutdated(cont dockercontainer.Summary, hConfig *dockercontainer.HostConfig, containerName string) bool {
 	if normalizeNetworkMode(cont.HostConfig.NetworkMode) != normalizeNetworkMode(string(hConfig.NetworkMode)) {
+		return true
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
+	defer cancel()
+
+	// A container kept from before a grant change (a stopped one survives a
+	// reboot) must not start with the old privileges.
+	privileged, err := sm.Container.GetContainerPrivileged(ctx, containerName)
+	if err == nil && privileged != hConfig.Privileged {
 		return true
 	}
 
 	if len(hConfig.PortBindings) == 0 {
 		return false
 	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
-	defer cancel()
 
 	actualBindings, err := sm.Container.GetContainerPortBindings(ctx, containerName)
 	if err != nil {
