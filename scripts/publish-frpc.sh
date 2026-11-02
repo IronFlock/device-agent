@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Publish a (already built and, in release CI, Authenticode-signed) frpc binary
-# to gs://ironflock-downloads/device-agent/frpc/, with a SHA-256 manifest next
-# to it.
+# to gs://ironflock-downloads/device-agent/frpc/, with a SHA-256 manifest and
+# its CycloneDX SBOM (<binary>.cdx.json, `just sbom-bin`) next to it.
 #
 # The agent refuses an frpc without a valid frpc-download signature for exactly
 # <goos>/<goarch>/<FRP_VERSION>/frpc[.exe] (system.verifyRemoteSignature). The
@@ -43,18 +43,33 @@ sha256_of() {
 
 dest="gs://ironflock-downloads/device-agent/frpc/${goos}/${goarch}/${FRP_VERSION}/${remote_name}"
 
+cp_nocache() {
+    gsutil -q -h "Cache-Control:public, max-age=0" cp "$1" "$2"
+}
+
 if [ ! -e "${binary}.sig" ] && gsutil -q stat "${dest}.sig"; then
     echo "$dest is already signed; keeping it (frozen once signed, see above)"
+    # Its SBOM, once, from the published bytes: their build info, not this
+    # build's, which may differ.
+    if ! gsutil -q stat "${dest}.cdx.json"; then
+        work=$(mktemp -d)
+        trap 'rm -rf "$work"' EXIT
+        gsutil -q cp "$dest" "$work/$remote_name"
+        chmod +x "$work/$remote_name"
+        scripts/sbom-bin.sh "$work/$remote_name"
+        cp_nocache "$work/$remote_name.cdx.json" "${dest}.cdx.json"
+        echo "Published ${dest}.cdx.json"
+    fi
     exit 0
+fi
+if [ ! -s "${binary}.cdx.json" ]; then
+    echo "$binary has no SBOM: just sbom-bin $binary" >&2
+    exit 1
 fi
 if [ -e "${binary}.sig" ]; then
     binary_abs="$(cd "$(dirname "$binary")" && pwd)/$(basename "$binary")"
     (cd src && go run ./cmd/sign-update verify -kind frpc -os "$goos" -arch "$goarch" -version "$FRP_VERSION" "$binary_abs")
 fi
-
-cp_nocache() {
-    gsutil -q -h "Cache-Control:public, max-age=0" cp "$1" "$2"
-}
 
 cp_nocache "$binary" "$dest"
 
@@ -65,5 +80,6 @@ rm -f "${binary}.sha256"
 if [ -e "${binary}.sig" ]; then
     cp_nocache "${binary}.sig" "${dest}.sig"
 fi
+cp_nocache "${binary}.cdx.json" "${dest}.cdx.json"
 
-echo "Published $dest (+ .sha256)"
+echo "Published $dest (+ .sha256, .cdx.json)"

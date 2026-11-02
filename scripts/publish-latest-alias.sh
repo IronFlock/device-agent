@@ -19,8 +19,9 @@ if [[ -z "$objects" ]]; then
     exit 1
 fi
 unsigned=""
+# The sidecars: checksum, update signature and SBOM (no binary, so no .sig).
 while IFS= read -r obj; do
-    case "$obj" in ""|*.sha256|*.sig) continue ;; esac
+    case "$obj" in ""|*.sha256|*.sig|*.cdx.json) continue ;; esac
     grep -qxF "${obj}.sig" <<< "$objects" || unsigned="${unsigned}    ${obj}"$'\n'
 done <<< "$objects"
 if [[ -n "$unsigned" ]]; then

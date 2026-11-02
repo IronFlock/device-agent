@@ -352,7 +352,7 @@ Building, publishing and promoting is done by **CI** (GitHub Actions), on the me
 1. `just release-patch` (or `release-minor` / `release-major`) — the whole local side in one command, run on a feature branch (your work plus the bump) or on an up-to-date `main` (the bump alone, on a new branch `release/vX.Y.Z`): refuses a dirty tree, bumps [`src/release/version.txt`](src/release/version.txt) + `availableVersions.json` from the version on `main`, and opens the pull request `release reagent vX.Y.Z`. `main` is protected — every change merges only through a pull request whose required checks (`ci-ok`, `security / report`) passed; a release pull request also runs the whole release as a dry run — so GitHub merges it automatically once they are green. The recipe then waits for the release run. Changes that release nothing go in with `just merge`.
 
    Commit your own work first, with your own message — the release commit carries the version bump alone. This is the shared IronFlock release process; see [`REDeployments/docs/RELEASE.md`](../deployments/docs/RELEASE.md).
-2. [`.github/workflows/release.yml`](.github/workflows/release.yml) then, for every entry in the [`targets`](targets) file: builds the binary, generates a CycloneDX SBOM, records a sigstore-signed **SBOM attestation** bound to the binary's digest, publishes the binary to `gs://ironflock-downloads/device-agent/<os>/<arch>/<version>/device-agent[.exe]`, and pushes the multi-arch agent images to Artifact Registry. This **stages** the version: the binaries exist, unsigned, and no agent updates to it yet.
+2. [`.github/workflows/release.yml`](.github/workflows/release.yml) then, for every entry in the [`targets`](targets) file: builds the binary, generates its CycloneDX SBOM (`just sbom-bin`: the modules from the binary's build info, and for every agent but the Windows one the frpc it embeds, with that frpc's modules), records a sigstore-signed **SBOM attestation** bound to the binary's digest, publishes the binary to `gs://ironflock-downloads/device-agent/<os>/<arch>/<version>/device-agent[.exe]` with the SBOM next to it as `device-agent[.exe].cdx.json`, and pushes the multi-arch agent images to Artifact Registry. This **stages** the version: the binaries exist, unsigned, and no agent updates to it yet.
 3. Its `promote` job then signs and **promotes** the version (`just promote-ci`, see the next section): from this moment agents update to it. The channels are those in the merged `availableVersions.json`, which `just release-patch` sets to the new version.
 4. Last, the release GitHub App sets the tag `vX.Y.Z` on the merged commit: a tag means "released". A failed run can be re-run; a re-run after the tag does nothing.
 
@@ -398,7 +398,7 @@ Every promotion first runs `just publish-latest-alias`, which server-side-copies
 ```text
 gs://ironflock-downloads/device-agent/windows/amd64/<version>/device-agent.exe  ->  …/windows/amd64/latest/device-agent.exe
 gs://ironflock-downloads/device-agent/linux/arm64/<version>/device-agent        ->  …/linux/arm64/latest/device-agent
-...  (every os/arch in `targets`, plus the .sha256 and .sig sidecars for each)
+...  (every os/arch in `targets`, plus the .sha256, .sig and .cdx.json sidecars for each)
 ```
 
 This exists for the **manual install surface only**. Linux devices resolve the version themselves (ironflock-init reads the manifest), but Windows has no such installer — the user downloads `device-agent.exe` from a link in the docs and the platform UI, so that link must not carry a version. Those links point at:
@@ -561,7 +561,7 @@ Once built the version of a binary can be verified with:
 CI (above) is the primary path. The original local recipes still work for ad-hoc builds and manual recovery, but require local `gcloud`/`docker` auth:
 
 - `just build-all-docker` — cross-compile every target inside the builder image into `build/`.
-- `just publish` — stage the `build/` binaries with their `.sha256` in the [ironflock-downloads](https://console.cloud.google.com/storage/browser/ironflock-downloads) bucket (unsigned; promotion signs them).
+- `just publish` — stage the `build/` binaries with their `.sha256` and SBOM (`build/<binary>.cdx.json`, made by `just sbom-bins`) in the [ironflock-downloads](https://console.cloud.google.com/storage/browser/ironflock-downloads) bucket (unsigned; promotion signs them).
 - `just push-docker-image` — build + push the multi-arch agent images.
 - `just rollout` — **!!! USE WITH CAUTION !!!** build + publish + the emergency `promote` (which signs through OpenBao) (incl. `availableVersions.json`) in one local step; make sure `src/release/version.txt` and `availableVersions.json` are correct first.
 

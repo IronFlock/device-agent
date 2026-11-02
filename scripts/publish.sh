@@ -3,7 +3,8 @@
 # gs://ironflock-downloads/device-agent/<os>/<arch>/<version>/device-agent[.exe],
 # each with its .sha256 manifest: the agent verifies OTA downloads against it
 # (system.verifyRemoteChecksum) and the Windows service refuses to activate an
-# update that does not match.
+# update that does not match. Each also gets its CycloneDX SBOM,
+# build/<binary>.cdx.json (`just sbom-bin`), as <binary>.cdx.json.
 #
 # Staged binaries carry no .sig: agents refuse them until promotion signs them
 # (scripts/sign-release.sh). A local build/<binary>.sig
@@ -56,6 +57,10 @@ remote_path() {
 
 signed=()
 for element in "${binaries[@]}"; do
+    if [ ! -s "build/$element.cdx.json" ]; then
+        echo "build/$element has no SBOM: just sbom-bin build/$element" >&2
+        exit 1
+    fi
     if [ -e "build/$element.sig" ]; then
         signed+=("../build/$element")
     elif gsutil -q stat "$(remote_path "$element").sig"; then
@@ -81,6 +86,7 @@ for element in "${binaries[@]}"; do
     sha256_of "build/$element" > "build/$element.sha256"
     cp_nocache "build/$element.sha256" "${GCLOUD}.sha256"
     rm -f "build/$element.sha256"
+    cp_nocache "build/$element.cdx.json" "${GCLOUD}.cdx.json"
 
     if [ -e "build/$element.sig" ]; then
         cp_nocache "build/$element.sig" "${GCLOUD}.sig"
