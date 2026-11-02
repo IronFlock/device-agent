@@ -143,6 +143,12 @@ type TransitionPayload struct {
 	EnvironmentTemplate  map[string]any
 	DockerCompose        map[string]any
 	NewDockerCompose     map[string]any
+	// Privileged / NewPrivileged say whether the project granted privileged
+	// access (host devices, capabilities, host binds) to the release behind
+	// DockerCompose / NewDockerCompose (and PresentVersion / NewestVersion).
+	// nil: the backend predates the grant, the app runs as it always did.
+	Privileged           *bool
+	NewPrivileged        *bool
 	Ports                []any
 	PublishContainerName string
 	RegisteryToken       string
@@ -195,6 +201,8 @@ type DeviceSyncResponse struct {
 	EnvironmentTemplate    map[string]interface{} `json:"environment_template"`
 	DockerCompose          map[string]interface{} `json:"docker_compose"`
 	NewDockerCompose       map[string]interface{} `json:"new_docker_compose"`
+	Privileged             *bool                  `json:"privileged"`
+	NewPrivileged          *bool                  `json:"new_privileged"`
 	Ports                  []interface{}          `json:"ports"`
 	CurrentState           string                 `json:"current_state"`
 	Stage                  string                 `json:"stage"`

@@ -585,3 +585,48 @@ func TestResponseToTransitionPayload_NilFields(t *testing.T) {
 		assert.Nil(t, payload.DockerCredentials)
 	})
 }
+
+// privileged / new_privileged: absent or null (an old backend) stay nil, which
+// keeps the app's privileges as they were; booleans come through as sent.
+func TestResponseToTransitionPayload_Privileged(t *testing.T) {
+	cfg := testConfig()
+
+	t.Run("absent", func(t *testing.T) {
+		payload, err := responseToTransitionPayload(cfg, createBasicWAMPResponse(42, "my-app", "PROD", "RUNNING"))
+		require.NoError(t, err)
+		assert.Nil(t, payload.Privileged)
+		assert.Nil(t, payload.NewPrivileged)
+	})
+
+	t.Run("null", func(t *testing.T) {
+		response := createBasicWAMPResponse(42, "my-app", "PROD", "RUNNING")
+		response.ArgumentsKw["privileged"] = nil
+		response.ArgumentsKw["new_privileged"] = nil
+
+		payload, err := responseToTransitionPayload(cfg, response)
+		require.NoError(t, err)
+		assert.Nil(t, payload.Privileged)
+		assert.Nil(t, payload.NewPrivileged)
+	})
+
+	t.Run("booleans", func(t *testing.T) {
+		response := createBasicWAMPResponse(42, "my-app", "PROD", "RUNNING")
+		response.ArgumentsKw["privileged"] = false
+		response.ArgumentsKw["new_privileged"] = true
+
+		payload, err := responseToTransitionPayload(cfg, response)
+		require.NoError(t, err)
+		require.NotNil(t, payload.Privileged)
+		require.NotNil(t, payload.NewPrivileged)
+		assert.False(t, *payload.Privileged)
+		assert.True(t, *payload.NewPrivileged)
+	})
+
+	t.Run("anything else is refused", func(t *testing.T) {
+		response := createBasicWAMPResponse(42, "my-app", "PROD", "RUNNING")
+		response.ArgumentsKw["privileged"] = "false"
+
+		_, err := responseToTransitionPayload(cfg, response)
+		require.Error(t, err)
+	})
+}

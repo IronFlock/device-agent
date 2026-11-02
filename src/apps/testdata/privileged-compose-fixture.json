@@ -1,0 +1,569 @@
+{
+  "version": 1,
+  "description": "Privileged compose settings: shared test vectors. The same file lives in backend (classifier, publish check) and device-agent (classifier + strip when the project has not granted privileged access). Keep the copies identical. features = what the classifier reports, in order; stripped = the compose after the agent removed every feature.",
+  "serviceKeyOrder": [
+    "privileged",
+    "cap_add",
+    "devices",
+    "device_cgroup_rules",
+    "security_opt",
+    "network_mode",
+    "pid",
+    "ipc",
+    "uts",
+    "userns_mode",
+    "cgroup",
+    "cgroup_parent",
+    "volumes",
+    "volumes_from",
+    "extends"
+  ],
+  "topLevelOrder": ["volumes", "networks", "secrets", "configs", "include"],
+  "cases": [
+    {
+      "name": "no privileged settings",
+      "compose": {
+        "services": {
+          "app": {
+            "image": "x",
+            "ports": ["8080:80"],
+            "volumes": ["data:/data", "/anon"],
+            "environment": { "A": "1" }
+          }
+        },
+        "volumes": { "data": {} }
+      },
+      "features": [],
+      "stripped": {
+        "services": {
+          "app": {
+            "image": "x",
+            "ports": ["8080:80"],
+            "volumes": ["data:/data", "/anon"],
+            "environment": { "A": "1" }
+          }
+        },
+        "volumes": { "data": {} }
+      }
+    },
+    {
+      "name": "privileged, cap_add, devices and device_cgroup_rules",
+      "compose": {
+        "services": {
+          "plc": {
+            "image": "x",
+            "privileged": true,
+            "cap_add": ["NET_ADMIN", "SYS_RAWIO"],
+            "cap_drop": ["MKNOD"],
+            "devices": [
+              "/dev/ttyUSB0:/dev/ttyUSB0",
+              { "source": "/dev/i2c-1", "target": "/dev/i2c-1", "permissions": "rwm" }
+            ],
+            "device_cgroup_rules": ["c 188:* rmw"]
+          }
+        }
+      },
+      "features": [
+        { "service": "plc", "feature": "privileged", "value": "true" },
+        { "service": "plc", "feature": "cap_add", "value": "NET_ADMIN" },
+        { "service": "plc", "feature": "cap_add", "value": "SYS_RAWIO" },
+        { "service": "plc", "feature": "devices", "value": "/dev/ttyUSB0:/dev/ttyUSB0" },
+        { "service": "plc", "feature": "devices", "value": "/dev/i2c-1" },
+        { "service": "plc", "feature": "device_cgroup_rules", "value": "c 188:* rmw" }
+      ],
+      "stripped": {
+        "services": {
+          "plc": { "image": "x", "cap_drop": ["MKNOD"] }
+        }
+      }
+    },
+    {
+      "name": "explicit false and empty lists are not privileged",
+      "compose": {
+        "services": {
+          "app": { "image": "x", "privileged": false, "cap_add": [], "devices": [] }
+        }
+      },
+      "features": [],
+      "stripped": {
+        "services": {
+          "app": { "image": "x", "privileged": false, "cap_add": [], "devices": [] }
+        }
+      }
+    },
+    {
+      "name": "security_opt keeps no-new-privileges",
+      "compose": {
+        "services": {
+          "app": {
+            "image": "x",
+            "security_opt": ["no-new-privileges:true", "seccomp=unconfined", "apparmor:unconfined", "label=disable"]
+          }
+        }
+      },
+      "features": [
+        { "service": "app", "feature": "security_opt", "value": "seccomp=unconfined" },
+        { "service": "app", "feature": "security_opt", "value": "apparmor:unconfined" },
+        { "service": "app", "feature": "security_opt", "value": "label=disable" }
+      ],
+      "stripped": {
+        "services": {
+          "app": { "image": "x", "security_opt": ["no-new-privileges:true"] }
+        }
+      }
+    },
+    {
+      "name": "host and container namespaces; service namespaces stay",
+      "compose": {
+        "services": {
+          "a": {
+            "image": "x",
+            "network_mode": "host",
+            "pid": "host",
+            "ipc": "container:other_app",
+            "uts": "host",
+            "userns_mode": "host",
+            "cgroup": "host"
+          },
+          "b": {
+            "image": "y",
+            "network_mode": "service:a",
+            "pid": "service:a",
+            "ipc": "shareable",
+            "cgroup": "private"
+          }
+        }
+      },
+      "features": [
+        { "service": "a", "feature": "network_mode", "value": "host" },
+        { "service": "a", "feature": "pid", "value": "host" },
+        { "service": "a", "feature": "ipc", "value": "container:other_app" },
+        { "service": "a", "feature": "uts", "value": "host" },
+        { "service": "a", "feature": "userns_mode", "value": "host" },
+        { "service": "a", "feature": "cgroup", "value": "host" }
+      ],
+      "stripped": {
+        "services": {
+          "a": { "image": "x" },
+          "b": {
+            "image": "y",
+            "network_mode": "service:a",
+            "pid": "service:a",
+            "ipc": "shareable",
+            "cgroup": "private"
+          }
+        }
+      }
+    },
+    {
+      "name": "bind mounts, short syntax",
+      "compose": {
+        "services": {
+          "app": {
+            "image": "x",
+            "volumes": [
+              "data:/data",
+              "./config:/config:ro",
+              ".:/app",
+              "/var/run/docker.sock:/var/run/docker.sock",
+              "/etc/localtime:/etc/localtime:ro",
+              "/etc/timezone:/etc/timezone",
+              "../escape:/x",
+              "./a/../../b:/y",
+              "~/home:/h",
+              "/anon",
+              "C:\\data:/data2"
+            ]
+          }
+        },
+        "volumes": { "data": {} }
+      },
+      "features": [
+        { "service": "app", "feature": "volumes", "value": "/var/run/docker.sock:/var/run/docker.sock" },
+        { "service": "app", "feature": "volumes", "value": "/etc/timezone:/etc/timezone" },
+        { "service": "app", "feature": "volumes", "value": "../escape:/x" },
+        { "service": "app", "feature": "volumes", "value": "./a/../../b:/y" },
+        { "service": "app", "feature": "volumes", "value": "~/home:/h" },
+        { "service": "app", "feature": "volumes", "value": "C:\\data:/data2" }
+      ],
+      "stripped": {
+        "services": {
+          "app": {
+            "image": "x",
+            "volumes": ["data:/data", "./config:/config:ro", ".:/app", "/etc/localtime:/etc/localtime:ro", "/anon"]
+          }
+        },
+        "volumes": { "data": {} }
+      }
+    },
+    {
+      "name": "bind mounts, long syntax",
+      "compose": {
+        "services": {
+          "app": {
+            "image": "x",
+            "volumes": [
+              { "type": "bind", "source": "/", "target": "/host" },
+              { "type": "bind", "source": "/etc/localtime", "target": "/etc/localtime", "read_only": true },
+              { "type": "bind", "source": "./cfg", "target": "/cfg" },
+              { "type": "volume", "source": "data", "target": "/data" },
+              { "type": "tmpfs", "target": "/tmp" },
+              { "type": "npipe", "source": "\\\\.\\pipe\\docker_engine", "target": "\\\\.\\pipe\\docker_engine" }
+            ]
+          }
+        },
+        "volumes": { "data": {} }
+      },
+      "features": [
+        { "service": "app", "feature": "volumes", "value": "/" },
+        { "service": "app", "feature": "volumes", "value": "\\\\.\\pipe\\docker_engine" }
+      ],
+      "stripped": {
+        "services": {
+          "app": {
+            "image": "x",
+            "volumes": [
+              { "type": "bind", "source": "/etc/localtime", "target": "/etc/localtime", "read_only": true },
+              { "type": "bind", "source": "./cfg", "target": "/cfg" },
+              { "type": "volume", "source": "data", "target": "/data" },
+              { "type": "tmpfs", "target": "/tmp" }
+            ]
+          }
+        },
+        "volumes": { "data": {} }
+      }
+    },
+    {
+      "name": "interpolated values count as privileged",
+      "compose": {
+        "services": {
+          "app": {
+            "image": "x",
+            "privileged": "${PRIV}",
+            "devices": ["${SERIAL_PORT}:/dev/ttyS0"],
+            "network_mode": "${NET_MODE}",
+            "volumes": ["${SRC}:/src", "$VOL:/v", "data:/data"],
+            "environment": { "X": "${Y}" }
+          }
+        },
+        "volumes": { "data": {} }
+      },
+      "features": [
+        { "service": "app", "feature": "privileged", "value": "${PRIV}" },
+        { "service": "app", "feature": "devices", "value": "${SERIAL_PORT}:/dev/ttyS0" },
+        { "service": "app", "feature": "network_mode", "value": "${NET_MODE}" },
+        { "service": "app", "feature": "volumes", "value": "${SRC}:/src" },
+        { "service": "app", "feature": "volumes", "value": "$VOL:/v" }
+      ],
+      "stripped": {
+        "services": {
+          "app": {
+            "image": "x",
+            "volumes": ["data:/data"],
+            "environment": { "X": "${Y}" }
+          }
+        },
+        "volumes": { "data": {} }
+      }
+    },
+    {
+      "name": "top-level volumes with driver options, external or a fixed name",
+      "compose": {
+        "services": {
+          "app": {
+            "image": "x",
+            "volumes": ["hostroot:/host", "shared:/shared", "fixed:/fixed", "data:/data"]
+          }
+        },
+        "volumes": {
+          "hostroot": { "driver": "local", "driver_opts": { "type": "none", "o": "bind", "device": "/" } },
+          "shared": { "external": true },
+          "fixed": { "name": "otherapp_data" },
+          "data": { "driver": "local" }
+        }
+      },
+      "features": [
+        { "service": "", "feature": "volume_external", "value": "fixed" },
+        { "service": "", "feature": "volume_driver_opts", "value": "hostroot" },
+        { "service": "", "feature": "volume_external", "value": "shared" }
+      ],
+      "stripped": {
+        "services": {
+          "app": {
+            "image": "x",
+            "volumes": ["hostroot:/host", "shared:/shared", "fixed:/fixed", "data:/data"]
+          }
+        },
+        "volumes": {
+          "hostroot": {},
+          "shared": {},
+          "fixed": {},
+          "data": { "driver": "local" }
+        }
+      }
+    },
+    {
+      "name": "secrets and configs read from host files",
+      "compose": {
+        "services": {
+          "app": {
+            "image": "x",
+            "secrets": ["inside", { "source": "shadow", "target": "s" }],
+            "configs": ["up", "inline"]
+          }
+        },
+        "secrets": {
+          "inside": { "file": "./secret.txt" },
+          "shadow": { "file": "/etc/shadow" }
+        },
+        "configs": {
+          "up": { "file": "../app.conf" },
+          "inline": { "content": "a=1" }
+        }
+      },
+      "features": [
+        { "service": "", "feature": "secret_file", "value": "shadow" },
+        { "service": "", "feature": "config_file", "value": "up" }
+      ],
+      "stripped": {
+        "services": {
+          "app": { "image": "x", "secrets": ["inside"], "configs": ["inline"] }
+        },
+        "secrets": { "inside": { "file": "./secret.txt" } },
+        "configs": { "inline": { "content": "a=1" } }
+      }
+    },
+    {
+      "name": "volumes_from another app's container",
+      "compose": {
+        "services": {
+          "app": { "image": "x", "volumes_from": ["db", "container:other_app", "db:ro"] },
+          "db": { "image": "y" }
+        }
+      },
+      "features": [
+        { "service": "app", "feature": "volumes_from", "value": "container:other_app" }
+      ],
+      "stripped": {
+        "services": {
+          "app": { "image": "x", "volumes_from": ["db", "db:ro"] },
+          "db": { "image": "y" }
+        }
+      }
+    },
+    {
+      "name": "GPU reservations stay allowed",
+      "compose": {
+        "services": {
+          "ml": {
+            "image": "x",
+            "gpus": "all",
+            "runtime": "nvidia",
+            "deploy": {
+              "resources": {
+                "reservations": {
+                  "devices": [{ "driver": "nvidia", "count": "all", "capabilities": ["gpu"] }]
+                }
+              }
+            }
+          }
+        }
+      },
+      "features": [],
+      "stripped": {
+        "services": {
+          "ml": {
+            "image": "x",
+            "gpus": "all",
+            "runtime": "nvidia",
+            "deploy": {
+              "resources": {
+                "reservations": {
+                  "devices": [{ "driver": "nvidia", "count": "all", "capabilities": ["gpu"] }]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "features are ordered by service name, then by key",
+      "compose": {
+        "services": {
+          "zeta": { "image": "x", "devices": ["/dev/ttyS0"], "privileged": true },
+          "alpha": { "image": "y", "network_mode": "host" }
+        }
+      },
+      "features": [
+        { "service": "alpha", "feature": "network_mode", "value": "host" },
+        { "service": "zeta", "feature": "privileged", "value": "true" },
+        { "service": "zeta", "feature": "devices", "value": "/dev/ttyS0" }
+      ],
+      "stripped": {
+        "services": {
+          "zeta": { "image": "x" },
+          "alpha": { "image": "y" }
+        }
+      }
+    },
+    {
+      "name": "null privileged, and single values where a list belongs",
+      "compose": {
+        "services": {
+          "app": {
+            "image": "x",
+            "privileged": null,
+            "cap_add": "SYS_ADMIN",
+            "security_opt": "seccomp=unconfined",
+            "volumes": "/:/host"
+          }
+        }
+      },
+      "features": [
+        { "service": "app", "feature": "cap_add", "value": "SYS_ADMIN" },
+        { "service": "app", "feature": "security_opt", "value": "seccomp=unconfined" },
+        { "service": "app", "feature": "volumes", "value": "/:/host" }
+      ],
+      "stripped": {
+        "services": {
+          "app": { "image": "x", "privileged": null }
+        }
+      }
+    },
+    {
+      "name": "interpolated one-part volume and a Windows pipe in short syntax",
+      "compose": {
+        "services": {
+          "app": {
+            "image": "x",
+            "volumes": [
+              "${SRC}",
+              "/anon",
+              "\\\\.\\pipe\\docker_engine:\\\\.\\pipe\\docker_engine",
+              "data:/data"
+            ]
+          }
+        },
+        "volumes": { "data": {} }
+      },
+      "features": [
+        { "service": "app", "feature": "volumes", "value": "${SRC}" },
+        { "service": "app", "feature": "volumes", "value": "\\\\.\\pipe\\docker_engine:\\\\.\\pipe\\docker_engine" }
+      ],
+      "stripped": {
+        "services": {
+          "app": { "image": "x", "volumes": ["/anon", "data:/data"] }
+        },
+        "volumes": { "data": {} }
+      }
+    },
+    {
+      "name": "networks with a host-level driver, options, external or a fixed name",
+      "compose": {
+        "services": {
+          "app": {
+            "image": "x",
+            "networks": ["lan", "hostnet", "shared", "fixed", "legacyext", "plain", "tuned"]
+          }
+        },
+        "networks": {
+          "lan": { "driver": "macvlan", "driver_opts": { "parent": "eth0" } },
+          "hostnet": { "name": "host", "external": true },
+          "shared": { "external": true },
+          "fixed": { "name": "otherapp_default" },
+          "legacyext": { "external": { "name": "otherapp_default" } },
+          "plain": { "driver": "bridge" },
+          "tuned": { "driver_opts": { "com.docker.network.bridge.name": "br9" } }
+        }
+      },
+      "features": [
+        { "service": "", "feature": "network_external", "value": "fixed" },
+        { "service": "", "feature": "network_external", "value": "hostnet" },
+        { "service": "", "feature": "network_driver", "value": "lan" },
+        { "service": "", "feature": "network_external", "value": "legacyext" },
+        { "service": "", "feature": "network_external", "value": "shared" },
+        { "service": "", "feature": "network_driver", "value": "tuned" }
+      ],
+      "stripped": {
+        "services": {
+          "app": {
+            "image": "x",
+            "networks": ["lan", "hostnet", "shared", "fixed", "legacyext", "plain", "tuned"]
+          }
+        },
+        "networks": {
+          "lan": {},
+          "hostnet": {},
+          "shared": {},
+          "fixed": {},
+          "legacyext": {},
+          "plain": { "driver": "bridge" },
+          "tuned": {}
+        }
+      }
+    },
+    {
+      "name": "cgroup_parent, extends from another file, include",
+      "compose": {
+        "include": ["../other/compose.yml", { "path": "extra.yml" }],
+        "services": {
+          "app": {
+            "image": "x",
+            "cgroup_parent": "/system.slice",
+            "extends": { "file": "base.yml", "service": "base" }
+          },
+          "web": { "image": "y", "extends": { "service": "app" }, "cgroup_parent": "" }
+        }
+      },
+      "features": [
+        { "service": "app", "feature": "cgroup_parent", "value": "/system.slice" },
+        { "service": "app", "feature": "extends", "value": "base.yml" },
+        { "service": "", "feature": "include", "value": "../other/compose.yml" },
+        { "service": "", "feature": "include", "value": "extra.yml" }
+      ],
+      "stripped": {
+        "services": {
+          "app": { "image": "x" },
+          "web": { "image": "y", "extends": { "service": "app" }, "cgroup_parent": "" }
+        }
+      }
+    },
+    {
+      "name": "the mode is everything after the second colon",
+      "compose": {
+        "services": {
+          "app": {
+            "image": "x",
+            "volumes": ["/etc/localtime:/etc/localtime:ro:z", "/etc/timezone:/etc/timezone:z,ro"]
+          }
+        }
+      },
+      "features": [
+        { "service": "app", "feature": "volumes", "value": "/etc/localtime:/etc/localtime:ro:z" }
+      ],
+      "stripped": {
+        "services": {
+          "app": { "image": "x", "volumes": ["/etc/timezone:/etc/timezone:z,ro"] }
+        }
+      }
+    },
+    {
+      "name": "a list emptied by stripping is removed",
+      "compose": {
+        "services": {
+          "app": { "image": "x", "volumes": ["/:/host"], "security_opt": ["seccomp=unconfined"] }
+        }
+      },
+      "features": [
+        { "service": "app", "feature": "security_opt", "value": "seccomp=unconfined" },
+        { "service": "app", "feature": "volumes", "value": "/:/host" }
+      ],
+      "stripped": {
+        "services": {
+          "app": { "image": "x" }
+        }
+      }
+    }
+  ]
+}

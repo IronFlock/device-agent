@@ -299,6 +299,10 @@ func (sm *StateMachine) InitTransition(app *common.App, payload common.Transitio
 	var transitionFunc TransitionFunc
 	if payload.RequestUpdate && payload.NewestVersion != app.Version && payload.RequestedState != common.UNINSTALLED {
 		transitionFunc = sm.getUpdateTransition(payload, app)
+	} else if curAppState == common.RUNNING && payload.RequestedState == common.RUNNING {
+		// Nothing to do for a running app, unless its privileged access
+		// changed since it started.
+		transitionFunc = sm.restartOnPrivilegedAccessChange
 	} else {
 		transitionFunc = sm.getTransitionFunc(curAppState, payload.RequestedState)
 	}

@@ -30,7 +30,7 @@ func TestComputeMountsBindsTheHostDBus(t *testing.T) {
 	t.Run("bound when the host has a system bus", func(t *testing.T) {
 		hostDBusDir = t.TempDir()
 
-		mounts, err := computeMounts(common.PROD, "myapp", cfg)
+		mounts, err := computeMounts(common.PROD, "myapp", cfg, true)
 		require.NoError(t, err)
 
 		m := dbusMount(mounts)
@@ -42,7 +42,7 @@ func TestComputeMountsBindsTheHostDBus(t *testing.T) {
 	t.Run("absent when the host has none", func(t *testing.T) {
 		hostDBusDir = filepath.Join(t.TempDir(), "missing")
 
-		mounts, err := computeMounts(common.PROD, "myapp", cfg)
+		mounts, err := computeMounts(common.PROD, "myapp", cfg, true)
 		require.NoError(t, err)
 		assert.Nil(t, dbusMount(mounts), "a missing source would fail container creation")
 	})

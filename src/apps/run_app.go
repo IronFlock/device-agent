@@ -46,6 +46,8 @@ func (sm *StateMachine) runProdApp(payload common.TransitionPayload, app *common
 		return err
 	}
 
+	sm.writeUnprivilegedStartNotice(payload, payload.ContainerName.Prod)
+
 	err = sm.setState(app, common.STARTING)
 	if err != nil {
 		return err
@@ -292,6 +294,8 @@ func (sm *StateMachine) runDevComposeApp(payload common.TransitionPayload, app *
 		return err
 	}
 
+	sm.writeUnprivilegedStartNotice(payload, payload.ContainerName.Dev)
+
 	err = sm.HandleRegistryLoginsWithDefault(payload)
 	if err != nil {
 		writeErr := sm.LogManager.Write(payload.ContainerName.Prod, err.Error())
@@ -466,6 +470,8 @@ func (sm *StateMachine) runProdComposeApp(payload common.TransitionPayload, app 
 		return err
 	}
 
+	sm.writeUnprivilegedStartNotice(payload, payload.ContainerName.Prod)
+
 	err = sm.teardownComposeProject(payload, app, dockerComposePath)
 	if err != nil {
 		return err
@@ -602,6 +608,8 @@ func (sm *StateMachine) runDevApp(payload common.TransitionPayload, app *common.
 		return err
 	}
 
+	sm.writeUnprivilegedStartNotice(payload, payload.ContainerName.Dev)
+
 	err = sm.setState(app, common.STARTING)
 	if err != nil {
 		return err
@@ -717,6 +725,10 @@ func filterLargeEnvVars(envVars []string) []string {
 // can point it at a temp dir.
 var hostDBusDir = "/run/dbus"
 
+// hostW1DevicesDir holds the host's 1-Wire devices; a variable so tests can
+// point it at a temp dir.
+var hostW1DevicesDir = "/sys/bus/w1/devices"
+
 // appDataDirMode lets the app write its /data whatever user its container runs
 // as: the agent cannot know that user (an image's USER, a compose service's
 // user:, a remapped user namespace), and a root-owned 0755 dir would leave a
@@ -725,7 +737,10 @@ var hostDBusDir = "/run/dbus"
 // opened: what the app keeps in it is the app's, with the modes it chose.
 const appDataDirMode os.FileMode = 0777
 
-func computeMounts(stage common.Stage, appName string, config *config.Config) ([]mount.Mount, error) {
+// computeMounts returns the binds of a single-container app. The host
+// accesses (1-Wire devices, the D-Bus system bus) are bound only with
+// privileged access.
+func computeMounts(stage common.Stage, appName string, config *config.Config, privileged bool) ([]mount.Mount, error) {
 	appSpecificDirectory := config.CommandLineArguments.AppsDirectory + "/" + strings.ToLower(string(stage)) + "/" + strings.ToLower(appName)
 
 	err := os.MkdirAll(appSpecificDirectory, appDataDirMode)
@@ -755,10 +770,10 @@ func computeMounts(stage common.Stage, appName string, config *config.Config) ([
 		},
 	}
 
-	if _, err := os.Stat("/sys/bus/w1/devices"); !os.IsNotExist(err) {
+	if _, err := os.Stat(hostW1DevicesDir); privileged && !os.IsNotExist(err) {
 		mounts = append(mounts, mount.Mount{
 			Type:     mount.TypeBind,
-			Source:   "/sys/bus/w1/devices",
+			Source:   hostW1DevicesDir,
 			Target:   "/sys/bus/w1/devices",
 			ReadOnly: false,
 		})
@@ -781,7 +796,7 @@ func computeMounts(stage common.Stage, appName string, config *config.Config) ([
 	// namespace: going through the host's bluetoothd is the only Bluetooth
 	// path left. The directory, not the socket, is bound so a dbus restart
 	// (new socket inode) does not leave the container with a stale file.
-	if _, err := os.Stat(hostDBusDir); err == nil {
+	if _, err := os.Stat(hostDBusDir); privileged && err == nil {
 		mounts = append(mounts, mount.Mount{
 			Type:   mount.TypeBind,
 			Source: hostDBusDir,
@@ -1029,7 +1044,9 @@ func (sm *StateMachine) computeContainerConfigs(payload common.TransitionPayload
 		}
 	}
 
-	mounts, err := computeMounts(app.Stage, app.AppName, config)
+	privileged := grantsPrivileged(payload.Privileged)
+
+	mounts, err := computeMounts(app.Stage, app.AppName, config, privileged)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -1041,20 +1058,26 @@ func (sm *StateMachine) computeContainerConfigs(payload common.TransitionPayload
 		RestartPolicy: dockercontainer.RestartPolicy{
 			Name: "no",
 		},
-		Mounts: mounts,
-		Resources: dockercontainer.Resources{
+		Mounts:       mounts,
+		NetworkMode:  "bridge",
+		PortBindings: portBindings,
+		ExtraHosts:   []string{hostGatewayEntry},
+	}
+
+	// Privileged access (granted in the project settings, or a backend that
+	// predates the grant): the host's devices and every capability. Without
+	// it the app runs with Docker's defaults.
+	if privileged {
+		hostConfig.Resources = dockercontainer.Resources{
 			Devices: []dockercontainer.DeviceMapping{
 				{
 					PathOnHost:      "/dev",
 					PathInContainer: "/dev",
 				},
 			},
-		},
-		Privileged:   true,
-		NetworkMode:  "bridge",
-		PortBindings: portBindings,
-		ExtraHosts:   []string{hostGatewayEntry},
-		CapAdd:       []string{"ALL"},
+		}
+		hostConfig.Privileged = true
+		hostConfig.CapAdd = []string{"ALL"}
 	}
 
 	if system.HasNvidiaGPU() {
@@ -1090,10 +1113,11 @@ func (sm *StateMachine) createContainer(payload common.TransitionPayload, app *c
 	defer cancel()
 	cont, err := sm.Container.GetContainer(getContainerContext, containerName)
 	if err == nil && sm.containerNetworkConfigOutdated(cont, hConfig, containerName) {
-		// Network mode and port bindings are immutable on an existing
-		// container: recreate to apply them (migrates pre-managed-port
-		// containers off host networking, and picks up reassigned ports).
-		log.Info().Str("container", containerName).Msg("Recreating container to apply updated network/port configuration")
+		// Network mode, port bindings and privileges are immutable on an
+		// existing container: recreate to apply them (migrates
+		// pre-managed-port containers off host networking, picks up
+		// reassigned ports and a changed privileged access).
+		log.Info().Str("container", containerName).Msg("Recreating container to apply updated network/port/privileged configuration")
 
 		removeContainerContext, cancel := context.WithTimeout(context.Background(), time.Second*30)
 		defer cancel()

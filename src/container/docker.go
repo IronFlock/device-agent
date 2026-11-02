@@ -975,6 +975,23 @@ func (docker *Docker) GetContainerNetworkMode(ctx context.Context, containerName
 	return string(res.HostConfig.NetworkMode), nil
 }
 
+// GetContainerPrivileged returns the container's HostConfig.Privileged.
+func (docker *Docker) GetContainerPrivileged(ctx context.Context, containerName string) (bool, error) {
+	res, err := docker.client.ContainerInspect(ctx, containerName)
+	if err != nil {
+		if cerrdefs.IsNotFound(err) {
+			return false, errdefs.ContainerNotFound(err)
+		}
+		return false, err
+	}
+
+	if res.HostConfig == nil {
+		return false, nil
+	}
+
+	return res.HostConfig.Privileged, nil
+}
+
 func (docker *Docker) PollContainerState(ctx context.Context, containerID string, pollingRate time.Duration) (<-chan ContainerState, <-chan error) {
 	errC := make(chan error, 1)
 	stateC := make(chan ContainerState, 1)

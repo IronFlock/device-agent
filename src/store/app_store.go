@@ -304,6 +304,8 @@ func (am *AppStore) FetchRequestedAppStates() ([]common.TransitionPayload, error
 		payload.PresentVersion = deviceSyncState.PresentVersion
 		payload.DockerCompose = deviceSyncState.DockerCompose
 		payload.NewDockerCompose = deviceSyncState.NewDockerCompose
+		payload.Privileged = deviceSyncState.Privileged
+		payload.NewPrivileged = deviceSyncState.NewPrivileged
 		payload.Version = deviceSyncState.PresentVersion
 		payload.NewestVersion = deviceSyncState.NewestVersion
 		payload.EnvironmentVariables = deviceSyncState.Environment
