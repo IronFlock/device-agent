@@ -160,10 +160,21 @@ sbom: build-frpc
     go run github.com/CycloneDX/cyclonedx-gomod/cmd/cyclonedx-gomod@{{CYCLONEDX_GOMOD_VERSION}} bin -json -output "build/sbom/frpc-{{FRP_VERSION}}.cdx.json" src/embedded/frpc_binary
     echo "SBOMs written to build/sbom/"
 
-# Used by the CI SBOM-attestation workflow; bin mode reads the actual build info.
+# Used by release.yml, which attests and publishes it; bin mode reads the actual
+# build info, and an agent's SBOM includes the frpc it embeds (see the script).
 # Generate a CycloneDX SBOM for ONE compiled binary (writes <binary>.cdx.json).
 sbom-bin BINARY:
-    go run github.com/CycloneDX/cyclonedx-gomod/cmd/cyclonedx-gomod@{{CYCLONEDX_GOMOD_VERSION}} bin -json -output "{{BINARY}}.cdx.json" "{{BINARY}}"
+    scripts/sbom-bin.sh "{{BINARY}}"
+
+# What `publish` requires when it runs by hand (release.yml makes them per build).
+# Generate the SBOM of every agent binary in build/.
+sbom-bins:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    for path in build/device-agent-*; do
+        [[ "$(basename "$path")" =~ ^device-agent-[a-z]+-[a-z0-9]+$ ]] || continue
+        scripts/sbom-bin.sh "$path"
+    done
 
 # Uploaded to the GitHub Security tab by CI; SARIF exits 0 even with findings.
 # Generate govulncheck SARIF reports into build/sarif/ for GitHub code scanning.
@@ -282,7 +293,7 @@ release-major:
     just _pr release major {{RELEASE_NAME}} {{VERSION_FILE}} release.yml {{VERSION_FILES}}
 
 # Do everything in one step
-rollout: build-all-docker publish promote
+rollout: build-all-docker sbom-bins publish promote
 
 clean:
     docker rm -f agent_builder
