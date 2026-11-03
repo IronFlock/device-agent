@@ -340,58 +340,6 @@ func serviceNoProxyEntries(cfg *config.ReswarmConfig, extra string) []string {
 	return entries
 }
 
-// mergeCredentialHelperOptOut returns dockerConfigJSON with an empty
-// credential-helper entry recorded for each registry, which makes the Docker
-// CLI fall back to its plaintext file store for exactly those registries.
-//
-// This is required on Windows, not a preference: the agent logs in with the
-// backend's registry token as the *username*, an RS256 JWT well over a
-// thousand characters, and Windows Credential Manager rejects a username that
-// long ("The array bounds are invalid."). The CLI auto-detects `wincred`
-// whenever its helper binary exists, so clearing `credsStore` is not enough —
-// only a per-registry entry opts out. Authentication succeeds either way; it
-// is storing the credential that fails, which fails the whole login and with
-// it every app install on the device.
-func mergeCredentialHelperOptOut(dockerConfigJSON []byte, registries []string) (merged []byte, changed bool, err error) {
-	dockerCfg := map[string]interface{}{}
-	if len(bytes.TrimSpace(dockerConfigJSON)) > 0 {
-		err = json.Unmarshal(dockerConfigJSON, &dockerCfg)
-		if err != nil {
-			return nil, false, fmt.Errorf("existing docker config.json is not valid JSON: %w", err)
-		}
-	}
-
-	helpers, _ := dockerCfg["credHelpers"].(map[string]interface{})
-	if helpers == nil {
-		helpers = map[string]interface{}{}
-	}
-
-	for _, registry := range registries {
-		if registry == "" {
-			continue
-		}
-		// Never override an operator's deliberate helper choice.
-		if existing, ok := helpers[registry]; ok {
-			if s, isString := existing.(string); isString && s == "" {
-				continue
-			}
-			continue
-		}
-		helpers[registry] = ""
-		changed = true
-	}
-	if !changed {
-		return dockerConfigJSON, false, nil
-	}
-	dockerCfg["credHelpers"] = helpers
-
-	merged, err = json.MarshalIndent(dockerCfg, "", "  ")
-	if err != nil {
-		return nil, false, err
-	}
-	return append(merged, '\n'), true, nil
-}
-
 // mergeInsecureRegistries returns daemonJSON with entries merged into its
 // "insecure-registries" array, preserving every other key and every existing
 // entry. Empty input starts from {}. Malformed JSON is an error — an

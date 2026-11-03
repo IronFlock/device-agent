@@ -518,14 +518,26 @@ const registryLoginTimeout = time.Second * 10
 
 func (c *Docker) HandleRegistryLogins(credentials map[string]common.DockerCredential) error {
 	for registryURL, credential := range credentials {
-		ctx, cancelLogin := context.WithTimeout(context.Background(), registryLoginTimeout)
-		output, err := c.Login(ctx, registryURL, credential.Username, credential.Password)
-		if err != nil {
-			cancelLogin()
+		output, timedOut, err := c.loginWithDeadline(registryURL, credential)
 
+		// The credential helper refused to store a login that authenticated
+		// (see credential_store.go): keep this registry's logins in the CLI's
+		// config.json from now on and log in again.
+		if err != nil && !timedOut && credentialHelperRefused(output) {
+			configPath, switched, switchErr := useFileCredentialStore(registryURL)
+			switch {
+			case switchErr != nil:
+				log.Warn().Err(switchErr).Msgf("could not move the docker login for %s out of the credential helper (%s)", registryURL, configPath)
+			case switched:
+				log.Info().Msgf("The docker credential helper could not store the login for %s; it is kept in %s from now on", registryURL, configPath)
+				output, timedOut, err = c.loginWithDeadline(registryURL, credential)
+			}
+		}
+
+		if err != nil {
 			// A killed-by-deadline login surfaces as the bare "signal: killed",
 			// which is useless in the device logs; name the actual failure.
-			if ctx.Err() == context.DeadlineExceeded {
+			if timedOut {
 				return fmt.Errorf("registry login to %s timed out after %s: the registry is not responding (check that the registry is reachable and, on proxied hosts, that NO_PROXY covers it)", registryURL, registryLoginTimeout)
 			}
 
@@ -551,12 +563,20 @@ func (c *Docker) HandleRegistryLogins(credentials map[string]common.DockerCreden
 			return fmt.Errorf("registry login to %s failed: %w", registryURL, err)
 		}
 
-		cancelLogin()
-
 		log.Debug().Msgf("Logged into Docker Registry: %s", registryURL)
 	}
 
 	return nil
+}
+
+// loginWithDeadline runs one `docker login` under registryLoginTimeout;
+// timedOut reports that the deadline killed it.
+func (c *Docker) loginWithDeadline(registryURL string, credential common.DockerCredential) (output string, timedOut bool, err error) {
+	ctx, cancel := context.WithTimeout(context.Background(), registryLoginTimeout)
+	defer cancel()
+
+	output, err = c.Login(ctx, registryURL, credential.Username, credential.Password)
+	return output, err != nil && ctx.Err() == context.DeadlineExceeded, err
 }
 
 func (docker *Docker) GetConfig() *config.Config {
