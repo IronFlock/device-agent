@@ -629,10 +629,10 @@ func dialThroughHTTPProxy(ctx context.Context, proxy *url.URL, addr string) (net
 // verifyTunnelServer runs a TLS handshake on conn against the CA bundle at
 // caFile and serverName, and returns the TLS connection. A certificate the
 // bundle does not vouch for comes back as a *tls.CertificateVerificationError
-// carrying the x509 reason, and names the escape hatch: the usual cause in the
-// field is a network that intercepts TLS with a CA the device does not hold
-// (on Windows, also a root the platform installs only on demand and the
-// exported store therefore lacks).
+// carrying the x509 reason, and names the fix: the usual cause in the field is
+// a network that intercepts TLS with a CA the device does not hold (on
+// Windows, also a root the platform installs only on demand and the exported
+// store therefore lacks).
 //
 // An empty caFile accepts any certificate, as frpc does without a
 // trustedCaFile; only the wss route handshakes then, since TLS is its
@@ -658,8 +658,8 @@ func verifyTunnelServer(conn net.Conn, caFile, serverName string) (*tls.Conn, er
 	err := tlsConn.HandshakeContext(ctx)
 	var certErr *tls.CertificateVerificationError
 	if errors.As(err, &certErr) {
-		return nil, fmt.Errorf("tunnel server certificate for %s is not trusted (set %s=true in the agent's environment to skip verification): %w",
-			serverName, TUNNEL_TLS_INSECURE_SKIP_VERIFY, err)
+		return nil, fmt.Errorf("tunnel server certificate for %s is not trusted (a network that intercepts TLS needs its CA in the device's trust store): %w",
+			serverName, err)
 	}
 	if err != nil {
 		return nil, err

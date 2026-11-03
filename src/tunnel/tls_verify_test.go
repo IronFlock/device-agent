@@ -25,8 +25,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/rs/zerolog"
-	"github.com/rs/zerolog/log"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"gopkg.in/yaml.v3"
@@ -102,7 +100,6 @@ func TestTunnelTLSVerificationPerDeploymentMode(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			t.Setenv(TUNNEL_TLS_INSECURE_SKIP_VERIFY, "")
 			cfg := builderConfig(t, tt.reswarm)
 			builder := NewTunnelConfigBuilder(cfg)
 			caPath := filepath.Join(cfg.CommandLineArguments.AgentDir, "tunnel-ca.pem")
@@ -135,44 +132,17 @@ func TestTunnelTLSVerificationPerDeploymentMode(t *testing.T) {
 	}
 }
 
-// escapeHatchLogChild marks the child test binary that
-// TestTunnelTLSInsecureSkipVerifyEscapeHatch runs itself in.
-const escapeHatchLogChild = "TUNNEL_TLS_ESCAPE_HATCH_LOG_CHILD"
-
-// The escape hatch restores the unverified connection and says so, loudly,
-// every time the config is built rather than once.
-//
-// The warnings are read from a child test binary whose logger writes JSON to
-// stderr: swapping the global logger in this process would race any goroutine
-// another test left logging.
-func TestTunnelTLSInsecureSkipVerifyEscapeHatch(t *testing.T) {
-	if os.Getenv(escapeHatchLogChild) != "1" {
-		child := exec.Command(os.Args[0], "-test.run=^"+t.Name()+"$", "-test.count=1")
-		child.Env = append(os.Environ(), escapeHatchLogChild+"=1")
-		var logged, output bytes.Buffer
-		child.Stderr = &logged
-		child.Stdout = &output
-		require.NoError(t, child.Run(), "%s\n%s", output.String(), logged.String())
-
-		assert.Equal(t, 2, strings.Count(logged.String(), `"level":"warn","server":"app.ironflock.com","message":"WARNING: TUNNEL_TLS_INSECURE_SKIP_VERIFY is set`),
-			"one warning per config build:\n%s", logged.String())
-		return
-	}
-
-	log.Logger = zerolog.New(os.Stderr)
+// The switch that once turned the check off (TUNNEL_TLS_INSECURE_SKIP_VERIFY)
+// is gone: an agent whose environment still sets it verifies the tunnel
+// server like any other.
+func TestRemovedTunnelTLSSwitchIsIgnored(t *testing.T) {
 	cloud := &config.ReswarmConfig{DeviceEndpointURL: "wss://cbw.ironflock.com/ws-re-dev", Environment: string(common.PRODUCTION)}
-
-	t.Setenv(TUNNEL_TLS_INSECURE_SKIP_VERIFY, "true")
+	t.Setenv("TUNNEL_TLS_INSECURE_SKIP_VERIFY", "true")
 	builder := NewTunnelConfigBuilder(builderConfig(t, cloud))
-	assert.Empty(t, builder.yamlConfig.Transport.TLS.TrustedCaFile)
-	assert.Empty(t, builder.yamlConfig.Transport.TLS.ServerName)
+	assert.NotEmpty(t, builder.yamlConfig.Transport.TLS.TrustedCaFile)
+	assert.Equal(t, "app.ironflock.com", builder.yamlConfig.Transport.TLS.ServerName)
 
 	builder.Reset()
-	assert.Empty(t, builder.yamlConfig.Transport.TLS.TrustedCaFile)
-
-	// Anything that is not a boolean must not be read as consent.
-	t.Setenv(TUNNEL_TLS_INSECURE_SKIP_VERIFY, "please")
-	builder = NewTunnelConfigBuilder(builderConfig(t, cloud))
 	assert.NotEmpty(t, builder.yamlConfig.Transport.TLS.TrustedCaFile)
 }
 
@@ -180,7 +150,7 @@ func TestTunnelTLSInsecureSkipVerifyEscapeHatch(t *testing.T) {
 // local TLS listener with the config initialize() produces for a cloud device,
 // only redirected to the listener. It proves frpc honours the keys we write
 // (it parses strictly) and that they verify: the right CA and name pass, an
-// impersonating server is refused, and the escape hatch accepts it again.
+// impersonating server is refused, also with the removed switch still set.
 func TestFrpcVerifiesTunnelServerCertificate(t *testing.T) {
 	frpcBinary, err := filepath.Abs(filepath.Join("..", "embedded", "frpc_binary"))
 	require.NoError(t, err)
@@ -205,15 +175,15 @@ func TestFrpcVerifiesTunnelServerCertificate(t *testing.T) {
 		{"trusted CA and matching name is accepted", false, trustedCA, trustedKey, "app.ironflock.com", true, true},
 		{"server outside the bundle is refused", false, rogueCA, rogueKey, "app.ironflock.com", true, false},
 		{"trusted CA for another name is refused", false, trustedCA, trustedKey, "evil.example.com", true, false},
-		{"escape hatch accepts the impersonating server", true, rogueCA, rogueKey, "app.ironflock.com", false, true},
+		{"the removed switch does not accept the impersonating server", true, rogueCA, rogueKey, "app.ironflock.com", true, false},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			clearProxyEnv(t)
-			t.Setenv(TUNNEL_TLS_INSECURE_SKIP_VERIFY, "")
+			t.Setenv("TUNNEL_TLS_INSECURE_SKIP_VERIFY", "")
 			if tt.insecure {
-				t.Setenv(TUNNEL_TLS_INSECURE_SKIP_VERIFY, "true")
+				t.Setenv("TUNNEL_TLS_INSECURE_SKIP_VERIFY", "true")
 			}
 
 			cfg := builderConfig(t, &config.ReswarmConfig{DeviceEndpointURL: "wss://cbw.ironflock.com/ws-re-dev", Environment: string(common.PRODUCTION)})
@@ -436,7 +406,7 @@ func TestProbeCapabilityReportsUntrustedTunnelServer(t *testing.T) {
 		capability, lastErr := probe(t, rogueCA, rogueKey)
 		assert.Equal(t, CapabilityUnavailable, capability)
 		assert.Contains(t, lastErr, "x509: certificate signed by unknown authority")
-		assert.Contains(t, lastErr, TUNNEL_TLS_INSECURE_SKIP_VERIFY)
+		assert.Contains(t, lastErr, "needs its CA in the device's trust store")
 		assert.NotContains(t, lastErr, "frps unreachable", "the server is reachable; its certificate is the problem")
 	})
 }

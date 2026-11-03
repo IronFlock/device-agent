@@ -421,8 +421,8 @@ var trustedUpdateKeys = updatesig.TrustedKeys
 // move to a newer version (compareVersion), and every release from the first
 // signed one on publishes a .sig for the agent and for frpc.
 //
-// AGENT_UPDATE_ALLOW_UNSIGNED=true turns the refusal into a warning; it exists
-// for a broken signing key only.
+// AGENT_UPDATE_ALLOW_UNSIGNED=until=<time> (at most 24 h ahead) turns the
+// refusal into a warning until then; it exists for an emergency only.
 func verifyRemoteSignature(filePath string, binaryURL string, target updatesig.Target) error {
 	keyID, err := fetchAndVerifySignature(filePath, binaryURL, target)
 	if err == nil {
@@ -437,7 +437,7 @@ func verifyRemoteSignature(filePath string, binaryURL string, target updatesig.T
 	}
 
 	log.Error().Err(err).
-		Msgf("Refusing %s: it is not signed by a trusted IronFlock release key as %s (%s=true bypasses this check, for a broken signing key only)", binaryURL, target, updatesig.AGENT_UPDATE_ALLOW_UNSIGNED)
+		Msgf("Refusing %s: it is not signed by a trusted IronFlock release key as %s (%s=until=<RFC 3339 time, at most 24 h ahead> bypasses this check until then, in an emergency only)", binaryURL, target, updatesig.AGENT_UPDATE_ALLOW_UNSIGNED)
 	return fmt.Errorf("refusing %s: %w", binaryURL, err)
 }
 

@@ -52,9 +52,9 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/rs/zerolog/log"
 )
@@ -98,14 +98,25 @@ MxldkYMi2ksqzslq+qJaiwpSSNBT+kMKevmLG2uTU3I= # key 4193db1f, Cloud KMS ironflock
 // publicKeyPlaceholder marks AGENT_UPDATE_PUBLIC_KEYS as not yet configured.
 const publicKeyPlaceholder = "TODO-AGENT-UPDATE-PUBLIC-KEY"
 
-// AGENT_UPDATE_ALLOW_UNSIGNED is the escape hatch for a broken signing key
-// (lost, or published releases signed with a key the fleet does not trust):
-// set to "true" in the agent's service environment (the systemd drop-in or
-// Windows service environment that carries the proxy variables), an agent
-// update or frpc download whose signature is missing or does not verify is
-// installed anyway, with a warning each time. Unset it as soon as the fleet runs a release that trusts
-// the current key. A value that is not a boolean keeps verification on.
+// AGENT_UPDATE_ALLOW_UNSIGNED is the emergency switch for a signing key a
+// device cannot use (published releases signed with a key it does not trust;
+// a lost key is covered by the second trusted key above). Set to
+// "until=<RFC 3339 time>" in the agent's service environment (the systemd
+// drop-in or Windows service environment that carries the proxy variables),
+// at most AllowUnsignedWindow ahead, an agent update or frpc download whose
+// signature is missing or does not verify is installed anyway until then,
+// with a warning each time. It runs out by itself, so a forgotten drop-in
+// does not leave a device accepting unsigned binaries. Any other value, the
+// old "true" included, keeps verification on. device-init's e2e uses it for
+// its deliberately broken, unsigned test builds.
 const AGENT_UPDATE_ALLOW_UNSIGNED = "AGENT_UPDATE_ALLOW_UNSIGNED"
+
+// AllowUnsignedWindow is how far ahead AGENT_UPDATE_ALLOW_UNSIGNED's
+// expiry may lie.
+const AllowUnsignedWindow = 24 * time.Hour
+
+// now is the clock AllowUnsigned compares the expiry with (tests set it).
+var now = time.Now
 
 // Contexts: the first line of the signed message, naming what kind of object
 // a signature is for. Bump the version suffix if the message format changes.
@@ -410,18 +421,29 @@ func VerifyFile(keys []PublicKey, target Target, path string, signatureFile []by
 }
 
 // AllowUnsigned reports whether AGENT_UPDATE_ALLOW_UNSIGNED asks to install
-// updates whose signature is missing or invalid. A value that is not a
-// boolean keeps verification on rather than guessing.
+// updates whose signature is missing or invalid: only "until=<RFC 3339
+// time>", before that time, and no more than AllowUnsignedWindow ahead.
+// Anything else keeps verification on, with a warning that says why.
 func AllowUnsigned() bool {
 	value := strings.TrimSpace(os.Getenv(AGENT_UPDATE_ALLOW_UNSIGNED))
 	if value == "" {
 		return false
 	}
-	allow, err := strconv.ParseBool(value)
-	if err != nil {
+	at := now()
+	until, err := time.Parse(time.RFC3339, strings.TrimPrefix(value, "until="))
+	switch {
+	case !strings.HasPrefix(value, "until=") || err != nil:
 		log.Warn().Str("value", value).
-			Msgf("Ignoring %s: not a boolean, update signature verification stays on", AGENT_UPDATE_ALLOW_UNSIGNED)
+			Msgf("Ignoring %s: it takes until=<RFC 3339 time, at most 24 h ahead>; update signature verification stays on", AGENT_UPDATE_ALLOW_UNSIGNED)
+		return false
+	case !at.Before(until):
+		log.Warn().Str("until", until.UTC().Format(time.RFC3339)).
+			Msgf("Ignoring %s: it ran out; update signature verification stays on", AGENT_UPDATE_ALLOW_UNSIGNED)
+		return false
+	case until.Sub(at) > AllowUnsignedWindow:
+		log.Warn().Str("until", until.UTC().Format(time.RFC3339)).
+			Msgf("Ignoring %s: it lies more than 24 h ahead; update signature verification stays on", AGENT_UPDATE_ALLOW_UNSIGNED)
 		return false
 	}
-	return allow
+	return true
 }
