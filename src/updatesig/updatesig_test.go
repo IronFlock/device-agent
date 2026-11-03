@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -313,14 +314,30 @@ func TestParsePublicKeys(t *testing.T) {
 	})
 }
 
+// Only an expiry no more than 24 h ahead opens the switch, and only until
+// then; the old boolean form, which never ran out, keeps verification on.
 func TestAllowUnsigned(t *testing.T) {
+	at := time.Date(2026, 11, 3, 12, 0, 0, 0, time.UTC)
+	previous := now
+	now = func() time.Time { return at }
+	t.Cleanup(func() { now = previous })
+	until := func(d time.Duration) string { return "until=" + at.Add(d).Format(time.RFC3339) }
+
 	for value, want := range map[string]bool{
-		"":       false,
-		"true":   true,
-		"1":      true,
-		"TRUE":   true,
-		"false":  false,
-		"please": false,
+		"":                                       false,
+		"true":                                   false,
+		"1":                                      false,
+		"false":                                  false,
+		"please":                                 false,
+		until(time.Hour):                         true,
+		until(AllowUnsignedWindow):               true,
+		until(AllowUnsignedWindow + time.Second): false,
+		until(0):                                 false,
+		until(-time.Minute):                      false,
+		"until=tomorrow":                         false,
+		"until=2026-11-03T14:00:00+01:00":        true,
+		"until=2026-11-03T13:00:00+01:00":        false,
+		at.Add(time.Hour).Format(time.RFC3339):   false,
 	} {
 		t.Setenv(AGENT_UPDATE_ALLOW_UNSIGNED, value)
 		assert.Equal(t, want, AllowUnsigned(), "%s=%q", AGENT_UPDATE_ALLOW_UNSIGNED, value)

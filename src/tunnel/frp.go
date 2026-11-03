@@ -210,15 +210,6 @@ const REMOTE_PORT FrpcVariable = "remote_port"
 const PROD_SERVER_ADDR = "app.ironflock.com"
 const TEST_SERVER_ADDR = "app.ironflock.dev"
 
-// TUNNEL_TLS_INSECURE_SKIP_VERIFY is the escape hatch for frps certificate
-// verification: set to "true" in the agent's service environment (the same
-// systemd drop-in or Windows service environment that carries the proxy
-// variables), frpc.yaml is written without trustedCaFile and frpc goes back to
-// accepting any certificate, as every agent before this check did. Meant for a
-// site whose network intercepts TLS with a CA the device does not trust. A
-// warning is logged every time the config is built while it is set.
-const TUNNEL_TLS_INSECURE_SKIP_VERIFY = "TUNNEL_TLS_INSECURE_SKIP_VERIFY"
-
 // Matches a tunnel label, "[secure-]{deviceKey}-{appName}-{declaredPort}[-dev]",
 // tolerating a trailing "-{protocol}" (a proxy name) as well. Group 1 is the
 // app name, group 2 the declared port, group 3 the development-run marker.
@@ -474,14 +465,11 @@ func initialize(cfg *config.Config) TunnelConfigBuilder {
 	frpcConfig.Transport.ProxyURL = route.ProxyURL
 
 	// The CA bundle itself is (re)written by SaveConfig, next to frpc.yaml.
+	// There is no switch to turn this off: a network that intercepts TLS needs
+	// its CA in the device's trust store, which the bundle is built from.
 	if serverName := tunnelTLSServerName(cfg.ReswarmConfig, wssMode, controlAddr); serverName != "" {
-		if tunnelTLSVerifyDisabled() {
-			log.Warn().Str("server", serverName).
-				Msgf("WARNING: %s is set; the tunnel client will NOT verify the tunnel server's certificate, so anyone on the network path can impersonate it. Unset it once the device trusts the server's CA", TUNNEL_TLS_INSECURE_SKIP_VERIFY)
-		} else {
-			frpcConfig.Transport.TLS.TrustedCaFile = trust.TunnelCAPath(cfg.CommandLineArguments.AgentDir)
-			frpcConfig.Transport.TLS.ServerName = serverName
-		}
+		frpcConfig.Transport.TLS.TrustedCaFile = trust.TunnelCAPath(cfg.CommandLineArguments.AgentDir)
+		frpcConfig.Transport.TLS.ServerName = serverName
 	} else {
 		// Plain-mode appliances and local stacks: nothing can vouch for the
 		// tunnel server here (see tunnelTLSServerName). A warning whenever the
@@ -566,23 +554,6 @@ func tunnelTLSServerName(reswarm *config.ReswarmConfig, wssMode bool, controlAdd
 		return ""
 	}
 	return controlAddr
-}
-
-// tunnelTLSVerifyDisabled reports whether TUNNEL_TLS_INSECURE_SKIP_VERIFY asks
-// for the unverified control connection. A value that is not a boolean keeps
-// verification on rather than guessing.
-func tunnelTLSVerifyDisabled() bool {
-	value := strings.TrimSpace(os.Getenv(TUNNEL_TLS_INSECURE_SKIP_VERIFY))
-	if value == "" {
-		return false
-	}
-	disabled, err := strconv.ParseBool(value)
-	if err != nil {
-		log.Warn().Str("value", value).
-			Msgf("Ignoring %s: not a boolean, tunnel server verification stays on", TUNNEL_TLS_INSECURE_SKIP_VERIFY)
-		return false
-	}
-	return disabled
 }
 
 // tunnelHostRoots and tunnelEndpointCAs supply the tunnel CA bundle's inputs.

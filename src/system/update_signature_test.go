@@ -15,6 +15,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"reagent/config"
 	"reagent/embedded"
@@ -267,8 +268,8 @@ func TestDownloadSignatureVerification(t *testing.T) {
 				assertNothingInstalled(t, a, cfg)
 			})
 
-			t.Run("escape hatch installs an unsigned binary", func(t *testing.T) {
-				t.Setenv(updatesig.AGENT_UPDATE_ALLOW_UNSIGNED, "true")
+			t.Run("the emergency switch installs an unsigned binary until it runs out", func(t *testing.T) {
+				t.Setenv(updatesig.AGENT_UPDATE_ALLOW_UNSIGNED, allowUnsignedFor(time.Hour))
 				trustUpdateKey(t, pub)
 				origin := newUpdateOrigin(t)
 				origin.publish(a, genuine, nil)
@@ -276,6 +277,19 @@ func TestDownloadSignatureVerification(t *testing.T) {
 
 				require.NoError(t, a.download(sys))
 				assert.FileExists(t, a.installed(cfg))
+			})
+
+			t.Run("the old true and a value without expiry keep verification on", func(t *testing.T) {
+				for _, value := range []string{"true", "please", allowUnsignedFor(-time.Minute), allowUnsignedFor(48 * time.Hour)} {
+					t.Setenv(updatesig.AGENT_UPDATE_ALLOW_UNSIGNED, value)
+					trustUpdateKey(t, pub)
+					origin := newUpdateOrigin(t)
+					origin.publish(a, genuine, nil)
+					sys, cfg := newUpdateSystem(t, origin)
+
+					assert.ErrorIs(t, a.download(sys), updatesig.ErrMissingSignature, "%s=%s", updatesig.AGENT_UPDATE_ALLOW_UNSIGNED, value)
+					assertNothingInstalled(t, a, cfg)
+				}
 			})
 
 			t.Run("a non-boolean escape hatch value keeps verification on", func(t *testing.T) {
@@ -290,6 +304,12 @@ func TestDownloadSignatureVerification(t *testing.T) {
 			})
 		})
 	}
+}
+
+// allowUnsignedFor is AGENT_UPDATE_ALLOW_UNSIGNED's value running out after d
+// (a negative d: already run out).
+func allowUnsignedFor(d time.Duration) string {
+	return "until=" + time.Now().Add(d).UTC().Format(time.RFC3339)
 }
 
 // updateSigLogChild marks the child test binary that
@@ -336,7 +356,7 @@ func TestDownloadSignatureLogs(t *testing.T) {
 		}
 
 		require.Error(t, run(""))
-		require.NoError(t, run("true"))
-		require.NoError(t, run("true"))
+		require.NoError(t, run(allowUnsignedFor(time.Hour)))
+		require.NoError(t, run(allowUnsignedFor(time.Hour)))
 	}
 }
