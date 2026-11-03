@@ -269,56 +269,6 @@ func TestMergeInsecureRegistriesRejectsMalformed(t *testing.T) {
 	assert.Error(t, err)
 }
 
-// The registry token is used as the docker *username* and is far longer than
-// Windows Credential Manager accepts, so the app registry must be opted out of
-// the credential helper or every login fails at the store step.
-func TestMergeCredentialHelperOptOutCreatesEntry(t *testing.T) {
-	merged, changed, err := mergeCredentialHelperOptOut(nil, []string{"136.230.111.59:15001"})
-	require.NoError(t, err)
-	assert.True(t, changed)
-
-	var cfg map[string]interface{}
-	require.NoError(t, json.Unmarshal(merged, &cfg))
-	helpers := cfg["credHelpers"].(map[string]interface{})
-	assert.Equal(t, "", helpers["136.230.111.59:15001"])
-}
-
-// Docker Desktop machines have a config.json already; auths, contexts and any
-// other keys must survive untouched.
-func TestMergeCredentialHelperOptOutPreservesConfig(t *testing.T) {
-	existing := []byte(`{"auths":{"registry.example":{"auth":"x"}},"currentContext":"desktop-linux"}`)
-	merged, changed, err := mergeCredentialHelperOptOut(existing, []string{"136.230.111.59:15001"})
-	require.NoError(t, err)
-	assert.True(t, changed)
-
-	var cfg map[string]interface{}
-	require.NoError(t, json.Unmarshal(merged, &cfg))
-	assert.Contains(t, cfg, "auths")
-	assert.Equal(t, "desktop-linux", cfg["currentContext"])
-	assert.Equal(t, "", cfg["credHelpers"].(map[string]interface{})["136.230.111.59:15001"])
-}
-
-// An operator who deliberately configured a helper for this registry keeps it.
-func TestMergeCredentialHelperOptOutKeepsOperatorChoice(t *testing.T) {
-	existing := []byte(`{"credHelpers":{"136.230.111.59:15001":"wincred"}}`)
-	merged, changed, err := mergeCredentialHelperOptOut(existing, []string{"136.230.111.59:15001"})
-	require.NoError(t, err)
-	assert.False(t, changed)
-	assert.Equal(t, existing, merged)
-}
-
-func TestMergeCredentialHelperOptOutIdempotent(t *testing.T) {
-	existing := []byte(`{"credHelpers":{"136.230.111.59:15001":""}}`)
-	_, changed, err := mergeCredentialHelperOptOut(existing, []string{"136.230.111.59:15001"})
-	require.NoError(t, err)
-	assert.False(t, changed)
-}
-
-func TestMergeCredentialHelperOptOutRejectsMalformed(t *testing.T) {
-	_, _, err := mergeCredentialHelperOptOut([]byte(`{"credHelpers":`), []string{"x:1"})
-	assert.Error(t, err)
-}
-
 // A device attached to an appliance in domain mode must reach it directly. The
 // LAC edge PC went offline exactly here: NO_PROXY was fixed at
 // localhost,127.0.0.1, so the agent sent its platform connection to the

@@ -3,13 +3,11 @@
 package main
 
 import (
-	"encoding/json"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
 	"reagent/codesign"
-	"reagent/config"
 	"reagent/filesystem"
 	"reagent/migratestate"
 	"reagent/winservice"
@@ -287,15 +285,6 @@ func serviceInstall(args []string) error {
 	err = ensureDockerInsecureRegistries(installedConfig)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "warning: could not configure Docker's insecure-registries (app installs will fail until the appliance registry is added via Docker Desktop → Settings → Docker Engine): %v\n", err)
-	}
-
-	// The registry token used as the docker username is longer than Windows
-	// Credential Manager accepts, so the service account must not use the
-	// credential helper — otherwise every `docker login` fails at the store
-	// step and no app can ever be pulled.
-	err = ensureDockerCredentialStore(installedConfig)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "warning: could not opt the registry out of the Windows credential helper (app installs may fail with \"error saving credentials\"): %v\n", err)
 	}
 
 	// Import our code-signing root so the agent's signed self-updates are
@@ -628,60 +617,6 @@ func ensureDockerInsecureRegistries(flockPath string) error {
 	fmt.Printf("Added insecure-registries %s to %s — restart Docker (Docker Desktop, or the docker service) to apply.\n",
 		strings.Join(entries, ", "), daemonPath)
 	return nil
-}
-
-// localSystemDockerConfigPath is the Docker CLI config the agent's service
-// account reads. The service runs as LocalSystem, whose profile is under
-// System32\config\systemprofile — never the installing administrator's, so
-// this cannot be derived from the environment at install time.
-func localSystemDockerConfigPath() string {
-	systemRoot := os.Getenv("SystemRoot")
-	if systemRoot == "" {
-		systemRoot = `C:\Windows`
-	}
-	return filepath.Join(systemRoot, "System32", "config", "systemprofile", ".docker", "config.json")
-}
-
-// ensureDockerCredentialStore opts the app registry out of the Windows
-// credential helper for the LocalSystem account, so `docker login` can store
-// the credential in config.json instead of failing against Credential
-// Manager's username length limit. See mergeCredentialHelperOptOut for why
-// this is mandatory rather than cosmetic.
-func ensureDockerCredentialStore(flockPath string) error {
-	raw, err := os.ReadFile(flockPath)
-	if err != nil {
-		return err
-	}
-	var flockCfg config.ReswarmConfig
-	err = json.Unmarshal(raw, &flockCfg)
-	if err != nil {
-		return fmt.Errorf("could not parse %s: %w", flockPath, err)
-	}
-
-	registry := normalizeRegistryHost(flockCfg.DockerRegistryURL)
-	if registry == "" {
-		return nil
-	}
-
-	configPath := localSystemDockerConfigPath()
-	current, err := os.ReadFile(configPath)
-	if err != nil && !os.IsNotExist(err) {
-		return err
-	}
-
-	merged, changed, err := mergeCredentialHelperOptOut(current, []string{registry})
-	if err != nil {
-		return fmt.Errorf("%s: %w", configPath, err)
-	}
-	if !changed {
-		return nil
-	}
-
-	err = os.MkdirAll(filepath.Dir(configPath), 0700)
-	if err != nil {
-		return err
-	}
-	return os.WriteFile(configPath, merged, 0600) //nolint:gosec // G703: paths from the installer layout and Program Files, not remote input
 }
 
 func copyFileIfDifferent(src string, dst string) error {
