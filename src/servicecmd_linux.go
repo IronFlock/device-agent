@@ -96,6 +96,11 @@ func linuxServiceInstall(args []string) error {
 	if err := linuxservice.WriteFiles("", paths); err != nil {
 		return err
 	}
+	// The slice and the resource drop-in; the agent rewrites them at every
+	// start, so a problem here is not worth a failed install.
+	if _, err := linuxservice.WriteResourceFiles("", linuxservice.UnitName, !linuxservice.ReadMemoryRecursiveProt()); err != nil {
+		fmt.Fprintln(os.Stderr, "warning: the agent's resource settings were not written:", err)
+	}
 	// The unit only starts once the device has a configuration to enrol with.
 	if _, err := os.Stat(paths.Config()); err == nil {
 		if err := linuxservice.WriteFileAtomic(paths.Enrolled(), nil, 0o644); err != nil {
@@ -127,6 +132,9 @@ func linuxServiceUninstall() error {
 		if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
 			return err
 		}
+	}
+	if err := linuxservice.RemoveResourceFiles("", linuxservice.UnitName); err != nil {
+		return err
 	}
 	return systemctl("daemon-reload")
 }

@@ -1608,6 +1608,13 @@ func (am *AppManager) CreateOrUpdateApp(payload common.TransitionPayload) error 
 	}
 
 	app.RequestedState = payload.RequestedState
+	// The requestor goes with the request: UpdateRemoteAppState reports it,
+	// and the backend acts for that account (e.g. the account a release is
+	// created for). Set only in AddApp, it stayed the first requestor since the
+	// agent started, so a publish was credited to whoever had last run the app.
+	if payload.RequestorAccountKey != 0 {
+		app.RequestorAccountKey = payload.RequestorAccountKey
+	}
 
 	app.StateLock.Unlock()
 

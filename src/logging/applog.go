@@ -45,8 +45,9 @@ type LogProccess struct {
 	ChannelStream          chan string
 	StreamEvent            chan StreamEvent
 	logHistory             []*LogEntry
-	Publish                bool // Publish defines if we are currently publishing the logs
-	Active                 bool // Active defines wether or not we are currently iterating over the log stream
+	Publish                bool   // Publish defines if we are currently publishing the logs
+	Active                 bool   // Active defines wether or not we are currently iterating over the log stream
+	stop                   func() // ends the process behind ChannelStream (a compose log tail); nil for streams that end by themselves
 	logEntriesMutex        sync.Mutex
 	subscriptionStateMutex sync.Mutex
 }
@@ -543,8 +544,13 @@ func (lm *LogManager) ReviveDeadLogs() error {
 			lm.activeLogsMutex.Unlock()
 
 			if existingEntry != nil {
+				// A live tail needs no revival, whether it reads a Docker API
+				// stream or the output of a compose `logs -f` process. When
+				// only the API stream counted as live, every reconnect started
+				// one more compose tail per app, and the earlier ones kept
+				// running.
 				existingEntry.subscriptionStateMutex.Lock()
-				if existingEntry.Active && existingEntry.Stream != nil {
+				if existingEntry.Active && (existingEntry.Stream != nil || existingEntry.ChannelStream != nil) {
 					existingEntry.subscriptionStateMutex.Unlock()
 					continue
 				}
@@ -575,13 +581,13 @@ func (lm *LogManager) ReviveDeadLogs() error {
 			}
 
 			if composeApp != nil {
-				logStream, err := compose.LogStream(composeApp.ConfigFiles)
+				tail, err := compose.LogStream(composeApp.ConfigFiles)
 				if err != nil {
 					log.Error().Err(err).Msg("Error while getting log stream")
 					continue
 				}
 
-				_, _ = lm.StreamLogsChannel(logStream, containerName)
+				_, _ = lm.StreamComposeTail(tail, containerName)
 			} else {
 				reader, err := lm.getLogStream(containerName)
 				if err != nil {
@@ -823,7 +829,20 @@ func (lm *LogManager) SetupLogConsumer(containerName string) chan *LogProccess {
 	return logProcessChannel
 }
 
+// StreamLogsChannel follows a channel of log lines that ends by itself (a
+// build's or a pull's output).
 func (lm *LogManager) StreamLogsChannel(channel chan string, containerName string) (*LogProccess, error) {
+	return lm.streamChannel(channel, containerName, nil)
+}
+
+// StreamComposeTail follows a compose app's live log tail. The app's earlier
+// tail, if it is still running, is stopped first: a second `logs -f` for the
+// same app would otherwise run on beside it for the agent's lifetime.
+func (lm *LogManager) StreamComposeTail(tail *container.ComposeLog, containerName string) (*LogProccess, error) {
+	return lm.streamChannel(tail.Lines, containerName, tail.Stop)
+}
+
+func (lm *LogManager) streamChannel(channel chan string, containerName string, stop func()) (*LogProccess, error) {
 
 	// in case there is already an active subscription, we need to start publishing straight away
 	id := lm.getActiveSubscriptionID(containerName)
@@ -835,6 +854,7 @@ func (lm *LogManager) StreamLogsChannel(channel chan string, containerName strin
 		ChannelStream: channel,
 		Active:        false,
 		Publish:       false,
+		stop:          stop,
 	}
 
 	if id != "" {
@@ -848,6 +868,21 @@ func (lm *LogManager) StreamLogsChannel(channel chan string, containerName strin
 }
 
 func (lm *LogManager) addLogProcess(logProcess *LogProccess) {
+	// The app's earlier tail, if it still runs, ends here; two tails of one
+	// app would both run on until the agent restarts.
+	lm.activeLogsMutex.Lock()
+	previous := lm.activeLogs[logProcess.ContainerName]
+	lm.activeLogsMutex.Unlock()
+	if previous != nil && previous != logProcess && previous.stop != nil {
+		previous.subscriptionStateMutex.Lock()
+		live := previous.Active
+		previous.subscriptionStateMutex.Unlock()
+		if live {
+			log.Info().Msgf("stopping the earlier log tail of %s before starting a new one", logProcess.ContainerName)
+			previous.stop()
+		}
+	}
+
 	for _, process := range lm.logProcessEntries {
 
 		// If this stream already exists in the array, do not add it

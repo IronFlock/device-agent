@@ -23,7 +23,7 @@ type unixShell struct {
 }
 
 func startHostShell() (hostShell, error) {
-	c := exec.Command("bash")
+	c := hostShellCommand()
 	// PATH is forwarded explicitly because c.Env is non-nil below, which
 	// otherwise hands bash an empty environment and leaves it on the
 	// compiled-in confstr default.
@@ -34,6 +34,7 @@ func startHostShell() (hostShell, error) {
 	if err != nil {
 		return nil, err
 	}
+	resetPriority(c.Process.Pid)
 
 	return &unixShell{ptmx: ptmx, cmd: c}, nil
 }
