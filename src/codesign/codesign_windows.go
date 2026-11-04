@@ -4,8 +4,11 @@ package codesign
 
 import (
 	"fmt"
+	"os"
+	"time"
 	"unsafe"
 
+	"github.com/rs/zerolog/log"
 	"golang.org/x/sys/windows"
 )
 
@@ -38,6 +41,58 @@ func platformVerify(path string) (err error) {
 		return verr
 	}
 	return verifyFile(path, pinnedRoots)
+}
+
+// ReportSelf runs both checks once on the agent's own executable, the binary
+// an update or the installer downloaded, and logs each result. It never
+// refuses or changes anything. It shows, on every device and right after an
+// update, whether the check passes there (no internet, the machine's trust
+// store, its clock) before enforcement is turned on. Call it in the
+// background: WinVerifyTrust can wait on the network.
+func ReportSelf() {
+	if len(pinnedRoots) == 0 {
+		return
+	}
+	defer func() {
+		if r := recover(); r != nil {
+			log.Warn().Msgf("codesign: self-check panicked: %v", r)
+		}
+	}()
+	exe, err := os.Executable()
+	if err != nil {
+		log.Warn().Err(err).Msg("codesign: self-check skipped: the agent's executable is unknown")
+		return
+	}
+
+	start := time.Now()
+	winErr := winVerifyTrust(exe)
+	winTook := time.Since(start)
+	signer, pinErr := checkFile(exe, pinnedRoots)
+
+	event := log.Info()
+	if winErr != nil || pinErr != nil {
+		event = log.Warn()
+	}
+	event = event.Str("file", exe).Bool("enforcing", Enforcing()).
+		Str("windows_check", resultOf(winErr)).Dur("windows_check_took", winTook).
+		Str("pin_check", resultOf(pinErr))
+	if signer != nil {
+		event = event.Str("signer", signer.Subject.CommonName).
+			Str("signer_serial", signer.SerialNumber.Text(16)).
+			Time("signer_valid_until", signer.NotAfter)
+	}
+	if winErr != nil || pinErr != nil {
+		event.Msg("codesign: self-check FAILED: with enforcement on, this device would refuse updates signed like this agent")
+		return
+	}
+	event.Msg("codesign: self-check passed")
+}
+
+func resultOf(err error) string {
+	if err != nil {
+		return err.Error()
+	}
+	return "ok"
 }
 
 func winVerifyTrust(path string) error {

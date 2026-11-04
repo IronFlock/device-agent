@@ -9,3 +9,6 @@ package codesign
 func platformVerify(path string) error {
 	return nil
 }
+
+// ReportSelf does nothing off Windows.
+func ReportSelf() {}

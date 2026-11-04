@@ -53,10 +53,34 @@ frpc download) makes two independent checks, and both must pass:
    merely *carries* proves nothing: anyone can add our public signer
    certificate to their own signature.
 
-Enforcement is on (`enforce = true`): a binary that fails is deleted and not
-run. The certificate is checked at the time of the check, not at signing time,
-so **a signer certificate must be replaced before it expires**; the release
-refuses to publish with one that has less than 30 days left.
+Enforcement is **off** for now (`enforce = false`): a download that fails is
+installed anyway, with a warning in the agent log. With enforcement on, it is
+deleted and not run. The certificate is checked at the time of the check, not
+at signing time, so **a signer certificate must be replaced before it
+expires**; the release refuses to publish with one that has less than 30 days
+left. The device's clock matters for the same reason: a clock outside the
+signer certificate's validity fails the check.
+
+At every start the agent also checks its own executable in the background
+(`codesign.ReportSelf`) and logs `codesign: self-check passed` or
+`codesign: self-check FAILED`, with the result of each of the two checks, how
+long WinVerifyTrust took, and the signer. Nothing is refused because of it.
+
+### Turning enforcement on
+
+A device whose check fails once enforcement is on refuses every later update,
+including the one that would fix it; only a reinstall by hand recovers it. So:
+
+1. Release with enforcement off, and let the Windows devices update to it,
+   including devices that reach only an appliance (no internet).
+2. Read the agent logs of those devices: every one must log
+   `codesign: self-check passed`, and no download may log `signature
+   verification failed … (proceeding: enforcement off)`.
+3. Then set `enforce = true` in `src/codesign/codesign.go`, invert
+   `TestShippedBuildReportsWithoutEnforcing`, and give the self-update and
+   download tests in `src/selfupdate` and `src/system` a signature stub: on
+   Windows they feed unsigned test binaries and pass only while enforcement is
+   off.
 
 The same check runs in three places before devices see a binary, with the
 agent's own code (`sign-update authenticode`, `just codesign-check`):
@@ -97,18 +121,20 @@ Steps 1–2 change Google Cloud; step 3 needs the root key.
    gcloud kms keys versions get-public-key 1 --project record-1283 --location europe-west1 --keyring ironflock-release --key agent-codesign --output-file agent-codesign.pub.pem
    ```
 
-3. The certificate, issued by the root from that public key alone (OpenSSL 3;
-   no request needs signing):
+3. The certificate, issued by the root from that public key alone (OpenSSL 3.4
+   or later, for `-not_before`/`-not_after`; no request needs signing):
 
    ```bash
+   mkdir -p src/codesign/signer
    printf 'basicConstraints=critical,CA:FALSE\nkeyUsage=critical,digitalSignature\nextendedKeyUsage=codeSigning\nsubjectKeyIdentifier=hash\nauthorityKeyIdentifier=keyid\n' > agent-codesign.ext
-   openssl x509 -new -force_pubkey agent-codesign.pub.pem -subj "/CN=IronFlock Device Agent/O=IronFlock" -CA ironflock-root.crt -CAkey root.key -set_serial "0x$(openssl rand -hex 16)" -not_after 20360607000000Z -extfile agent-codesign.ext -out src/codesign/signer/agent-codesign.crt
+   openssl x509 -new -force_pubkey agent-codesign.pub.pem -subj "/CN=IronFlock Device Agent/O=IronFlock" -CA src/codesign/roots/ironflock-root.crt -CAkey root.key -set_serial "0x$(openssl rand -hex 16)" -not_before 20260710110831Z -not_after 20360607000000Z -extfile agent-codesign.ext -out src/codesign/signer/agent-codesign.crt
    openssl verify -CAfile src/codesign/roots/ironflock-root.crt src/codesign/signer/agent-codesign.crt
    ```
 
-   The certificate ends a month before the root. A long lifetime is acceptable
-   here because the key cannot leave KMS; replace the certificate (or the key)
-   before it ends.
+   The certificate starts with the root (2026-07-10), so a device whose clock
+   runs behind accepts it as it accepted the earlier signer, and ends a month
+   before the root. A long lifetime is acceptable here because the key cannot
+   leave KMS; replace the certificate (or the key) before it ends.
 
 4. Commit the certificate and release. The release pull request's dry run
    exercises the signing path; the release signs through KMS and checks the

@@ -94,11 +94,13 @@ func Configured() bool {
 }
 
 // enforce makes a failed signature check fatal: an unsigned binary, or one
-// signed by anyone but IronFlock, is refused. Windows releases have been
-// signed since the Windows service shipped (July 2026); the switch stayed off
-// until the pin was bound to the certificate that made the signature
-// (verifyFile).
-var enforce = true
+// signed by anyone but IronFlock, is refused. It stays off for one release:
+// that release runs the full check on every Windows device and only logs the
+// result (ReportSelf at start, every download), because a device whose check
+// fails once enforcement is on refuses every later update, including the one
+// that would fix it. Turn it on once the field reports clean checks
+// (docs/WINDOWS-CODE-SIGNING.md, "Turning enforcement on").
+var enforce = false
 
 // enforceStr also turns enforcement on at build time
 // (-ldflags "-X reagent/codesign.enforceStr=true"); it cannot turn it off.

@@ -21,8 +21,13 @@ func mkCert(t *testing.T, cn string, isCA bool, parent *x509.Certificate, parent
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	require.NoError(t, err)
 
+	// A random serial, as real issuers use: a clock-based one repeats on
+	// Windows, whose clock is coarse, and the signer is found by issuer and
+	// serial number.
+	serial, err := rand.Int(rand.Reader, new(big.Int).Lsh(big.NewInt(1), 127))
+	require.NoError(t, err)
 	tmpl := &x509.Certificate{
-		SerialNumber:          big.NewInt(time.Now().UnixNano()),
+		SerialNumber:          serial,
 		Subject:               pkix.Name{CommonName: cn},
 		NotBefore:             time.Now().Add(-time.Hour),
 		NotAfter:              time.Now().Add(time.Hour),
@@ -125,9 +130,10 @@ func TestEnforcingRequiresConfiguredRoot(t *testing.T) {
 	assert.True(t, Enforcing())
 }
 
-// The shipped build enforces: the embedded root is configured and the switch
-// is on, so an unsigned or foreign-signed download is refused.
-func TestShippedBuildEnforces(t *testing.T) {
+// The shipped build checks against the embedded root but does not enforce
+// yet: this release only reports. Turning enforcement on is a deliberate
+// change of this test too (docs/WINDOWS-CODE-SIGNING.md).
+func TestShippedBuildReportsWithoutEnforcing(t *testing.T) {
 	require.True(t, Configured(), "the IronFlock root must be embedded (roots/*.crt)")
-	assert.True(t, Enforcing(), "Authenticode enforcement must be on")
+	assert.False(t, Enforcing(), "Authenticode enforcement stays off until the field reports clean checks")
 }
