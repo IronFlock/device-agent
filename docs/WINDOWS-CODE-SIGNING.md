@@ -20,7 +20,7 @@ devices we administer, at zero certificate cost.
 ## The two tiers
 
 - **Root CA** "IronFlock Code Signing Root" (RSA 4096, valid to 2036-07-07).
-  Its key is **never in CI** and is to be kept offline. Its public certificate
+  Its key signs only signer certificates; no release step uses it. Its public certificate
   is embedded (`src/codesign/roots/*.crt`) for on-device pinning and imported
   into each device's Trusted Root store by the installer. More than one root
   can be embedded at a time to bridge a root rotation (below).
@@ -60,34 +60,45 @@ frpc download) makes two independent checks, and both must pass:
    merely *carries* proves nothing: anyone can add our public signer
    certificate to their own signature.
 
-Enforcement is **off** for now (`enforce = false`): a download that fails is
-installed anyway, with a warning in the agent log. With enforcement on, it is
-deleted and not run. The certificate is checked at the time of the check, not
-at signing time, so **a signer certificate must be replaced before it
-expires**; the release refuses to publish with one that has less than 30 days
-left. The device's clock matters for the same reason: a clock outside the
-signer certificate's validity fails the check.
+Enforcement is **on** since 1.5.6 (`enforce = true`): a download that fails
+is deleted and not run, and an update that fails is not activated. 1.5.4 and
+1.5.5 only logged a failure and installed the file anyway. The certificate is
+checked at the time of the check, not at signing time, so **a signer
+certificate must be replaced before it expires**; the release refuses to
+publish with one that has less than 30 days left. The device's clock matters
+for the same reason: a clock outside the signer certificate's validity fails
+the check, and such a device refuses updates until its clock is right.
 
 At every start the agent also checks its own executable in the background
 (`codesign.ReportSelf`) and logs `codesign: self-check passed` or
 `codesign: self-check FAILED`, with the result of each of the two checks, how
-long WinVerifyTrust took, and the signer. Nothing is refused because of it.
+long WinVerifyTrust took, and the signer. Nothing is refused because of it,
+but a device that logs `FAILED` refuses updates signed like the agent it runs:
+it is a device to look at by hand.
 
-### Turning enforcement on
+### How enforcement was turned on
 
 A device whose check fails once enforcement is on refuses every later update,
-including the one that would fix it; only a reinstall by hand recovers it. So:
+including the one that would fix it; only a reinstall by hand recovers it. So
+enforcement came in three steps, and the same steps apply whenever the check
+itself changes in a way that could refuse more:
 
 1. Release with enforcement off, and let the Windows devices update to it,
-   including devices that reach only an appliance (no internet).
+   including devices that reach only an appliance (no internet). This was
+   1.5.4, and 1.5.5 with the `CERT_E_CHAINING` fix above.
 2. Read the agent logs of those devices: every one must log
    `codesign: self-check passed`, and no download may log `signature
-   verification failed … (proceeding: enforcement off)`.
-3. Then set `enforce = true` in `src/codesign/codesign.go`, invert
-   `TestShippedBuildReportsWithoutEnforcing`, and give the self-update and
-   download tests in `src/selfupdate` and `src/system` a signature stub: on
-   Windows they feed unsigned test binaries and pass only while enforcement is
-   off.
+   verification failed … (proceeding: enforcement off)`. On 2026-11-04 the
+   only Windows device in the field (behind an appliance) did, on 1.5.5.
+3. Then set `enforce = true` in `src/codesign/codesign.go`
+   (`TestShippedBuildEnforces` pins it). The self-update and download tests in
+   `src/selfupdate` and `src/system` stand in for the check (their test
+   binaries are unsigned); `TestDownloadAuthenticode` and the
+   `TestActivate…Signature…` tests cover what the agent does with its answer.
+
+Turning enforcement off again takes a release that the devices still accept,
+signed like the current one: a device that already refuses updates cannot be
+reached by a release that switches it off.
 
 The same check runs in three places before devices see a binary, with the
 agent's own code (`sign-update authenticode`, `just codesign-check`):
@@ -169,7 +180,7 @@ rotated before it expires. Because self-updates are pinned, the new root
 reaches devices through an **overlap**: the agent accepts a signer that chains
 to **any** embedded root, so:
 
-1. **Transition release.** Generate a new root offline and add its public
+1. **Transition release.** Generate a new root and add its public
    certificate to `src/codesign/roots/` **alongside** the current one. Keep
    signing with the signer under the **old** root, so agents that trust only
    the old root accept this update. After it lands, devices trust both roots
@@ -191,5 +202,4 @@ update channel: an attacker with the key can issue a signer the fleet accepts.
 The Ed25519 update signature still stands in the way (it is a separate key,
 held in Cloud KMS and OpenBao), but recovery of the Authenticode trust is out
 of band: manual reinstall or re-provisioning per device. This is why the root
-key is never in CI and is to be kept offline. Treat the offline-root discipline as
-load-bearing, not ceremony.
+key's protection is load-bearing, not ceremony.

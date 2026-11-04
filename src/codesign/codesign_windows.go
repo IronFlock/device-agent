@@ -75,7 +75,11 @@ func ReportSelf() {
 			Time("signer_valid_until", signer.NotAfter)
 	}
 	if winErr != nil || pinErr != nil {
-		event.Msg("codesign: self-check FAILED: with enforcement on, this device would refuse updates signed like this agent")
+		if Enforcing() {
+			event.Msg("codesign: self-check FAILED: this device refuses updates signed like this agent")
+		} else {
+			event.Msg("codesign: self-check FAILED: with enforcement on, this device would refuse updates signed like this agent")
+		}
 		return
 	}
 	event.Msg("codesign: self-check passed")
