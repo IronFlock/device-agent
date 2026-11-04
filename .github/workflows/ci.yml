@@ -42,7 +42,7 @@ jobs:
     uses: IronFlock/workflows/.github/workflows/workflows-lint.yml@v1
 
   # The version decides: a bump makes a release PR (`just release-patch`,
-  # title `release reagent v<version>`), an unchanged version a no-release PR
+  # title `release device-agent v<version>`), an unchanged version a no-release PR
   # (`just merge`) whose merge releases nothing.
   intent:
     uses: IronFlock/workflows/.github/workflows/release-intent.yml@v1
