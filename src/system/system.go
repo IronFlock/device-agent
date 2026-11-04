@@ -317,9 +317,9 @@ func (sys *System) downloadBinary(base, tree, fileName, localName string, versio
 
 	// Authenticode (Windows): a binary not signed by IronFlock is refused
 	// (codesign.Enforcing).
-	err = codesign.Verify(tmpFilePath)
+	err = verifyAuthenticode(tmpFilePath)
 	if err != nil {
-		if codesign.Enforcing() {
+		if authenticodeEnforcing() {
 			removeErr := os.Remove(tmpFilePath)
 			if removeErr != nil {
 				log.Error().Err(removeErr).Msg("failed to remove download that failed signature verification")
@@ -405,6 +405,15 @@ func verifyRemoteChecksum(filePath string, binaryURL string) error {
 // trustedUpdateKeys supplies the keys downloaded binaries must be signed
 // with. A variable so tests can sign with a key generated at test time.
 var trustedUpdateKeys = updatesig.TrustedKeys
+
+// verifyAuthenticode and authenticodeEnforcing are the Authenticode check of
+// a download (Windows) and whether a failure refuses it. Variables so tests
+// can stand in for the check: their downloads carry no Authenticode
+// signature, which the real check refuses on Windows.
+var (
+	verifyAuthenticode    = codesign.Verify
+	authenticodeEnforcing = codesign.Enforcing
+)
 
 // verifyRemoteSignature checks filePath against the Ed25519 signature
 // published at <binaryURL>.sig (format: package updatesig) and refuses the

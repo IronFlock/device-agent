@@ -1,8 +1,9 @@
 # Agent resource protection
 
-Status: implemented on branch `agent-resource-protection` on 4 November 2026,
-not yet committed or released. Unit tests pass; the VM and load tests (Tests,
-steps 4–6) are open.
+Status: released in agent 1.5.5 on 4 November 2026. Unit tests pass. On the
+Windows field device the priorities are as planned (Tests, step 6), and a
+reconnect no longer adds a log tail (Measurements, "Windows field device on
+1.5.5"). Open: the VM and load tests (steps 4 and 5).
 
 ## Goal
 
@@ -148,6 +149,43 @@ The cgroup: `memory.current` 63 MB, `memory.peak` 66 MB, `anon` 53 MB,
   30 October, the extra tails are from 4 November. Linux runs the same code and
   leaks the same way on every reconnect; the Linux device above had one tail
   after 4 hours without a reconnect.
+
+### Windows field device on 1.5.5, 4 November 2026
+
+The same device, 20 minutes after the update from 1.5.3 to 1.5.5 (Appendix,
+Windows and "Checking the log tails"), in MB:
+
+| Process | Count | Priority | Working set each | Peak working set each | Private each |
+| --- | --- | --- | --- | --- | --- |
+| device-agent | 1 | AboveNormal | 34.8 | 39.8 | 62.0 |
+| frpc | 1 | AboveNormal | 28.8 | 62.1 | 52.6 |
+| docker (log tail) | 2 | Normal | 20.4–20.6 | 21.2–21.6 | 53.9–54.5 |
+| docker-compose (log tail) | 2 | Normal | 46.8 | 83.8–84.1 | 58.3–58.8 |
+| conhost (frpc, log tails) | 3 | Normal | 11.4 | 11.4 | 1.7 |
+| powershell, conhost (the terminal session that ran the measurement) | 1 + 1 | Normal | 103.9, 7.5 | 150.1, 7.5 | 81.6, 1.4 |
+| vmmemWSL (the WSL VM with the apps; not started by the agent) | 1 | Normal | 2928.6 | 4418.5 | 4184.2 |
+
+- **The priorities are as planned** (Tests, step 6): the agent and frpc run
+  above normal; everything else the agent starts runs at normal priority,
+  the terminal shell included. The VM that runs the apps is at normal
+  priority, so on the host the agent and frpc come first when the apps load
+  the CPU. The log has no `could not raise the agent's priority class`.
+- **One tail per compose app**: 2 apps, 2 tails, both started with the
+  agent. The update ended the 8 tails of 1.5.3: the job object stopped them
+  with the old agent. The tree without the terminal session holds 232 MB of
+  working set and 345 MB of private memory; 1.5.3 held about 600 MB and
+  1,070 MB after 17 hours. That comparison favours 1.5.5: 1.5.3 also had 2
+  tails right after its start, and the 6 extra ones came from reconnects.
+- **A reconnect leaves the tails alone.** The agent lost its connection at
+  20:34:49 and was re-initialized at 20:34:51. 35 seconds later the device
+  still had the same 2 tails, started with the agent, and no new one. Under
+  1.5.3 this device reconnected at 01:38, 03:29 and 04:46 on 4 November, and
+  each time both apps got one more tail within the same seconds. The terminal
+  session that ran the measurement survived the reconnect.
+- A young docker-compose process holds 46.8 MB of working set; after 17
+  hours they held 14.8–30.1 MB, because Windows trims idle processes. Private
+  memory (about 58 MB) does not shrink, so a tail costs about 115 MB of
+  committed memory either way.
 
 ### Consequences for this plan
 
@@ -399,7 +437,8 @@ All three taken as proposed on 4 November 2026; the implementation uses
    control: the same test against the current release shows the stall or the
    kill.
 6. **Windows:** the agent's priority class is `AboveNormal`, frpc's is
-   `AboveNormal`, and a terminal shell's is `Normal`.
+   `AboveNormal`, and a terminal shell's is `Normal`. Passed on the Windows
+   field device on 1.5.5 (Measurements).
 
 ## Rollout
 
@@ -476,20 +515,24 @@ cgroup totals are then the whole machine's; the per-process lines still apply.
 
 ### Windows
 
-In a PowerShell window opened as Administrator:
+In a PowerShell window opened as Administrator, or in the device's terminal
+in Studio (the terminal's own shell then shows up, at normal priority):
 
 ```powershell
 $svc = Get-CimInstance Win32_Service | Where-Object { $_.Name -in 'ironflock-device-agent','reagent' -and $_.ProcessId -ne 0 } | Select-Object -First 1
 $exe = $svc.PathName -replace '^"?([^"]+?\.exe).*', '$1'
 $all = Get-CimInstance Win32_Process
+$agent = $all | Where-Object ProcessId -eq $svc.ProcessId
 $ids = @($svc.ProcessId)
 do { $more = @($all | Where-Object { $ids -contains $_.ParentProcessId -and $ids -notcontains $_.ProcessId } | ForEach-Object ProcessId); $ids += $more } while ($more.Count -gt 0)
-"service: $($svc.Name)  pid: $($svc.ProcessId)  version: $(& $exe -version)  RAM: $([math]::Round((Get-CimInstance Win32_ComputerSystem).TotalPhysicalMemory/1MB)) MB"
-Get-Process -Id $ids -ErrorAction SilentlyContinue | Sort-Object Id | Format-Table Name, Id, @{n='WS MB';e={[math]::Round($_.WorkingSet64/1MB,1)}}, @{n='Peak WS MB';e={[math]::Round($_.PeakWorkingSet64/1MB,1)}}, @{n='Private MB';e={[math]::Round($_.PrivateMemorySize64/1MB,1)}}, @{n='Running h';e={[math]::Round(((Get-Date) - $_.StartTime).TotalHours,1)}} -AutoSize
-Get-Process -Name vmmem, vmmemWSL -ErrorAction SilentlyContinue | Format-Table Name, Id, @{n='WS MB';e={[math]::Round($_.WorkingSet64/1MB,1)}} -AutoSize
+$base = @{4='Idle';6='BelowNormal';8='Normal';10='AboveNormal';13='High';24='RealTime'}
+"version: $(& $exe -version)  agent pid: $($svc.ProcessId)  started: $($agent.CreationDate)  now: $(Get-Date)  RAM: $([math]::Round((Get-CimInstance Win32_ComputerSystem).TotalPhysicalMemory/1MB)) MB"
+$all | Where-Object { $ids -contains $_.ProcessId -or $_.Name -like 'vmmem*' } | Sort-Object CreationDate | ForEach-Object { $p = Get-Process -Id $_.ProcessId -ErrorAction SilentlyContinue; [pscustomobject]@{ Name = $_.Name; Id = $_.ProcessId; Parent = $_.ParentProcessId; Class = $p.PriorityClass; Base = "$($base[[int]$_.Priority]) $($_.Priority)"; 'WS MB' = [math]::Round($p.WorkingSet64/1MB,1); 'Peak WS MB' = [math]::Round($p.PeakWorkingSet64/1MB,1); 'Private MB' = [math]::Round($p.PrivateMemorySize64/1MB,1); Started = $_.CreationDate.ToString('dd.MM HH:mm:ss') } } | Format-Table -AutoSize
 ```
 
-The last line shows the WSL VM, which holds the apps.
+`vmmem` / `vmmemWSL` is the WSL VM, which holds the apps. `Class` comes from
+the process handle and stays empty where access is denied; `Base` is the base
+priority Windows reports for every process.
 
 ### Checking the log tails
 
@@ -504,10 +547,11 @@ sudo docker compose ls
 sudo ps -o pid,etime,args -C docker-compose
 ```
 
-Windows, in PowerShell opened as Administrator:
+Windows, in the same window, right after the commands above (it uses `$ids`;
+`FromThisAgent` below `Count` means a tail outlived an earlier agent):
 
 ```powershell
-Get-CimInstance Win32_Process -Filter "Name='docker-compose.exe'" | Group-Object CommandLine | Format-Table Count, Name -AutoSize -Wrap
+Get-CimInstance Win32_Process -Filter "Name='docker-compose.exe'" | Group-Object CommandLine | ForEach-Object { [pscustomobject]@{ Count = $_.Count; FromThisAgent = @($_.Group | Where-Object { $ids -contains $_.ProcessId }).Count; Started = ($_.Group | ForEach-Object { $_.CreationDate.ToString('dd.MM HH:mm:ss') }) -join ', '; Tail = $_.Name } } | Format-Table -AutoSize -Wrap
 ```
 
 Duplicates come from reconnects. The tails' start times should match these
