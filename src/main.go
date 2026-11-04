@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/signal"
 	"reagent/benchmark"
+	"reagent/codesign"
 
 	// "reagent/common"
 	"reagent/config"
@@ -123,6 +124,10 @@ func runAgent(cliArgs *config.CommandLineArguments) (*Agent, error) {
 	}
 
 	logging.SetupLogger(cliArgs)
+
+	// Authenticode (Windows): check the agent's own signature once, in the
+	// background, and log the result; it never stops the agent.
+	safe.Go(codesign.ReportSelf)
 
 	benchmark.PreConnectInit = time.Now()
 	benchmark.OnConnectInit = time.Now()

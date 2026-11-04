@@ -166,6 +166,40 @@ sbom: build-frpc
 sbom-bin BINARY:
     scripts/sbom-bin.sh "{{BINARY}}"
 
+# The check an agent makes before it runs a Windows binary (sign-update
+# authenticode): the certificate that made the signature chains to the
+# embedded root and stays valid for 30 more days; on Windows, WinVerifyTrust
+# too. CODESIGN_ROOT: a dry run's throwaway root instead of the embedded one.
+# Check the Authenticode signature of Windows binaries as an agent does.
+codesign-check +FILES:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    files=()
+    for f in {{FILES}}; do
+        f="$(cd "$(dirname "$f")" && pwd)/$(basename "$f")"
+        if command -v cygpath >/dev/null 2>&1; then f=$(cygpath -m "$f"); fi
+        files+=("$f")
+    done
+    cd src && go run ./cmd/sign-update authenticode ${CODESIGN_ROOT:+-root "$CODESIGN_ROOT"} "${files[@]}"
+
+# CI, on every pull request: a change to the check must never refuse what
+# devices download.
+# Check the published Windows agent and frpc as an agent does.
+codesign-check-published:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    base=https://storage.googleapis.com/ironflock-downloads/device-agent
+    version=$(curl -fsS --retry 3 "$base/version.txt" | tr -d '[:space:]')
+    frp=$(grep -oE 'FRP_VERSION = "[^"]+"' src/embedded/frpc.go | cut -d'"' -f2)
+    work=$(mktemp -d)
+    trap 'rm -rf "$work"' EXIT
+    curl -fsS --retry 3 -o "$work/device-agent.exe" "$base/windows/amd64/$version/device-agent.exe"
+    curl -fsS --retry 3 -o "$work/frpc.exe" "$base/frpc/windows/amd64/$frp/frpc.exe"
+    # Quoted, and as a POSIX path under Git Bash: on Windows the path has backslashes.
+    just_bin={{quote(just_executable())}}
+    if command -v cygpath >/dev/null 2>&1; then just_bin=$(cygpath -u "$just_bin"); fi
+    "$just_bin" codesign-check "$work/device-agent.exe" "$work/frpc.exe"
+
 # What `publish` requires when it runs by hand (release.yml makes them per build).
 # Generate the SBOM of every agent binary in build/.
 sbom-bins:

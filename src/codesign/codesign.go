@@ -93,15 +93,17 @@ func Configured() bool {
 	return len(pinnedRoots) > 0
 }
 
-// enforce is the single cutover switch. While false (the pre-signing
-// transition), a failed/absent signature is logged and the update proceeds, so
-// devices can climb to the first signed release. Flip to true (PR-6) once a
-// full signed release cycle has shipped; can also be set at build time via
-//
-//	-ldflags "-X reagent/codesign.enforceStr=true"
+// enforce makes a failed signature check fatal: an unsigned binary, or one
+// signed by anyone but IronFlock, is refused. It stays off for one release:
+// that release runs the full check on every Windows device and only logs the
+// result (ReportSelf at start, every download), because a device whose check
+// fails once enforcement is on refuses every later update, including the one
+// that would fix it. Turn it on once the field reports clean checks
+// (docs/WINDOWS-CODE-SIGNING.md, "Turning enforcement on").
 var enforce = false
 
-// enforceStr lets the cutover be flipped at build time without a code change.
+// enforceStr also turns enforcement on at build time
+// (-ldflags "-X reagent/codesign.enforceStr=true"); it cannot turn it off.
 var enforceStr = ""
 
 // Enforcing reports whether a failed signature check must REJECT the binary.

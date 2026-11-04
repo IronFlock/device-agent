@@ -37,6 +37,9 @@ func TestProductionUpdateKeysConfigured(t *testing.T) {
 	require.NoError(t, err, "put the production update key into AGENT_UPDATE_PUBLIC_KEYS before releasing")
 	require.NotEmpty(t, keys)
 	assert.NotContains(t, AGENT_UPDATE_PUBLIC_KEYS, "TODO")
+	// Two independent keys, so a key that becomes unusable never needs a
+	// bypass: the other one signs (the rotation runbook relies on it).
+	assert.GreaterOrEqual(t, len(keys), 2, "the agent must trust two independent update keys")
 }
 
 func newKey(t *testing.T) (ed25519.PublicKey, ed25519.PrivateKey) {
@@ -147,6 +150,39 @@ func TestVerifyFileAcceptsAnyTrustedKey(t *testing.T) {
 	keyID, err := VerifyFile(trusted(oldPub, newPub), agentTarget("1.2.4"), binary, sigFile)
 	require.NoError(t, err)
 	assert.Equal(t, KeyID(newPub), keyID)
+}
+
+// A rotation in its three phases, as the signing-keys runbook describes it:
+// the fleet trusts the old key; a release adds the new key (both trusted) and
+// signing moves to it; a later release drops the old key, whose signatures
+// are then refused.
+func TestKeyRotationPhases(t *testing.T) {
+	oldPub, oldPriv := newKey(t)
+	newPub, newPriv := newKey(t)
+	binary := writeBinary(t, "release 1.6.0")
+	target := agentTarget("1.6.0")
+	byOld := sign(t, oldPriv, target, binary)
+	byNew := sign(t, newPriv, target, binary)
+
+	// Before: only the old key.
+	_, err := VerifyFile(trusted(oldPub), target, binary, byOld)
+	require.NoError(t, err)
+	_, err = VerifyFile(trusted(oldPub), target, binary, byNew)
+	require.ErrorIs(t, err, ErrBadSignature, "a key the agent does not trust yet")
+
+	// Overlap: both keys, either signature.
+	for name, sig := range map[string][]byte{"old": byOld, "new": byNew} {
+		keyID, err := VerifyFile(trusted(oldPub, newPub), target, binary, sig)
+		require.NoError(t, err, name)
+		assert.Contains(t, []string{KeyID(oldPub), KeyID(newPub)}, keyID)
+	}
+
+	// After: the old key retired.
+	keyID, err := VerifyFile(trusted(newPub), target, binary, byNew)
+	require.NoError(t, err)
+	assert.Equal(t, KeyID(newPub), keyID)
+	_, err = VerifyFile(trusted(newPub), target, binary, byOld)
+	require.ErrorIs(t, err, ErrBadSignature, "a retired key")
 }
 
 func TestVerifyFileRefuses(t *testing.T) {

@@ -146,6 +146,13 @@ while IFS= read -r object; do
         echo "$object: downloaded SHA-256 $actual, sidecar says '${sidecar}' — not signing" >&2
         exit 1
     fi
+    # Agents refuse a Windows binary whose Authenticode signer does not chain
+    # to the embedded root: check it the way they do before it can go live
+    # (the release checked it once already, before publishing).
+    if [[ "$legacy" -eq 0 && "$os" == windows ]] && ! "$helper" authenticode "$local_copy"; then
+        echo "$object: not Authenticode-signed by IronFlock — not signing" >&2
+        exit 1
+    fi
 
     objects[n]=$object
     locals[n]=$local_copy
