@@ -3,11 +3,9 @@
 package codesign
 
 import (
-	"crypto/x509"
 	"fmt"
 	"unsafe"
 
-	"github.com/rs/zerolog/log"
 	"golang.org/x/sys/windows"
 )
 
@@ -19,14 +17,13 @@ const (
 	trustESubjectFormUn = 0x800B0003 // TRUST_E_SUBJECT_FORM_UNKNOWN
 )
 
-// platformVerify enforces two independent properties:
-//  1. Integrity/validity — the Authenticode signature is well-formed and the
-//     file digest matches (WinVerifyTrust). We deliberately ACCEPT
-//     CERT_E_UNTRUSTEDROOT here: our self-signed root need not be in the
-//     machine store for this check, because…
-//  2. Pinning — the signer chains to OUR embedded root (verifyChainToPinnedRoot),
-//     independent of the machine trust store, so trusting other CAs can't
-//     substitute a different signer.
+// platformVerify runs two independent checks, and both must pass:
+//  1. Windows' own: the Authenticode signature is well-formed and the file
+//     digest matches (WinVerifyTrust). CERT_E_UNTRUSTEDROOT is accepted here:
+//     the machine's trust store is not the trust decision, because…
+//  2. ours (verifyFile): the certificate that MADE the signature chains to one
+//     of our embedded roots, using no other trust store, with the digests and
+//     the signature checked again in Go.
 //
 // A panic in the syscall glue must never crash the agent; recover into an error
 // so a verification bug degrades to "treat as unverified", not a crash.
@@ -37,20 +34,10 @@ func platformVerify(path string) (err error) {
 		}
 	}()
 
-	// (1) Integrity + signature validity.
 	if verr := winVerifyTrust(path); verr != nil {
 		return verr
 	}
-
-	// (2) Pin to one of our roots.
-	leaf, intermediates, cerr := extractSignerCerts(path)
-	if cerr != nil {
-		return cerr
-	}
-	if leaf == nil {
-		return ErrUnsigned
-	}
-	return verifyChainToPinnedRoots(pinnedRoots, leaf, intermediates)
+	return verifyFile(path, pinnedRoots)
 }
 
 func winVerifyTrust(path string) error {
@@ -103,73 +90,4 @@ func hresultOf(err error) uint32 {
 		return uint32(errno)
 	}
 	return 0
-}
-
-// extractSignerCerts pulls the certificates embedded in the PE's Authenticode
-// signature. The first certificate with the code-signing usage (or, failing
-// that, the first cert) is treated as the leaf; the rest are intermediates.
-func extractSignerCerts(path string) (*x509.Certificate, []*x509.Certificate, error) {
-	obj, err := windows.UTF16PtrFromString(path)
-	if err != nil {
-		return nil, nil, err
-	}
-
-	// We only need the certificate store, not the decoded message handle, so
-	// pass nil for msg — there is then no HCRYPTMSG to close.
-	var certStore windows.Handle
-	err = windows.CryptQueryObject(
-		windows.CERT_QUERY_OBJECT_FILE,
-		unsafe.Pointer(obj), //nolint:gosec // G103: Win32 WinVerifyTrust / certificate API calls
-		windows.CERT_QUERY_CONTENT_FLAG_PKCS7_SIGNED_EMBED,
-		windows.CERT_QUERY_FORMAT_FLAG_BINARY,
-		0,
-		nil, nil, nil,
-		&certStore, nil, nil,
-	)
-	if err != nil {
-		// No embedded signature at all.
-		return nil, nil, ErrUnsigned
-	}
-	defer func() { _ = windows.CertCloseStore(certStore, 0) }()
-
-	var certs []*x509.Certificate
-	var prev *windows.CertContext
-	for {
-		ctx, enumErr := windows.CertEnumCertificatesInStore(certStore, prev)
-		if ctx == nil || enumErr != nil {
-			break
-		}
-		der := unsafe.Slice(ctx.EncodedCert, ctx.Length) //nolint:gosec // G103: Win32 WinVerifyTrust / certificate API calls
-		buf := make([]byte, len(der))
-		copy(buf, der)
-		if c, perr := x509.ParseCertificate(buf); perr == nil {
-			certs = append(certs, c)
-		}
-		prev = ctx
-	}
-
-	if len(certs) == 0 {
-		return nil, nil, ErrUnsigned
-	}
-
-	leafIdx := 0
-	for i, c := range certs {
-		for _, eku := range c.ExtKeyUsage {
-			if eku == x509.ExtKeyUsageCodeSigning {
-				leafIdx = i
-				break
-			}
-		}
-	}
-
-	leaf := certs[leafIdx]
-	intermediates := make([]*x509.Certificate, 0, len(certs)-1)
-	for i, c := range certs {
-		if i != leafIdx {
-			intermediates = append(intermediates, c)
-		}
-	}
-
-	log.Debug().Msgf("codesign: extracted %d certificate(s) from %s", len(certs), path)
-	return leaf, intermediates, nil
 }

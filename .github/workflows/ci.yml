@@ -127,6 +127,13 @@ jobs:
         run: cd src && touch embedded/frpc_binary && go build ./...
       - name: unit tests (service, self-update, codesign, tunnel, lifecycle, config, system, terminal, layout, apps, migration)
         run: cd src && go test -count=1 ./selfupdate/... ./codesign/... ./tunnel/... ./lifecycle/... ./config/... ./system/... ./terminal/... ./layout/... ./apps/... ./migrate/winmigrate/... ./migratestate/... ./winservice/... .
+      # Agents refuse a Windows binary the check rejects: the published agent
+      # and frpc must pass it, WinVerifyTrust included, with this change.
+      - uses: extractions/setup-just@53165ef7e734c5c07cb06b3c8e7b647c5aa16db3 # v4
+        with:
+          just-version: "1.59.0"
+      - name: published Windows binaries pass the agents' Authenticode check
+        run: just codesign-check-published
       # The behaviour table the migration's fake service control manager
       # models, against the real one: throwaway services made from the test
       # binary (the runner is elevated; the test skips when it is not), and

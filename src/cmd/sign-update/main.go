@@ -24,6 +24,14 @@
 //	open -context <c> -subject <line> [-public-key <b64>] <envelope>
 //	    verifies an envelope and prints its payload
 //
+// Authenticode (Windows binaries), the check the agent makes before it runs a
+// download (package codesign):
+//
+//	authenticode [-root <root.pem>] <exe>...
+//	    checks that the certificate that made each file's signature chains to
+//	    the embedded roots (or -root, for a dry run's throwaway root), and that
+//	    it is valid for at least 30 more days; on Windows, WinVerifyTrust too
+//
 // Development and tests only, with a local key file that never signs a release:
 //
 //	keygen -out <private-key.pem>
@@ -58,7 +66,9 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"reagent/codesign"
 	"reagent/updatesig"
+	"runtime"
 	"sort"
 	"strconv"
 	"strings"
@@ -74,6 +84,7 @@ const usage = `usage (target flags: -version <v> [-kind device-agent|reagent|frp
   sign-update seal -context <c> -subject <line> <payload>             (needs <payload>.sig)
   sign-update open -context <c> -subject <line> [-public-key <base64>] <envelope>
   sign-update pubkey-from-openbao  < bao read -format=json transit/keys/agent-update
+  sign-update authenticode [-root <root.pem>] <exe>...
   sign-update keygen -out <private-key.pem>                          (development only)
   sign-update sign -key-file <pem> <target flags> <binary>...        (development only)`
 
@@ -198,6 +209,8 @@ func run(args []string, stdin io.Reader, stdout io.Writer) error {
 		return keygen(args[1:], stdout)
 	case "sign":
 		return sign(args[1:], stdout)
+	case "authenticode":
+		return authenticode(args[1:], stdout)
 	}
 	return fmt.Errorf("unknown subcommand %q\n%s", args[0], usage)
 }
@@ -659,4 +672,57 @@ func loadPrivateKey(keyFile string) (ed25519.PrivateKey, error) {
 		return nil, fmt.Errorf("%s holds a %T key, not an Ed25519 one", source, key)
 	}
 	return privateKey, nil
+}
+
+// minSignerValidity is how long a signing certificate must stay valid for the
+// binaries it signs: agents check it at download time, not at signing time.
+const minSignerValidity = 30 * 24 * time.Hour
+
+func authenticode(args []string, stdout io.Writer) error {
+	flags := flag.NewFlagSet("authenticode", flag.ContinueOnError)
+	rootFile := flags.String("root", "", "PEM root certificate(s) to check against (default: the roots compiled into this build)")
+	err := flags.Parse(args)
+	if err != nil {
+		return err
+	}
+	if flags.NArg() == 0 {
+		return errors.New("authenticode needs at least one file")
+	}
+
+	var roots []*x509.Certificate
+	if *rootFile != "" {
+		data, err := os.ReadFile(*rootFile)
+		if err != nil {
+			return err
+		}
+		for block, rest := pem.Decode(data); block != nil; block, rest = pem.Decode(rest) {
+			cert, err := x509.ParseCertificate(block.Bytes)
+			if err != nil {
+				return fmt.Errorf("%s: %w", *rootFile, err)
+			}
+			roots = append(roots, cert)
+		}
+		if len(roots) == 0 {
+			return fmt.Errorf("%s: no certificate", *rootFile)
+		}
+	}
+
+	for _, file := range flags.Args() {
+		signer, err := codesign.CheckFile(file, roots)
+		if err != nil {
+			return fmt.Errorf("%s: %w", file, err)
+		}
+		if roots == nil && runtime.GOOS == "windows" {
+			if err := codesign.Verify(file); err != nil {
+				return fmt.Errorf("%s: %w", file, err)
+			}
+		}
+		if time.Until(signer.NotAfter) < minSignerValidity {
+			return fmt.Errorf("%s: the signing certificate %q expires %s: replace it (docs/WINDOWS-CODE-SIGNING.md)",
+				file, signer.Subject.CommonName, signer.NotAfter.Format(time.RFC3339))
+		}
+		_, _ = fmt.Fprintf(stdout, "%s: Authenticode OK, signed by %q (serial %x), valid until %s\n",
+			file, signer.Subject.CommonName, signer.SerialNumber, signer.NotAfter.Format("2006-01-02"))
+	}
+	return nil
 }

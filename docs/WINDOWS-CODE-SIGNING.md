@@ -1,113 +1,158 @@
-# Windows code signing (two-tier self-signed PKI)
+# Windows code signing (two-tier private PKI)
 
 The Windows agent and its frpc binary are Authenticode-signed so that:
 
+- the agent **refuses** a downloaded update or frpc that IronFlock did not
+  sign (`src/codesign`), independent of whatever CAs the machine trusts, and
 - the service installer can import a trusted publisher (UAC shows
-  "IronFlock", and WDAC/AppLocker signer rules become possible), and
-- the agent can **pin** self-update downloads to our key on-device
-  (`src/codesign`), independent of whatever CAs the machine trusts.
+  "IronFlock", and WDAC/AppLocker signer rules become possible).
 
-Signing does **not** silence first-run SmartScreen (self-signed accrues no
-reputation) and does **not** clear frp's antivirus PUA classification — that is
+This is in addition to the Ed25519 update signature (`src/updatesig`), which
+every agent download needs on every platform; Authenticode is the
+Windows-native second check on the same bytes.
+
+Signing does **not** silence first-run SmartScreen (a private root accrues no
+reputation) and does **not** clear frp's antivirus PUA classification; that is
 handled operationally (see the Defender exclusion / WDAC rule in
 `WINDOWS-SERVICE-CHECKLIST.md`). This is about trust of *our* binaries on
 devices we administer, at zero certificate cost.
 
-## Why two tiers
+## The two tiers
 
-A single self-signed cert imported to Trusted Root is a hazard: a leaked CI key
-could vouch for arbitrary code on every installed device, un-revocably (the
-installer only runs at install), and rotating the cert strands the fleet.
+- **Root CA** "IronFlock Code Signing Root" (RSA 4096, valid to 2036-07-07).
+  Its key is **never in CI** and is to be kept offline. Its public certificate
+  is embedded (`src/codesign/roots/*.crt`) for on-device pinning and imported
+  into each device's Trusted Root store by the installer. More than one root
+  can be embedded at a time to bridge a root rotation (below).
+- **Signer** "IronFlock Device Agent": the Cloud KMS key
+  `ironflock-release/agent-codesign` (RSA 4096, `europe-west1`, project
+  `record-1283`), so the private key cannot be exported or copied. Its
+  certificate, issued by the root, is committed at
+  `src/codesign/signer/agent-codesign.crt`. Only the identity `agent-signer`
+  may sign with it (`roles/cloudkms.signer` on that key alone), and only from a
+  release run of `release.yml` on `main` (workload identity attribute
+  `release`).
 
-So:
+Until 2026-11 the signer was a PFX in the GitHub Actions secret
+`WINDOWS_SIGNING_PFX_B64`; binaries signed with it keep verifying for as long
+as that certificate is valid, because it chains to the same root.
 
-- **Root CA** — key generated once, kept **OFFLINE, never in CI**. Its public
-  cert is embedded (`src/codesign/roots/*.crt`) for on-device pinning and
-  imported to each device's Trusted Root store by the installer. More than one
-  root can be embedded at a time to bridge a root rotation (see below).
-- **Leaf** — signs binaries in release CI; its PFX lives in the
-  `WINDOWS_SIGNING_PFX_B64` GitHub Actions secret. Rotate/revoke the leaf freely
-  under the same root without touching any device.
+## What the agent checks
 
-## One-time setup
+`codesign.Verify` (Windows; used by the self-update swap and every agent and
+frpc download) makes two independent checks, and both must pass:
 
-Generate the PKI (validated commands):
+1. **WinVerifyTrust**: the signature is well-formed and matches the file.
+   An untrusted root is accepted here; the machine trust store is not the
+   trust decision.
+2. **The pin** (`verifyFile`, Go, the same on every platform): the file has
+   exactly one signature, at its end; the signature has exactly one signer,
+   and exactly one carried certificate is that signer; that certificate's key
+   made the signature; the digests match the file; and that certificate chains
+   to an embedded root, with no other trust store. A certificate a signature
+   merely *carries* proves nothing: anyone can add our public signer
+   certificate to their own signature.
 
-```bash
-# 1. Root CA — keep root.key OFFLINE (hardware token / offline vault).
-openssl req -x509 -newkey rsa:4096 -keyout root.key -out root.crt -days 3650 -nodes \
-  -subj "/CN=IronFlock Code Signing Root/O=IronFlock" \
-  -addext "keyUsage=critical,keyCertSign,cRLSign" \
-  -addext "basicConstraints=critical,CA:TRUE"
+Enforcement is on (`enforce = true`): a binary that fails is deleted and not
+run. The certificate is checked at the time of the check, not at signing time,
+so **a signer certificate must be replaced before it expires**; the release
+refuses to publish with one that has less than 30 days left.
 
-# 2. Leaf key + CSR, signed by the root with the codeSigning EKU.
-openssl req -newkey rsa:2048 -keyout leaf.key -out leaf.csr -nodes \
-  -subj "/CN=IronFlock Device Agent/O=IronFlock"
-openssl x509 -req -in leaf.csr -CA root.crt -CAkey root.key -CAcreateserial \
-  -out leaf.crt -days 825 \
-  -extfile <(printf "keyUsage=critical,digitalSignature\nextendedKeyUsage=codeSigning\n")
+The same check runs in three places before devices see a binary, with the
+agent's own code (`sign-update authenticode`, `just codesign-check`):
 
-# 3. Bundle leaf + root into a PFX for osslsigncode (choose a strong password).
-openssl pkcs12 -export -out leaf.pfx -inkey leaf.key -in leaf.crt -certfile root.crt \
-  -passout pass:CHANGEME
+- `release.yml`, right after signing, on the bytes about to be published (a
+  dry run checks against its throwaway root);
+- `scripts/sign-release.sh`, on the published bytes, before it signs them for
+  promotion: an unsigned or foreign-signed Windows binary never goes live;
+- CI on every pull request (`windows-unit`): the published agent and frpc pass
+  the check of the changed code, WinVerifyTrust included.
 
-# 4. Verify.
-openssl verify -CAfile root.crt leaf.crt                 # -> leaf.crt: OK
-openssl x509 -in leaf.crt -noout -ext extendedKeyUsage   # -> Code Signing
-```
+## Signing
 
-Then wire it up:
+`scripts/sign-windows.sh release <files>` (release CI) signs with jsign
+(pinned version and SHA-256) through Cloud KMS, with the committed signer
+certificate and the root as the chain and an RFC 3161 timestamp
+(DigiCert, Sectigo as fallback). `scripts/sign-windows.sh dry-run <files>`
+(release pull requests) makes a throwaway root and signer and runs the same
+jsign call against a PKCS #12 file.
 
-1. Put the root's public cert at `src/codesign/roots/ironflock-root.crt` (PEM).
-   When `roots/` holds no real cert, on-device verification is a safe no-op.
-2. Add repo/org GitHub Actions secrets:
-   - `WINDOWS_SIGNING_PFX_B64` = `base64 -w0 leaf.pfx`
-   - `WINDOWS_SIGNING_PFX_PASSWORD` = the PFX password.
-3. Ship one release. It signs `device-agent.exe` + `frpc.exe`
-   (`scripts/sign-windows.sh`, osslsigncode + free RFC3161 timestamp) and the
-   installer imports `root.crt`.
-4. After a full signed release cycle, flip enforcement to fatal (PR-6) so
-   unsigned/wrong-signer downloads and self-updates are **rejected** on-device.
-   Either set `enforce = true` in `src/codesign/codesign.go`, or build the
-   cutover release with `-ldflags "-X reagent/codesign.enforceStr=true"`.
-   `Enforcing()` still requires a configured root, so it can never reject
-   everything for lack of a pin.
+## Setting up the signer (once; again for a new signer)
 
-## Leaf rotation (routine — every ~2 years, or on leaf-key leak)
+Steps 1–2 change Google Cloud; step 3 needs the root key.
 
-Issue a new leaf from the **same** root (setup steps 2–3), update the two
-secrets. Devices keep trusting the root, so already-installed agents accept the
-new leaf's signatures with no reinstall. The root key never touches CI, so a CI
-compromise only exposes the leaf, which this rotation replaces.
+1. The KMS key and who may use it:
 
-## Root rotation (rare — before the 10-year root expiry, or on root-key leak)
+   ```bash
+   gcloud kms keys create agent-codesign --project record-1283 --location europe-west1 --keyring ironflock-release --purpose asymmetric-signing --default-algorithm rsa-sign-pkcs1-4096-sha256 --protection-level software
+   gcloud kms keys add-iam-policy-binding agent-codesign --project record-1283 --location europe-west1 --keyring ironflock-release --member serviceAccount:agent-signer@record-1283.iam.gserviceaccount.com --role roles/cloudkms.signer
+   ```
 
-On-device verification pins to the root(s) embedded under
-`src/codesign/roots/*.crt`, and Go's chain check fails once a root's own
-validity lapses — so the root **must** be rotated before it expires. Because
-self-updates are pinned, the new root reaches devices via an **overlap window**:
-the fleet trusts both roots at once, bridged by a transition release. The agent
-accepts a signer that chains to **any** embedded root, so:
+   jsign needs nothing else: with the key version in the alias and the
+   certificate given, its only KMS call is `asymmetricSign`.
 
-1. **Transition release.** Generate a new root (setup step 1) and add its public
-   cert to `src/codesign/roots/` **alongside** the current one. Keep signing
-   with a leaf under the **old** root (unchanged secrets), so the
-   currently-running agents — which trust only the old root — accept this update
-   as normal. After it lands, devices embed + trust both roots and the installer
-   imports both.
-2. **Cutover release.** Issue a leaf under the **new** root and update the two
-   secrets. Agents past the transition release (trusting both) accept it. Wait
-   until fleet telemetry shows everyone is past the transition release.
+2. Its public key:
+
+   ```bash
+   gcloud kms keys versions get-public-key 1 --project record-1283 --location europe-west1 --keyring ironflock-release --key agent-codesign --output-file agent-codesign.pub.pem
+   ```
+
+3. The certificate, issued by the root from that public key alone (OpenSSL 3;
+   no request needs signing):
+
+   ```bash
+   printf 'basicConstraints=critical,CA:FALSE\nkeyUsage=critical,digitalSignature\nextendedKeyUsage=codeSigning\nsubjectKeyIdentifier=hash\nauthorityKeyIdentifier=keyid\n' > agent-codesign.ext
+   openssl x509 -new -force_pubkey agent-codesign.pub.pem -subj "/CN=IronFlock Device Agent/O=IronFlock" -CA ironflock-root.crt -CAkey root.key -set_serial "0x$(openssl rand -hex 16)" -not_after 20360607000000Z -extfile agent-codesign.ext -out src/codesign/signer/agent-codesign.crt
+   openssl verify -CAfile src/codesign/roots/ironflock-root.crt src/codesign/signer/agent-codesign.crt
+   ```
+
+   The certificate ends a month before the root. A long lifetime is acceptable
+   here because the key cannot leave KMS; replace the certificate (or the key)
+   before it ends.
+
+4. Commit the certificate and release. The release pull request's dry run
+   exercises the signing path; the release signs through KMS and checks the
+   result before publishing.
+5. After that release, delete the GitHub Actions secrets
+   `WINDOWS_SIGNING_PFX_B64` and `WINDOWS_SIGNING_PFX_PASSWORD`.
+
+## Replacing the signer (routine, or at once if it is misused)
+
+Issue a new certificate from the **same** root (a new KMS key version, or a
+new key: steps 1–3, `KMS_KEY_VERSION` in `scripts/sign-windows.sh`), commit
+it, release. Devices keep trusting the root, so installed agents accept the
+new signer with no reinstall. To stop a misused signer, disable its KMS key
+version at once; the next release signs with the new one.
+
+## Root rotation (rare: before the root expires in 2036, or if its key leaks)
+
+The agent pins to the root(s) embedded under `src/codesign/roots/*.crt`, and
+the chain check fails once a root's own validity ends, so the root **must** be
+rotated before it expires. Because self-updates are pinned, the new root
+reaches devices through an **overlap**: the agent accepts a signer that chains
+to **any** embedded root, so:
+
+1. **Transition release.** Generate a new root offline and add its public
+   certificate to `src/codesign/roots/` **alongside** the current one. Keep
+   signing with the signer under the **old** root, so agents that trust only
+   the old root accept this update. After it lands, devices trust both roots
+   and the installer imports both.
+2. **Cutover release.** Issue a signer certificate under the **new** root
+   (setup step 3) and commit it. Agents past the transition release accept it.
+   Wait until the fleet is past the transition release first.
 3. **Cleanup release.** Delete the **old** root's `.crt` from
-   `src/codesign/roots/`. Uninstall/reinstall removes it from device trust
-   stores; a plain self-update stops trusting it. Signed under the new root.
+   `src/codesign/roots/`. Uninstall and reinstall removes it from device trust
+   stores; a plain self-update stops trusting it.
+
+The public runbook for all IronFlock signing keys is the website page
+`/docs/security/signing-keys`.
 
 ### Root-key compromise is the hard case
 
 If the **root private key** leaks, you cannot cleanly evict it through the
-update channel — the channel's trust depends on it, and an attacker with the key
-can sign updates the fleet accepts (including ones that re-pin to their own
-root). Recovery is out-of-band: manual reinstall / re-provisioning per device.
-This is inherent to pinned self-update, and is exactly why the root key is
-generated offline and never in CI. Treat the offline-root discipline as
+update channel: an attacker with the key can issue a signer the fleet accepts.
+The Ed25519 update signature still stands in the way (it is a separate key,
+held in Cloud KMS and OpenBao), but recovery of the Authenticode trust is out
+of band: manual reinstall or re-provisioning per device. This is why the root
+key is never in CI and is to be kept offline. Treat the offline-root discipline as
 load-bearing, not ceremony.

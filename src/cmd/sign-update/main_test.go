@@ -518,3 +518,19 @@ func TestSealAndOpenAManifest(t *testing.T) {
 		assert.ErrorContains(t, err, "go together")
 	})
 }
+
+// The signature checks themselves are tested in package codesign; here, that
+// the subcommand refuses what is not signed and needs a file.
+func TestAuthenticodeRefusesUnsignedFiles(t *testing.T) {
+	file := filepath.Join(t.TempDir(), "device-agent.exe")
+	require.NoError(t, os.WriteFile(file, []byte(strings.Repeat("not a PE file ", 10)), 0o600))
+
+	var stdout bytes.Buffer
+	err := run([]string{"authenticode", file}, nil, &stdout)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "not signed")
+	assert.Empty(t, stdout.String())
+
+	assert.Error(t, run([]string{"authenticode"}, nil, &stdout), "no file")
+	assert.Error(t, run([]string{"authenticode", "-root", file, file}, nil, &stdout), "a root file without a certificate")
+}

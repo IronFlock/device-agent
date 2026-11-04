@@ -315,8 +315,8 @@ func (sys *System) downloadBinary(base, tree, fileName, localName string, versio
 		return err
 	}
 
-	// Authenticode (Windows): warn-only during the pre-signing transition;
-	// rejected once enforcement is on (codesign.Enforcing).
+	// Authenticode (Windows): a binary not signed by IronFlock is refused
+	// (codesign.Enforcing).
 	err = codesign.Verify(tmpFilePath)
 	if err != nil {
 		if codesign.Enforcing() {
@@ -326,7 +326,7 @@ func (sys *System) downloadBinary(base, tree, fileName, localName string, versio
 			}
 			return fmt.Errorf("refusing to install an improperly signed binary from %s: %w", agentURL, err)
 		}
-		log.Warn().Err(err).Msgf("signature verification failed for %s (proceeding: pre-cutover)", agentURL)
+		log.Warn().Err(err).Msgf("signature verification failed for %s (proceeding: enforcement off)", agentURL)
 	}
 
 	err = os.Chmod(tmpFilePath, 0755) //nolint:gosec // G302: downloaded binary, must be executable; contents are verified by signature

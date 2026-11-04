@@ -221,16 +221,41 @@ jobs:
       - name: SBOM of the Windows frpc
         run: just sbom-bin build/frpc-windows-amd64
 
-      # Authenticode-sign the Windows binaries with the leaf cert (osslsigncode
-      # runs on Linux) + a free RFC3161 timestamp, BEFORE publishing. The
-      # service executes self-downloaded updates as SYSTEM, and the agent pins
-      # the signature to our root on-device. No-ops until the signing secret is
-      # configured, so the pipeline works during the pre-signing transition.
+      # Authenticode-sign the Windows binaries BEFORE publishing: the service
+      # runs downloaded updates as SYSTEM, and agents refuse a binary whose
+      # signer does not chain to the root they pin. The key is in Cloud KMS
+      # (ironflock-release/agent-codesign) and never leaves it. Signing
+      # identity: agent-signer, which may only sign, and only from a release
+      # run of this workflow on main (workload identity attribute release);
+      # its access token goes to jsign alone, gsutil keeps the publisher's
+      # credentials. A dry run signs with a throwaway key.
+      - name: Authenticate the code signer (Cloud KMS only)
+        id: codesigner
+        if: needs.verify.outputs.mode == 'release'
+        uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3
+        with:
+          workload_identity_provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: agent-signer@record-1283.iam.gserviceaccount.com
+          token_format: access_token
+          access_token_lifetime: 900s
+          create_credentials_file: false
+          export_environment_variables: false
       - name: Authenticode-sign Windows binaries
         env:
-          WINDOWS_SIGNING_PFX_B64: ${{ secrets.WINDOWS_SIGNING_PFX_B64 }}
-          WINDOWS_SIGNING_PFX_PASSWORD: ${{ secrets.WINDOWS_SIGNING_PFX_PASSWORD }}
-        run: scripts/sign-windows.sh build/device-agent-windows-amd64 build/frpc-windows-amd64
+          MODE: ${{ needs.verify.outputs.mode }}
+          KMS_ACCESS_TOKEN: ${{ steps.codesigner.outputs.access_token }}
+        run: |
+          if [ "$MODE" = release ]; then
+            scripts/sign-windows.sh release build/device-agent-windows-amd64 build/frpc-windows-amd64
+          else
+            echo "CODESIGN_ROOT=$RUNNER_TEMP/dry-run-root.crt" >> "$GITHUB_ENV"
+            CODESIGN_ROOT="$RUNNER_TEMP/dry-run-root.crt" \
+              scripts/sign-windows.sh dry-run build/device-agent-windows-amd64 build/frpc-windows-amd64
+          fi
+      # The check agents make, on the bytes about to be published (against
+      # the dry run's throwaway root in a dry run).
+      - name: Signed binaries pass the agents' Authenticode check
+        run: just codesign-check build/device-agent-windows-amd64 build/frpc-windows-amd64
 
       - name: Publish agent binaries to gs://ironflock-downloads/device-agent
         # Only a release run publishes; a pull request or manual run is a dry run.

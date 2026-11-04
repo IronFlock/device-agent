@@ -124,3 +124,10 @@ func TestEnforcingRequiresConfiguredRoot(t *testing.T) {
 	pinnedRoots = []*x509.Certificate{root}
 	assert.True(t, Enforcing())
 }
+
+// The shipped build enforces: the embedded root is configured and the switch
+// is on, so an unsigned or foreign-signed download is refused.
+func TestShippedBuildEnforces(t *testing.T) {
+	require.True(t, Configured(), "the IronFlock root must be embedded (roots/*.crt)")
+	assert.True(t, Enforcing(), "Authenticode enforcement must be on")
+}
