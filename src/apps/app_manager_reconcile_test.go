@@ -109,6 +109,51 @@ func TestCreateOrUpdateApp(t *testing.T) {
 		require.NoError(t, err)
 		assert.Equal(t, common.UNINSTALLED, got.RequestedState)
 	})
+
+	// UpdateRemoteAppState reports the in-memory requestor, and the backend
+	// acts for that account. A publish request names the account that
+	// started the publish; an app already in memory must take it over, or
+	// the release is credited to whoever first requested the app since the
+	// agent started.
+	t.Run("takes over the requestor of a new request for an app already in memory", func(t *testing.T) {
+		am, _, _, st, _, _ := amHarness(t)
+
+		app := amSeed(t, st, 14, "requestor-app", common.PRESENT, common.DEV)
+		app.StateLock.Lock()
+		app.RequestorAccountKey = 5
+		app.StateLock.Unlock()
+
+		payload := amPayload(14, "requestor-app", common.PUBLISHED, common.DEV)
+		payload.RequestedState = common.PUBLISHED
+		payload.RequestorAccountKey = 42
+
+		require.NoError(t, am.CreateOrUpdateApp(payload))
+
+		app.StateLock.Lock()
+		requestor := app.RequestorAccountKey
+		app.StateLock.Unlock()
+		assert.Equal(t, uint64(42), requestor)
+	})
+
+	t.Run("keeps the requestor when a request names none", func(t *testing.T) {
+		am, _, _, st, _, _ := amHarness(t)
+
+		app := amSeed(t, st, 15, "no-requestor-app", common.PRESENT, common.DEV)
+		app.StateLock.Lock()
+		app.RequestorAccountKey = 5
+		app.StateLock.Unlock()
+
+		payload := amPayload(15, "no-requestor-app", common.RUNNING, common.DEV)
+		payload.RequestedState = common.RUNNING
+		payload.RequestorAccountKey = 0
+
+		require.NoError(t, am.CreateOrUpdateApp(payload))
+
+		app.StateLock.Lock()
+		requestor := app.RequestorAccountKey
+		app.StateLock.Unlock()
+		assert.Equal(t, uint64(5), requestor)
+	})
 }
 
 func TestUpdateCurrentAppState(t *testing.T) {

@@ -81,6 +81,7 @@ func main() {
 		log.Fatal().Err(err).Msg("failed to acquire single-instance lock")
 	}
 	setupProcessJobObject()
+	applyResourceProtection()
 
 	if runningAsService() {
 		runService(cliArgs)

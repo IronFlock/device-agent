@@ -605,6 +605,11 @@ func prepare(e Env, j *Journal) error {
 	if err := linuxservice.WriteFileAtomic(e.p(linuxservice.UnitPath), []byte(newUnitPaths(j).Unit()), 0o644); err != nil {
 		return err
 	}
+	// The slice and the resource drop-in, before the legacy drop-ins are
+	// copied: the legacy unit's copy of this file must not shadow it.
+	if _, err := linuxservice.WriteResourceFiles(e.Root, linuxservice.UnitName, !linuxservice.ReadMemoryRecursiveProt()); err != nil {
+		return err
+	}
 	// Drop-ins (the proxy environment, AGENT_UPDATE_ALLOW_UNSIGNED, …) belong
 	// to the agent, not to the unit name.
 	dropIns, _ := filepath.Glob(filepath.Join(e.p(legacyDropInDir), "*.conf"))
@@ -628,7 +633,7 @@ func prepare(e Env, j *Journal) error {
 }
 
 func unprepare(e Env, j *Journal) error {
-	for _, path := range []string{linuxservice.UnitPath, in("repair.sh"), in("device-agent"), in("device-agent-prev"), in("enrolled")} {
+	for _, path := range []string{linuxservice.UnitPath, linuxservice.SlicePath, in("repair.sh"), in("device-agent"), in("device-agent-prev"), in("enrolled")} {
 		_ = os.Remove(e.p(path))
 	}
 	_ = os.RemoveAll(e.p(linuxservice.DropInDir))

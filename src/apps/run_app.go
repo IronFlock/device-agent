@@ -356,12 +356,12 @@ func (sm *StateMachine) runDevComposeApp(payload common.TransitionPayload, app *
 		return err
 	}
 
-	logsChannel, err := compose.LogStream(dockerComposePath)
+	tail, err := compose.LogStream(dockerComposePath)
 	if err != nil {
 		return err
 	}
 
-	_, err = sm.LogManager.StreamLogsChannel(logsChannel, payload.ContainerName.Dev)
+	_, err = sm.LogManager.StreamComposeTail(tail, payload.ContainerName.Dev)
 	if err != nil {
 		return err
 	}
@@ -543,12 +543,12 @@ func (sm *StateMachine) runProdComposeApp(payload common.TransitionPayload, app 
 		return err
 	}
 
-	logsChannel, err := compose.LogStream(dockerComposePath)
+	tail, err := compose.LogStream(dockerComposePath)
 	if err != nil {
 		return err
 	}
 
-	_, err = sm.LogManager.StreamLogsChannel(logsChannel, payload.ContainerName.Prod)
+	_, err = sm.LogManager.StreamComposeTail(tail, payload.ContainerName.Prod)
 	if err != nil {
 		return err
 	}
