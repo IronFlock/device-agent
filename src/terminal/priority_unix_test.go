@@ -41,13 +41,19 @@ func TestHostShellUsesAScopeWhereSystemdRunWorks(t *testing.T) {
 }
 
 // The reset only shows where the parent runs with raised values, which takes
-// root: run as root on a Linux device or VM.
+// root with CAP_SYS_NICE and CAP_SYS_RESOURCE: a Linux device or VM, or
+// `docker run --cap-add SYS_NICE --cap-add SYS_RESOURCE`. Elsewhere (CI's
+// runner user, a plain container) it skips.
 func TestHostShellRunsAtNormalPriority(t *testing.T) {
 	if runtime.GOOS != "linux" || os.Geteuid() != 0 {
 		t.Skip("needs root on Linux: only root can raise its own priority to then see the shell's reset")
 	}
-	require.NoError(t, syscall.Setpriority(syscall.PRIO_PROCESS, 0, -5))
-	require.NoError(t, os.WriteFile("/proc/self/oom_score_adj", []byte("-900"), 0o644))
+	if err := syscall.Setpriority(syscall.PRIO_PROCESS, 0, -5); err != nil {
+		t.Skipf("cannot raise this process's priority (%v): needs CAP_SYS_NICE", err)
+	}
+	if err := os.WriteFile("/proc/self/oom_score_adj", []byte("-900"), 0o600); err != nil {
+		t.Skipf("cannot lower this process's OOM score (%v): needs CAP_SYS_RESOURCE", err)
+	}
 	t.Cleanup(func() {
 		_ = syscall.Setpriority(syscall.PRIO_PROCESS, 0, 0)
 		_ = os.WriteFile("/proc/self/oom_score_adj", []byte("0"), 0o644)

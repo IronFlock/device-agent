@@ -36,7 +36,7 @@ func systemdScopeWorks() bool {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		args := append(append([]string{}, scopeArgs...), "true")
-		scopeProbe.ok = exec.CommandContext(ctx, "systemd-run", args...).Run() == nil
+		scopeProbe.ok = exec.CommandContext(ctx, "systemd-run", args...).Run() == nil //nolint:gosec // G204: fixed systemd-run invocation, fixed arguments
 	})
 	return scopeProbe.ok
 }
@@ -47,7 +47,7 @@ func systemdScopeWorks() bool {
 func hostShellCommand() *exec.Cmd {
 	if systemdScopeWorks() {
 		args := append(append([]string{}, scopeArgs...), "bash")
-		return exec.Command("systemd-run", args...)
+		return exec.Command("systemd-run", args...) //nolint:gosec // G204: fixed systemd-run invocation, fixed arguments
 	}
 	return exec.Command("bash")
 }
@@ -56,5 +56,5 @@ func hostShellCommand() *exec.Cmd {
 // rc files start in the first microseconds keep the agent's; that is fine.
 func resetPriority(pid int) {
 	_ = syscall.Setpriority(syscall.PRIO_PROCESS, pid, 0)
-	_ = os.WriteFile(fmt.Sprintf("/proc/%d/oom_score_adj", pid), []byte("0"), 0o644)
+	_ = os.WriteFile(fmt.Sprintf("/proc/%d/oom_score_adj", pid), []byte("0"), 0o600)
 }

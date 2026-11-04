@@ -43,8 +43,15 @@ as that certificate is valid, because it chains to the same root.
 frpc download) makes two independent checks, and both must pass:
 
 1. **WinVerifyTrust**: the signature is well-formed and matches the file.
-   An untrusted root is accepted here; the machine trust store is not the
-   trust decision.
+   A root the machine does not trust (`CERT_E_UNTRUSTEDROOT`) or does not
+   have at all (`CERT_E_CHAINING`) is accepted here; the machine trust store
+   is not the trust decision. The second is the answer on every machine
+   without our root in its store, because the signature does not carry the
+   root (see Signing): devices installed before the installer imported the
+   root, which a self-update never adds, and the CI runner that checks the
+   published binaries (`just codesign-check-published`). Until 1.5.5 only the
+   first was accepted, so such devices log `self-check FAILED` on 1.5.4 and
+   would have refused every update once enforcement was on.
 2. **The pin** (`verifyFile`, Go, the same on every platform): the file has
    exactly one signature, at its end; the signature has exactly one signer,
    and exactly one carried certificate is that signer; that certificate's key
@@ -97,7 +104,11 @@ agent's own code (`sign-update authenticode`, `just codesign-check`):
 `scripts/sign-windows.sh release <files>` (release CI) signs with jsign
 (pinned version and SHA-256) through Cloud KMS, with the committed signer
 certificate and the root as the chain and an RFC 3161 timestamp
-(DigiCert, Sectigo as fallback). `scripts/sign-windows.sh dry-run <files>`
+(DigiCert, Sectigo as fallback). jsign 7.6 puts only the signer certificate
+into the signature and leaves the self-signed root out, with either kind of
+key store; the root comes from the pin (agents) or from the machine's store
+(Windows). Signatures made with the earlier PFX signer, such as frpc 0.71.1's,
+still carry the root. `scripts/sign-windows.sh dry-run <files>`
 (release pull requests) makes a throwaway root and signer and runs the same
 jsign call against a PKCS #12 file.
 

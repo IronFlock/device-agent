@@ -606,9 +606,10 @@ func prepare(e Env, j *Journal) error {
 		return err
 	}
 	// The slice and the resource drop-in, before the legacy drop-ins are
-	// copied: the legacy unit's copy of this file must not shadow it.
+	// copied: the legacy unit's copy of this file must not shadow it. Not
+	// worth a failed migration: the agent writes them again at every start.
 	if _, err := linuxservice.WriteResourceFiles(e.Root, linuxservice.UnitName, !linuxservice.ReadMemoryRecursiveProt()); err != nil {
-		return err
+		e.logf("migrate: the agent's resource settings were not written (the agent writes them at its start): %v", err)
 	}
 	// Drop-ins (the proxy environment, AGENT_UPDATE_ALLOW_UNSIGNED, …) belong
 	// to the agent, not to the unit name.

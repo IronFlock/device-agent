@@ -103,25 +103,27 @@ func tailLine(t *testing.T, lm *LogManager, containerName string) string {
 	return line
 }
 
-// awaitTailCleanup waits until the ended tail's line is persisted. The end of
-// a tail runs its cleanup in a goroutine of its own (emitChannelStream): the
-// history goes to the database, then a read through the Docker API when no
-// container line is stored. A test must not return before that, or the
-// goroutine meets a closed database and a temp dir being removed.
-func awaitTailCleanup(t *testing.T, lm *LogManager, containerName, line string) {
+// awaitTailCleanup waits until the ended tail's line is in the database. The
+// end of a tail runs its cleanup in a goroutine of its own (emitChannelStream):
+// the history goes to the database, then a read through the Docker API when
+// no container line is stored. A test must not return before that, or the
+// goroutine meets a closed database and a temp dir being removed. The
+// database is read directly: getPersistedLogHistory answers from the memory
+// of the app's current tail first, which is the new tail's, not the ended one's.
+func awaitTailCleanup(t *testing.T, lm *LogManager, line string) {
 	t.Helper()
 	require.Eventually(t, func() bool {
-		history, err := lm.getPersistedLogHistory(containerName)
+		history, err := lm.Database.GetAppLogHistory("composeapp", 7, common.PROD)
 		if err != nil {
 			return false
 		}
 		for _, entry := range history {
-			if entry.entry == line {
+			if entry == line {
 				return true
 			}
 		}
 		return false
-	}, 5*time.Second, 10*time.Millisecond, "the ended tail's history must be persisted")
+	}, 5*time.Second, 20*time.Millisecond, "the ended tail's history must be persisted")
 }
 
 // allowTailCleanupRead keeps the strict mock quiet should a cleanup still
@@ -177,7 +179,7 @@ func TestReviveDeadLogsLeavesALiveComposeTailAlone(t *testing.T) {
 	require.True(t, liveEntry(lm, containerName))
 
 	stopAllTails(lm)
-	awaitTailCleanup(t, lm, containerName, line)
+	awaitTailCleanup(t, lm, line)
 }
 
 func TestStreamComposeTailStopsTheEarlierTail(t *testing.T) {
@@ -213,9 +215,10 @@ func TestStreamComposeTailStopsTheEarlierTail(t *testing.T) {
 			return false
 		}
 	}, 5*time.Second, 10*time.Millisecond, "the earlier tail must be stopped when a new one starts for the same app")
-	awaitTailCleanup(t, lm, containerName, firstLine)
 
-	// The new tail is the app's live entry.
+	// The new tail is the app's live entry, and has printed: from here on the
+	// in-memory history is the new tail's, so the ended tail's line can only
+	// be found in the database.
 	require.Eventually(t, func() bool {
 		entry := activeEntry(lm, containerName)
 		if entry == nil || entry.ChannelStream != second.Lines {
@@ -227,7 +230,8 @@ func TestStreamComposeTailStopsTheEarlierTail(t *testing.T) {
 	}, 5*time.Second, 10*time.Millisecond)
 	secondLine := tailLine(t, lm, containerName)
 	require.NotEqual(t, firstLine, secondLine)
+	awaitTailCleanup(t, lm, firstLine)
 
 	second.Stop()
-	awaitTailCleanup(t, lm, containerName, secondLine)
+	awaitTailCleanup(t, lm, secondLine)
 }

@@ -12,18 +12,11 @@ import (
 	"golang.org/x/sys/windows"
 )
 
-// Authenticode result codes (HRESULTs from WinVerifyTrust).
-const (
-	trustENoSignature   = 0x800B0100 // TRUST_E_NOSIGNATURE
-	trustEBadDigest     = 0x80096010 // TRUST_E_BAD_DIGEST
-	certEUntrustedRoot  = 0x800B0109 // CERT_E_UNTRUSTEDROOT
-	trustESubjectFormUn = 0x800B0003 // TRUST_E_SUBJECT_FORM_UNKNOWN
-)
-
 // platformVerify runs two independent checks, and both must pass:
 //  1. Windows' own: the Authenticode signature is well-formed and the file
-//     digest matches (WinVerifyTrust). CERT_E_UNTRUSTEDROOT is accepted here:
-//     the machine's trust store is not the trust decision, because…
+//     digest matches (WinVerifyTrust). A root the machine does not trust, or
+//     does not have (windowsTrustResult), is accepted here: the machine's
+//     trust store is not the trust decision, because…
 //  2. ours (verifyFile): the certificate that MADE the signature chains to one
 //     of our embedded roots, using no other trust store, with the digests and
 //     the signature checked again in Go.
@@ -125,19 +118,7 @@ func winVerifyTrust(path string) error {
 	if verifyErr == nil {
 		return nil
 	}
-
-	switch hres := hresultOf(verifyErr); hres {
-	case trustENoSignature, trustESubjectFormUn:
-		return ErrUnsigned
-	case trustEBadDigest:
-		return ErrTampered
-	case certEUntrustedRoot:
-		// Signature is cryptographically valid; the machine just doesn't trust
-		// the root. That's fine — pinning (step 2) is our trust decision.
-		return nil
-	default:
-		return fmt.Errorf("WinVerifyTrust failed: %w", verifyErr)
-	}
+	return windowsTrustResult(hresultOf(verifyErr), verifyErr)
 }
 
 func hresultOf(err error) uint32 {

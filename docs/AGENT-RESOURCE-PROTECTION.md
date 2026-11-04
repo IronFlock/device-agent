@@ -306,8 +306,13 @@ Rules:
   (`WriteFileAtomic`), the slice before the drop-in. `daemon-reload` runs only
   after a change, so a device reloads once per changed version, not at every
   start.
+- At agent start, the files and the reload run in the background, and the
+  reload has a one-minute timeout: the start never waits for them (they take
+  effect at the next start anyway). Only the OOM score is set before the start
+  goes on.
 - A failure (a read-only `/etc` on some OS images, no systemd) is a warning,
-  never fatal. The OOM score from change 1 still applies.
+  never fatal, also in `service install` and `migrate-layout`. The OOM score
+  from change 1 still applies.
 - The agent never restarts for this. Slice and memory protection take effect at
   the next start of the unit, i.e. the next update or reboot. An extra restart
   right after an update would land inside the update's probation window.

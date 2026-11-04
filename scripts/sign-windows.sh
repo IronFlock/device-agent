@@ -7,7 +7,9 @@
 #       cannot leave KMS. KMS_ACCESS_TOKEN is an access token of agent-signer,
 #       the identity that may only sign, and only from a release run of
 #       release.yml on main. The certificate chain is the committed signer
-#       certificate and the root agents pin (docs/WINDOWS-CODE-SIGNING.md).
+#       certificate and the root agents pin (docs/WINDOWS-CODE-SIGNING.md);
+#       jsign puts only the signer into the signature, never the self-signed
+#       root, so the agents' check must not need the root there.
 #   scripts/sign-windows.sh dry-run <pe-file>...
 #       Release pull requests and manual runs: the same jsign call with a
 #       throwaway root and signer made here. The throwaway root goes to
