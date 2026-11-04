@@ -195,7 +195,10 @@ codesign-check-published:
     trap 'rm -rf "$work"' EXIT
     curl -fsS --retry 3 -o "$work/device-agent.exe" "$base/windows/amd64/$version/device-agent.exe"
     curl -fsS --retry 3 -o "$work/frpc.exe" "$base/frpc/windows/amd64/$frp/frpc.exe"
-    {{just_executable()}} codesign-check "$work/device-agent.exe" "$work/frpc.exe"
+    # Quoted, and as a POSIX path under Git Bash: on Windows the path has backslashes.
+    just_bin={{quote(just_executable())}}
+    if command -v cygpath >/dev/null 2>&1; then just_bin=$(cygpath -u "$just_bin"); fi
+    "$just_bin" codesign-check "$work/device-agent.exe" "$work/frpc.exe"
 
 # What `publish` requires when it runs by hand (release.yml makes them per build).
 # Generate the SBOM of every agent binary in build/.
