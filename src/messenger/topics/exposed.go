@@ -38,6 +38,9 @@ const SystemShutdown Topic = "system_shutdown"
 const SystemRestartAgent Topic = "system_restart_agent"
 
 const GetStorageData Topic = "get_storage_data"
+
+// The device's firmware inventory from fwupd, read-only (FlockOS ADR-0009).
+const GetFirmwareInventory Topic = "get_firmware_inventory"
 const GetNetworkMetaData Topic = "get_network_metadata"
 
 const GetAgentMetaData Topic = "get_agent_metadata"
