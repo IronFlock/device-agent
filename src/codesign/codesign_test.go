@@ -130,10 +130,11 @@ func TestEnforcingRequiresConfiguredRoot(t *testing.T) {
 	assert.True(t, Enforcing())
 }
 
-// The shipped build checks against the embedded root but does not enforce
-// yet: this release only reports. Turning enforcement on is a deliberate
-// change of this test too (docs/WINDOWS-CODE-SIGNING.md).
-func TestShippedBuildReportsWithoutEnforcing(t *testing.T) {
+// The shipped build checks against the embedded root and enforces: on Windows
+// an update or a download that fails the check is refused. Turning
+// enforcement off again is a deliberate change of this test too
+// (docs/WINDOWS-CODE-SIGNING.md).
+func TestShippedBuildEnforces(t *testing.T) {
 	require.True(t, Configured(), "the IronFlock root must be embedded (roots/*.crt)")
-	assert.False(t, Enforcing(), "Authenticode enforcement stays off until the field reports clean checks")
+	assert.True(t, Enforcing(), "Authenticode enforcement is on since 1.5.6")
 }

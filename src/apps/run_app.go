@@ -356,12 +356,12 @@ func (sm *StateMachine) runDevComposeApp(payload common.TransitionPayload, app *
 		return err
 	}
 
-	logsChannel, err := compose.LogStream(dockerComposePath)
+	tail, err := compose.LogStream(dockerComposePath)
 	if err != nil {
 		return err
 	}
 
-	_, err = sm.LogManager.StreamLogsChannel(logsChannel, payload.ContainerName.Dev)
+	_, err = sm.LogManager.StreamComposeTail(tail, payload.ContainerName.Dev)
 	if err != nil {
 		return err
 	}
@@ -543,12 +543,12 @@ func (sm *StateMachine) runProdComposeApp(payload common.TransitionPayload, app 
 		return err
 	}
 
-	logsChannel, err := compose.LogStream(dockerComposePath)
+	tail, err := compose.LogStream(dockerComposePath)
 	if err != nil {
 		return err
 	}
 
-	_, err = sm.LogManager.StreamLogsChannel(logsChannel, payload.ContainerName.Prod)
+	_, err = sm.LogManager.StreamComposeTail(tail, payload.ContainerName.Prod)
 	if err != nil {
 		return err
 	}
@@ -881,7 +881,7 @@ func buildDefaultEnvironmentVariables(config *config.Config, payload common.Tran
 	}
 
 	if config.ReswarmConfig.ReswarmBaseURL != "" {
-		deviceURL := fmt.Sprintf("%s/%s/swarms/%s/settings/devices/%s", config.ReswarmConfig.ReswarmBaseURL, config.ReswarmConfig.SwarmOwnerName, config.ReswarmConfig.SwarmName, config.ReswarmConfig.Name)
+		deviceURL := fmt.Sprintf("%s/%s/projects/%s/settings/devices/%s", config.ReswarmConfig.ReswarmBaseURL, config.ReswarmConfig.SwarmOwnerName, config.ReswarmConfig.SwarmName, config.ReswarmConfig.Name)
 		environmentVariables = append(environmentVariables, fmt.Sprintf("RESWARM_URL=%s", config.ReswarmConfig.ReswarmBaseURL))
 		environmentVariables = append(environmentVariables, fmt.Sprintf("DEVICE_URL=%s", deviceURL))
 	}

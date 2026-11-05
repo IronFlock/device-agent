@@ -1084,6 +1084,7 @@ func (frpTm *FrpTunnelManager) Start() error {
 	frpCommand.Dir = filepath.Dir(frpcPath)
 	frpCommand.Env = frpcEnv()
 	setPdeathsig(frpCommand)
+	raisePriority(frpCommand)
 
 	stdout, err := frpCommand.StdoutPipe()
 	if err != nil {

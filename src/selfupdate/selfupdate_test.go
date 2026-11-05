@@ -10,6 +10,8 @@ import (
 	"testing"
 	"time"
 
+	"reagent/codesign"
+
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -28,6 +30,10 @@ func newTestManagerWith(t *testing.T, names Names) *Manager {
 
 	m := New(dir, names)
 	m.retryDelay = time.Millisecond
+	// The fake downloads carry no Authenticode signature, which the real
+	// check refuses on Windows now that enforcement is on; the signature
+	// tests below set their own check.
+	m.verifySignature = func(string) error { return nil }
 	m.currentExe = func() (string, error) { return m.activePath(), nil }
 	m.execVersion = func(exePath string) (string, error) {
 		// The fake downloaded exe contains its version as file content.
@@ -478,6 +484,15 @@ func TestCorruptMarkerIsDiscarded(t *testing.T) {
 	assert.False(t, m.IsVersionBlocked("1.1.0"))
 	result := m.OnServiceStart("1.0.0")
 	assert.False(t, result.RollbackPerformed)
+}
+
+// The Manager the agent uses checks every update with the shared check and
+// refuses one that fails it: the shipped build enforces.
+func TestNewEnforcesTheSharedSignatureCheck(t *testing.T) {
+	m := New(t.TempDir(), WindowsNames)
+	assert.NotNil(t, m.verifySignature, "every update is checked")
+	assert.Equal(t, codesign.Enforcing(), m.enforceSignature)
+	assert.True(t, m.enforceSignature, "an update that fails the Authenticode check is refused")
 }
 
 func TestActivateWarnsButProceedsWhenSignatureFailsPreCutover(t *testing.T) {

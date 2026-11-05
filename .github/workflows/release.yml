@@ -16,7 +16,7 @@
 # "Build, Publish and Release".
 #
 # Trigger: the merge of a release pull request (`just release-patch`: version
-# bump, title `release reagent v<version>`) into main. Checks are not repeated
+# bump, title `release device-agent v<version>`) into main. Checks are not repeated
 # here: main is protected (pull requests whose ci-ok and security / report
 # checks passed), and `verify` (the harness's release.sh mode) only releases
 # the squash merge of a release pull request whose title names the version in

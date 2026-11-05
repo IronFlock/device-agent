@@ -1,4 +1,4 @@
-# IronFlock device management agent (reagent). Run `just` to list recipes.
+# IronFlock device management agent (device-agent). Run `just` to list recipes.
 
 ROOT_DIR := justfile_directory()
 FRP_VERSION := "0.71.1"
@@ -17,7 +17,7 @@ AGENT_IMAGE_VERSION := "v" + `cat src/release/version.txt`
 # Release names (see the release section below); the tag is `v<version>`,
 # set by CI once the version is published and promoted.
 VERSION := `tr -d '[:space:]' < src/release/version.txt`
-RELEASE_NAME := "reagent"
+RELEASE_NAME := "device-agent"
 VERSION_FILE := "src/release/version.txt"
 # Every file _write-version changes; the release commit holds exactly these.
 VERSION_FILES := "src/release/version.txt availableVersions.json"

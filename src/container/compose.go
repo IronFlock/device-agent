@@ -35,13 +35,47 @@ type Compose struct {
 	// paths rewrites Windows mount sources for a Linux engine outside Docker
 	// Desktop (engine_paths.go); nil, as in tests, leaves compose files as they are.
 	paths                 *enginePaths
-	logStreamMap          map[string]*ComposeLog
 	composeProcessesMap   map[string]context.CancelFunc
 	composeProcessesMutex sync.Mutex
-	logStreamMapMutex     sync.Mutex
 }
 
+// ComposeLog is a live `docker compose logs -f` of one app. Lines carries its
+// output and is closed when the tail ends; Stop ends it.
 type ComposeLog struct {
+	Lines chan string
+
+	cmd      *exec.Cmd
+	done     chan struct{} // closed once Lines is closed and the process is reaped
+	stopOnce sync.Once
+}
+
+// tailStopGrace is how long a tail gets to leave on request before it is
+// killed, and how long Stop then waits for the reaping.
+const tailStopGrace = 5 * time.Second
+
+// Stop ends the tail, the compose plugin it started included, and returns
+// once the process is reaped. Safe to call more than once and on a tail that
+// has already ended.
+func (t *ComposeLog) Stop() {
+	t.stopOnce.Do(func() {
+		select {
+		case <-t.done:
+			return
+		default:
+		}
+		terminateTree(t.cmd)
+		select {
+		case <-t.done:
+			return
+		case <-time.After(tailStopGrace):
+		}
+		killTree(t.cmd)
+		select {
+		case <-t.done:
+		case <-time.After(tailStopGrace):
+			log.Warn().Msgf("compose log tail (pid %d) did not end after being killed", t.cmd.Process.Pid)
+		}
+	})
 }
 
 type ComposeBuildOptions struct {
@@ -90,10 +124,8 @@ type Service struct {
 func NewCompose(config *config.Config) *Compose {
 	compose := &Compose{
 		config:                config,
-		logStreamMap:          make(map[string]*ComposeLog),
 		composeProcessesMap:   make(map[string]context.CancelFunc),
 		composeProcessesMutex: sync.Mutex{},
-		logStreamMapMutex:     sync.Mutex{},
 	}
 	compose.supported.Store(IsComposeSupported())
 	return compose
@@ -109,7 +141,6 @@ func NewComposeWithBinary(config *config.Config, binary string) *Compose {
 	compose := &Compose{
 		config:              config,
 		binary:              binary,
-		logStreamMap:        make(map[string]*ComposeLog),
 		composeProcessesMap: make(map[string]context.CancelFunc),
 	}
 	compose.supported.Store(true)
@@ -670,51 +701,56 @@ const (
 	ComposeServiceLabel = "com.docker.compose.service"
 )
 
-func (c *Compose) LogStream(dockerComposePath string) (chan string, error) {
-	// c.logStreamMapMutex.Lock()
-	// existingComposeLog := c.logStreamMap[dockerComposePath]
+// LogStream starts a live `docker compose logs -f` of the project. The tail
+// is a process the caller owns: it keeps running until it is stopped or the
+// CLI exits. The log manager keeps one per running compose app and stops the
+// earlier one before it starts another (StreamComposeTail); before that, every
+// reconnect's revive started one more, and the earlier ones ran on forever.
+func (c *Compose) LogStream(dockerComposePath string) (*ComposeLog, error) {
+	binary := c.binary
+	if binary == "" {
+		binary = "docker"
+	}
 
-	// if existingComposeLog != nil {
-	// 	err := existingComposeLog.command.Process.Kill()
-	// 	if err != nil {
-	// 		c.logStreamMapMutex.Unlock()
-	// 		return nil, err
-	// 	}
-
-	// 	delete(c.logStreamMap, dockerComposePath)
-	// }
-
-	// c.logStreamMapMutex.Unlock()
-
-	cmd := exec.Command("docker", "compose", "-f", dockerComposePath, "logs", "-f") //nolint:gosec // G204: fixed docker compose CLI; arguments are compose file paths and fixed flags, values as separate argv entries
+	cmd := exec.Command(binary, "compose", "-f", dockerComposePath, "logs", "-f") //nolint:gosec // G204: fixed docker compose CLI; arguments are compose file paths and fixed flags, values as separate argv entries
 	cmdReader, err := cmd.StdoutPipe()
 	if err != nil {
 		return nil, err
 	}
 
 	cmd.Stderr = cmd.Stdout
+	setPdeathsig(cmd)
+	setProcessGroup(cmd)
 
-	logChan := make(chan string)
-	scanner := bufio.NewScanner(cmdReader)
-	safe.Go(func() {
-		for scanner.Scan() {
-			chunk := scanner.Text()
-			logChan <- chunk
-		}
-
-		close(logChan)
-	})
+	tail := &ComposeLog{Lines: make(chan string), cmd: cmd, done: make(chan struct{})}
 
 	err = cmd.Start()
 	if err != nil {
 		return nil, err
 	}
 
-	// c.logStreamMapMutex.Lock()
-	// c.logStreamMap[dockerComposePath] = &ComposeLog{channel: logChan, command: cmd}
-	// c.logStreamMapMutex.Unlock()
+	safe.Go(func() {
+		scanner := bufio.NewScanner(cmdReader)
+		// Compose prints a container's whole line; a very long one must not end
+		// the tail.
+		scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+		for scanner.Scan() {
+			tail.Lines <- scanner.Text()
+		}
+		close(tail.Lines)
 
-	return logChan, nil
+		// The loop ends with the process (EOF) or with a read error while the
+		// process still runs; the second must not leave a tail nobody follows.
+		if scanner.Err() != nil {
+			killTree(cmd)
+		}
+		// Without Wait a tail that ended by itself stays a zombie for the
+		// agent's lifetime.
+		_ = cmd.Wait()
+		close(tail.done)
+	})
+
+	return tail, nil
 }
 
 // parseComposePSOutput normalizes the output of `docker compose ps --format
