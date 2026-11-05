@@ -8,7 +8,8 @@
 # Blocking: the `report` job fails on secrets, fixable high/critical
 # vulnerabilities, high misconfigurations, forbidden licences and semgrep
 # errors. Accepted findings live in security/vex.openvex.json,
-# .trivyignore.yaml and .gitleaks.toml, each with its reason.
+# .trivyignore.yaml and .gitleaks.toml, each with its reason. Results also go
+# to the Security tab (code scanning), without the VEX-accepted vulnerabilities.
 name: security
 
 on:
@@ -39,4 +40,3 @@ jobs:
       sarif-recipe: sarif
       sbom-recipe: sbom
       fail-on: secrets,vuln-critical,vuln-high,misconfig-high,license-forbidden,semgrep-error
-      code-scanning: false
