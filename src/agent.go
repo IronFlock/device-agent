@@ -196,6 +196,13 @@ func (agent *Agent) OnConnect(reconnect bool) error {
 	<-agent.daemonReady
 	log.Info().Msg("Docker Daemon is available")
 
+	// The health gate of a FlockOS update: connected to the platform and
+	// Docker runs, so the slot this device booted is good. A slot that never
+	// gets here stays unmarked and the bootloader falls back to the previous
+	// one. In the background, bounded, logged: it never holds up the rest of
+	// the connect. Not FlockOS: nothing to do.
+	safe.Go(system.MarkFlockOSSlotGoodNow)
+
 	// Step 1: Fetch requested app states from backend
 	log.Info().Msg("Fetching requested app states from backend...")
 	remotePayloads, err := agent.AppManager.AppStore.FetchRequestedAppStates()
