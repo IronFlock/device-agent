@@ -24,10 +24,14 @@ var CatalogSubject = updatesig.Subject{Context: "flockos-manifest:v1", Line: Cat
 // raw Ed25519 key per line, "#" starts a comment. A key of its own, not an
 // agent update key: only FlockOS release runs may sign with it.
 //
-// Empty until the FlockOS release pipeline's signing key exists in Cloud KMS
-// (FlockOS WP-2.6): until then this agent refuses every catalog, so no device
-// is offered an OS update from an unsigned or foreign catalog.
-const FLOCKOS_CATALOG_PUBLIC_KEYS = ``
+// The line below is the Cloud KMS key ironflock-release/flockos-catalog,
+// version 1 (FlockOS WP-2.6; pki/flockos-catalog.pub and pki/README.md in
+// IronFlock/flockos give its PEM form and how to check it against KMS).
+// Rotate it as the agent update keys: a release that lists both keys reaches
+// the fleet before FlockOS signs with the new one.
+const FLOCKOS_CATALOG_PUBLIC_KEYS = `
+wFLa1T7iHYi20X8JVu/O6JUzBGmW2+tjo7QVMuxsmQg= # key f5e1308e, Cloud KMS ironflock-release/flockos-catalog v1
+`
 
 // catalogKeys returns the trusted keys; tests replace it.
 var catalogKeys = func() ([]updatesig.PublicKey, error) {

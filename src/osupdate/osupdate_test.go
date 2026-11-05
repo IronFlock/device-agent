@@ -160,13 +160,15 @@ func TestOpenCatalog(t *testing.T) {
 		assert.ErrorIs(t, err, ErrNoCatalogKey)
 	})
 
-	t.Run("the shipped key list parses; while it is empty, nothing is trusted", func(t *testing.T) {
+	t.Run("the shipped key list is FlockOS's catalog key", func(t *testing.T) {
 		keys, err := catalogKeys()
 		require.NoError(t, err)
-		if len(keys) == 0 {
-			_, _, err = OpenCatalog(s.seal(t, CatalogSubject, payloadOf(t, testCatalog())))
-			assert.ErrorIs(t, err, ErrNoCatalogKey)
-		}
+		require.Len(t, keys, 1)
+		assert.Equal(t, "f5e1308e", keys[0].ID)
+		// a catalog of another key is still refused
+		_, _, err = OpenCatalog(s.seal(t, CatalogSubject, payloadOf(t, testCatalog())))
+		assert.Error(t, err)
+		assert.NotErrorIs(t, err, ErrNoCatalogKey)
 	})
 
 	t.Run("an unknown key is refused", func(t *testing.T) {

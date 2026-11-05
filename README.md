@@ -583,7 +583,8 @@ IronFlock/flockos). Other devices keep the ReswarmOS files
   `.flock`'s `update_url` or the cloud's `/dl`. It is an `updatesig` envelope
   signed as `flockos-manifest:v1` / `flockos/manifest.json`, with a key of its
   own (`FLOCKOS_CATALOG_PUBLIC_KEYS` in `src/osupdate/catalog.go`), not an agent
-  update key. While that list is empty, every catalog is refused.
+  update key: Cloud KMS `ironflock-release/flockos-catalog`, version 1 (key
+  `f5e1308e`; `pki/flockos-catalog.pub` in IronFlock/flockos).
 - **The release** offered is the one the device's channel names: its
   environment (`production`, `test`); a channel the catalog lacks follows
   `production`. It is installable when it is newer than the running image and
