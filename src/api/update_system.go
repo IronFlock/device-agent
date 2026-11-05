@@ -24,6 +24,10 @@ func (ex *External) getOSReleaseHandler(ctx context.Context, response messenger.
 		return nil, errdefs.InsufficientPrivileges(errors.New("insufficient privileges to get os release data"))
 	}
 
+	if runsFlockOS() {
+		return ex.flockOSRelease(ctx), nil
+	}
+
 	// current release information
 	osReleaseCurrent, err := system.GetOSReleaseCurrent()
 	if err != nil {
@@ -108,6 +112,18 @@ func (ex *External) downloadOSUpdateHandler(ctx context.Context, response messen
 		_ = ex.LogMessenger.Publish(topics.Topic(topic), []interface{}{progress}, nil, nil)
 	}
 
+	if runsFlockOS() {
+		// Not the call's context: a call that times out on the platform side
+		// must not stop a download halfway. Progress goes to the topic.
+		dctx, cancel := context.WithTimeout(context.Background(), osDownloadTimeout)
+		defer cancel()
+		path, err := downloadFlockOS(ex.System, dctx, progressCallback)
+		if err != nil {
+			return nil, err
+		}
+		return &messenger.InvokeResult{Arguments: []interface{}{common.Dict{"path": path}}}, nil
+	}
+
 	// start downloading...
 	err = system.GetOSUpdate(progressCallback)
 	if err != nil {
@@ -137,6 +153,13 @@ func (ex *External) installOSUpdateHandler(ctx context.Context, response messeng
 		serialNumber := ex.Config.ReswarmConfig.SerialNumber
 		topic := common.BuildInstallOSUpdateProgress(serialNumber)
 		_ = ex.LogMessenger.Publish(topics.Topic(topic), []interface{}{progress}, nil, nil)
+	}
+
+	if runsFlockOS() {
+		if err := installFlockOS(ex.System, progressCallback); err != nil {
+			return nil, err
+		}
+		return &messenger.InvokeResult{}, nil
 	}
 
 	// start installing OS bundle...

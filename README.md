@@ -571,6 +571,46 @@ CI (above) is the primary path. The original local recipes still work for ad-hoc
 The _Reagent_ makes use of [WAMP](https://wamp-proto.org)
 and [Docker](https://www.docker.com) as its two key technologies.
 
+### FlockOS OS updates
+
+On a device that runs FlockOS (`ID=flockos` in os-release, with `IMAGE_ID` and
+`IMAGE_VERSION`), the OS update procedures use the FlockOS release catalog
+(`src/osupdate`; FlockOS ADR-0009, `docs/manifest.schema.json` in
+IronFlock/flockos). Other devices keep the ReswarmOS files
+(`/etc/reswarmos-update`, `/etc/os-release-latest.json`).
+
+- **The catalog** is `<update base>/flockos/manifest.json`, the base being the
+  `.flock`'s `update_url` or the cloud's `/dl`. It is an `updatesig` envelope
+  signed as `flockos-manifest:v1` / `flockos/manifest.json`, with a key of its
+  own (`FLOCKOS_CATALOG_PUBLIC_KEYS` in `src/osupdate/catalog.go`), not an agent
+  update key. While that list is empty, every catalog is refused.
+- **The release** offered is the one the device's channel names: its
+  environment (`production`, `test`); a channel the catalog lacks follows
+  `production`. It is installable when it is newer than the running image and
+  this agent is at least its `min_agent`.
+- **`get_os_release`** answers:
+  - `currentRelease`: `Name`, `Version`, `BuildTime`, `ImageID`, `BuildID`.
+  - `latestRelease`: `Name`, `Version`, `BuildTime`, `BuildID`, `Channel`,
+    `UpdateAvailable`, or `Error`.
+  - `slots`: `booted`, `primary`, and per slot `name`, `class`, `bootname`,
+    `state`, `boot_status`, `bundle_version`, `installed`; or `slotsError`.
+- **`download_os_update`** streams the bundle to `/var/cache/flockos`, on
+  `/data`. It checks the size and SHA-256 the catalog names, publishes progress
+  on `download_os_update_progress`, and returns the bundle's path.
+- **`install_os_update`** has RAUC install the downloaded bundle into the other
+  slot, with progress on `install_os_update_progress`. RAUC checks the bundle's
+  signature and compatible. Its errors are returned (they used to be logged
+  only).
+- **`perform_os_update`** chains download, install and a reboot behind
+  `perform_os_update_progress` (`stage`: `download`, `install`, `reboot`), and
+  answers before the reboot.
+- **One update at a time:** a second download or install while one runs is
+  refused.
+- **The health gate:** once the agent is connected and Docker runs, it marks
+  the booted slot good (RAUC `Mark("good", "booted")`). It does this in the
+  background, bounded to 30 s, and only logs a failure. A slot that never gets
+  there stays unmarked, and the bootloader falls back to the previous one.
+
 ### WAMP
 
 #### References

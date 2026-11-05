@@ -1,0 +1,233 @@
+package system
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"net/http"
+	"reagent/filesystem"
+	"reagent/osupdate"
+	"reagent/release"
+	"sync"
+	"time"
+
+	"github.com/godbus/dbus/v5"
+	"github.com/rs/zerolog/log"
+)
+
+// OS updates of FlockOS images (FlockOS WP-2.4): the signed catalog below the
+// update base names the release of the device's channel; the bundle is
+// downloaded to osupdate.CacheDir, checked against the catalog, and installed
+// by RAUC, which checks its signature and compatible. Devices that do not run
+// FlockOS keep the legacy path (GetOSUpdate, InstallOSUpdate).
+
+// ErrNotFlockOS: the device does not run a FlockOS image.
+var ErrNotFlockOS = errors.New("this device does not run FlockOS")
+
+// ErrNoNewerRelease: the channel offers nothing newer than the running image.
+var ErrNoNewerRelease = errors.New("no newer FlockOS release for this device's channel")
+
+// osUpdateMu lets one FlockOS update operation run at a time: a second
+// download would remove the first one's partial file, and RAUC installs one
+// bundle at a time.
+var osUpdateMu sync.Mutex
+
+// ErrOSUpdateRunning: another download or install is running.
+var ErrOSUpdateRunning = errors.New("an OS update is already running on this device")
+
+// Seams for the tests.
+var (
+	readRunning = osupdate.ReadRunning
+	openCatalog = osupdate.OpenCatalog
+	fetchSmallC = fetchSmall
+	cacheDir    = osupdate.CacheDir
+	installRauc = raucInstallBundle
+)
+
+// RunsFlockOS reports whether the device runs a FlockOS image.
+func RunsFlockOS() bool {
+	r, err := readRunning()
+	return err == nil && r.IsFlockOS()
+}
+
+// FlockOSOffer reads the running image and the catalog, and returns the
+// release the device's channel offers for it.
+func (sys *System) FlockOSOffer() (osupdate.Running, osupdate.Offer, error) {
+	running, err := readRunning()
+	if err != nil {
+		return osupdate.Running{}, osupdate.Offer{}, err
+	}
+	if !running.IsFlockOS() {
+		return running, osupdate.Offer{}, ErrNotFlockOS
+	}
+	url := sys.updateBaseURL() + "/" + osupdate.CatalogPath
+	data, status, err := fetchSmallC(url)
+	if err != nil {
+		return running, osupdate.Offer{}, err
+	}
+	if status != http.StatusOK {
+		return running, osupdate.Offer{}, fmt.Errorf("%s returned status %d", url, status)
+	}
+	catalog, keyID, err := openCatalog(data)
+	if err != nil {
+		return running, osupdate.Offer{}, fmt.Errorf("refusing %s: %w", url, err)
+	}
+	log.Debug().Str("key_id", keyID).Str("issued_at", catalog.IssuedAt).Msg("FlockOS catalog signature verified")
+	offer, err := catalog.Offer(running, GetEnvironment(sys.config))
+	return running, offer, err
+}
+
+// offerToInstall is FlockOSOffer for an update: a newer release this agent
+// may install.
+func (sys *System) offerToInstall() (osupdate.Offer, error) {
+	running, offer, err := sys.FlockOSOffer()
+	if err != nil {
+		return osupdate.Offer{}, err
+	}
+	if !offer.Newer {
+		return offer, fmt.Errorf("%w: it offers %s, the device runs %s", ErrNoNewerRelease, offer.Version, running.ImageVersion)
+	}
+	if err := offer.CheckAgent(release.GetVersion()); err != nil {
+		return offer, err
+	}
+	return offer, nil
+}
+
+// DownloadFlockOSUpdate downloads the bundle of the offered release, or
+// returns the one already downloaded.
+func (sys *System) DownloadFlockOSUpdate(ctx context.Context, progress func(filesystem.DownloadProgress)) (string, error) {
+	if !osUpdateMu.TryLock() {
+		return "", ErrOSUpdateRunning
+	}
+	defer osUpdateMu.Unlock()
+	offer, err := sys.offerToInstall()
+	if err != nil {
+		return "", err
+	}
+	if path := osupdate.Downloaded(offer.Bundle, cacheDir); path != "" {
+		log.Info().Msgf("FlockOS %s is downloaded already: %s", offer.Version, path)
+		return path, nil
+	}
+	log.Info().Msgf("downloading FlockOS %s (%s) from %s", offer.Version, offer.Channel, offer.Bundle.URL)
+	return osupdate.Download(ctx, offer.Bundle, cacheDir, progress)
+}
+
+// InstallFlockOSUpdate installs the downloaded bundle of the offered
+// release into the other slot. RAUC's errors are returned.
+func (sys *System) InstallFlockOSUpdate(progress func(operationName string, progressPercent uint64)) error {
+	if !osUpdateMu.TryLock() {
+		return ErrOSUpdateRunning
+	}
+	defer osUpdateMu.Unlock()
+	offer, err := sys.offerToInstall()
+	if err != nil {
+		return err
+	}
+	path := osupdate.Downloaded(offer.Bundle, cacheDir)
+	if path == "" {
+		return fmt.Errorf("FlockOS %s is not downloaded: download_os_update first", offer.Version)
+	}
+	log.Info().Msgf("installing FlockOS %s from %s", offer.Version, path)
+	if err := installRauc(path, progress); err != nil {
+		return fmt.Errorf("RAUC: %w", err)
+	}
+	return nil
+}
+
+// --- RAUC: the health gate and the slots ------------------------------------
+
+// raucCall calls a RAUC D-Bus method on a connection of its own, bounded by
+// ctx.
+func raucCall(ctx context.Context, method string, args []interface{}, out ...interface{}) error {
+	conn, err := dbus.ConnectSystemBus(dbus.WithContext(ctx))
+	if err != nil {
+		return err
+	}
+	defer func() { _ = conn.Close() }()
+	return conn.Object(raucDBusInterface, raucDBusObjectPath).CallWithContext(ctx, method, 0, args...).Store(out...)
+}
+
+// MarkFlockOSSlotGood marks the slot the device booted from good: the
+// health gate of an update (FlockOS master plan, section 3.5, step 6). The
+// agent calls it once it is connected to the platform and Docker runs; a
+// slot that never gets here is not marked, and the bootloader falls back to
+// the previous slot. Not FlockOS: nothing to do.
+func MarkFlockOSSlotGood(ctx context.Context) error {
+	if !RunsFlockOS() {
+		return nil
+	}
+	var slot, message string
+	if err := raucCall(ctx, raucDBusMethodMark, []interface{}{"good", "booted"}, &slot, &message); err != nil {
+		return fmt.Errorf("RAUC mark good: %w", err)
+	}
+	log.Info().Msgf("RAUC: %s (%s)", message, slot)
+	return nil
+}
+
+// Slot is one RAUC slot as the platform shows it.
+type Slot struct {
+	Name          string
+	Class         string
+	Bootname      string
+	State         string // booted, active, inactive
+	BootStatus    string // good, bad
+	BundleVersion string
+	Installed     string
+}
+
+// FlockOSSlots returns RAUC's slots and the names of the slot booted and
+// of the primary (the next boot), e.g. rootfs.0 and rootfs.1; primary is ""
+// when the bootloader backend cannot tell.
+func FlockOSSlots(ctx context.Context) (booted string, primary string, slots []Slot, err error) {
+	var raw []struct {
+		Name   string
+		Status map[string]dbus.Variant
+	}
+	if err := raucCall(ctx, raucDBusMethodSlot, nil, &raw); err != nil {
+		return "", "", nil, fmt.Errorf("RAUC slot status: %w", err)
+	}
+	for _, s := range raw {
+		slot := Slot{
+			Name:          s.Name,
+			Class:         variantString(s.Status, "class"),
+			Bootname:      variantString(s.Status, "bootname"),
+			State:         variantString(s.Status, "state"),
+			BootStatus:    variantString(s.Status, "boot-status"),
+			BundleVersion: variantString(s.Status, "bundle.version"),
+			Installed:     variantString(s.Status, "installed.timestamp"),
+		}
+		if slot.State == "booted" {
+			booted = slot.Name
+		}
+		slots = append(slots, slot)
+	}
+	// Not every bootloader backend reports the primary; the slots stand
+	// without it.
+	if err := raucCall(ctx, raucDBusMethodPrimary, nil, &primary); err != nil {
+		log.Debug().Err(err).Msg("RAUC primary")
+		primary = ""
+	}
+	return booted, primary, slots, nil
+}
+
+func variantString(m map[string]dbus.Variant, key string) string {
+	v, ok := m[key]
+	if !ok {
+		return ""
+	}
+	s, _ := v.Value().(string)
+	return s
+}
+
+// markGoodTimeout bounds the health gate's RAUC call.
+const markGoodTimeout = 30 * time.Second
+
+// MarkFlockOSSlotGoodNow is MarkFlockOSSlotGood with its own deadline, for
+// the agent's connect handler: errors are logged, never returned.
+func MarkFlockOSSlotGoodNow() {
+	ctx, cancel := context.WithTimeout(context.Background(), markGoodTimeout)
+	defer cancel()
+	if err := MarkFlockOSSlotGood(ctx); err != nil {
+		log.Error().Err(err).Msg("could not mark the booted FlockOS slot good")
+	}
+}
