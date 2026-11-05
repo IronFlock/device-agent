@@ -95,6 +95,25 @@ func TestBuildDefaultEnvironmentVariablesTunnelRouting(t *testing.T) {
 	assert.Contains(t, instanceEnv, "INSTANCE_KEY=5")
 }
 
+// DEVICE_URL is the device's page in Studio, under /<user>/projects/ (Studio
+// moved it from /<user>/swarms/ in 4.0.43 and still opens the old address).
+func TestBuildDefaultEnvironmentVariablesDeviceURL(t *testing.T) {
+	cfg := &config.Config{ReswarmConfig: &config.ReswarmConfig{
+		Environment: "production", DeviceKey: 42, ReswarmBaseURL: "https://studio.ironflock.com",
+		SwarmOwnerName: "alice", SwarmName: "plant", Name: "press-1",
+	}}
+	app := &common.App{AppKey: 7, AppName: "myapp"}
+
+	env := buildDefaultEnvironmentVariables(cfg, common.TransitionPayload{}, common.PROD, app, "")
+	assert.Contains(t, env, "RESWARM_URL=https://studio.ironflock.com")
+	assert.Contains(t, env, "DEVICE_URL=https://studio.ironflock.com/alice/projects/plant/settings/devices/press-1")
+
+	cfg.ReswarmConfig.ReswarmBaseURL = ""
+	for _, e := range buildDefaultEnvironmentVariables(cfg, common.TransitionPayload{}, common.PROD, app, "") {
+		assert.NotContains(t, e, "DEVICE_URL=", "no Studio address, no device link")
+	}
+}
+
 // The device's realm1 credential must never reach an app container: realm1's
 // swarm_device role is allow-all, so an app holding it could act as its own
 // device. Per-app credentials replace it — and are omitted entirely (never
