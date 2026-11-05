@@ -80,9 +80,10 @@ func (ex *External) getTopicHandlerMap() map[topics.Topic]RegistrationHandler {
 		topics.DownloadOSUpdate: ex.downloadOSUpdateHandler,
 		topics.InstallOSUpdate:  ex.installOSUpdateHandler,
 
-		topics.InitDeviceTerminal: ex.initDeviceTerm,
-		topics.GetIPv4Addresses:   ex.getCurrentIPAddresses,
-		topics.GetStorageData:     ex.getStorageDataHandler,
+		topics.InitDeviceTerminal:   ex.initDeviceTerm,
+		topics.GetIPv4Addresses:     ex.getCurrentIPAddresses,
+		topics.GetStorageData:       ex.getStorageDataHandler,
+		topics.GetFirmwareInventory: ex.getFirmwareInventoryHandler,
 
 		// Backend-only: only the platform backend calls these, and it has
 		// decided before it calls (request_app_state after the app's privilege
