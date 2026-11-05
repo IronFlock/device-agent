@@ -33,9 +33,14 @@ devices we administer, at zero certificate cost.
   release run of `release.yml` on `main` (workload identity attribute
   `release`).
 
-Until 2026-11 the signer was a PFX in the GitHub Actions secret
-`WINDOWS_SIGNING_PFX_B64`; binaries signed with it keep verifying for as long
-as that certificate is valid, because it chains to the same root.
+Up to v1.5.3 the signer was a PFX in the GitHub Actions secret
+`WINDOWS_SIGNING_PFX_B64` (certificate serial
+`481360741E254378C38A5236940BFFA44CFDD809`, valid to 2028-10-12); the PFX and
+its secrets were deleted after v1.5.4. Binaries signed with it keep verifying
+for as long as that certificate is valid, because it chains to the same root.
+That includes the live `frpc.exe` for frp 0.71.1: frpc is published once per
+frp version, so it moves to the new signer with the next frp version. Only
+after that can the agent refuse the previous signer by its serial number.
 
 ## What the agent checks
 

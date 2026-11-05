@@ -223,8 +223,8 @@ sarif: build-frpc
     #  - prefix file URIs with src/ — govulncheck runs inside src/, so its paths
     #    (e.g. go.mod) are src-relative and must resolve at the repo root.
     # The frpc binary SARIF has NO source locations (it scans a compiled binary),
-    # so it cannot go to Code Scanning — security.yml uploads only the code SARIF;
-    # frpc findings remain in the job's log summary + the SARIF artifact.
+    # so it cannot go to Code Scanning: the harness uploads only results with a
+    # source location; frpc findings remain in the report and the SARIF artifact.
     for f in build/sarif/govulncheck-code.sarif build/sarif/govulncheck-frpc.sarif; do
         jq '.runs |= map(.results |= map(if .stacks then .stacks |= unique else . end))' "$f" > "$f.tmp" && mv "$f.tmp" "$f"
     done

@@ -91,6 +91,11 @@ them: `security/vex.openvex.json` (not-affected vulnerabilities, valid 12 months
 `.gitleaks.toml` (test vectors and the local-dev demo device, each scoped to its
 lines), and `//nolint:gosec // <reason>` at the code site.
 
+**Security tab.** The repository is public, so the harness also uploads the results
+to the Security tab (code scanning), without the vulnerabilities `security/vex.openvex.json`
+accepts: the tab and the report agree, and an upload without findings closes the alerts
+of earlier scans. Nothing is dismissed by hand there; the VEX file is the record.
+
 ## Signed SBOM attestation (release provenance)
 
 The **release** workflow (`.github/workflows/release.yml`, tag `vX.Y.Z` / manual) attests
@@ -149,6 +154,11 @@ is nothing left that a dependency bump can clear. Five are in `github.com/docker
   never runs an authorization plugin or installs plugins, so the vulnerable code paths are not
   exercised. govulncheck flags them only because importing the client SDK pulls the module's
   `init()` chain into the call graph.
+- **GO-2026-5617**, **GO-2026-5668** (`docker cp` races) and **GO-2026-5746** (the container
+  archive endpoint runs a container binary on the host) are daemon-side as well; govulncheck
+  reports them at module level only (no vulnerable symbol is called). Since 2026-11-04 they
+  carry VEX statements too, so the report and the Security tab agree. Where they matter is
+  the Docker Engine installed on the device, which the agent does not ship.
 - There is **no fix in `github.com/docker/docker`** (all versions affected, incl. v28.x); the
   fix lives only in the renamed, still-**beta** module `github.com/moby/moby/v2` (as of
   2026-09-11: `v2.0.0-beta.23`, still no stable release).
@@ -165,4 +175,4 @@ Revisit when `github.com/moby/moby/v2` reaches a stable release (then migrate th
 
 1. ~~Report-only → gating~~ — blocking since 2026-10-22.
 2. Migrate the Docker SDK to `github.com/moby/moby/v2` once it is stable; then drop the
-   two moby VEX statements.
+   five moby VEX statements.

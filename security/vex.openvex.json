@@ -3,7 +3,8 @@
   "@id": "https://github.com/IronFlock/device-agent/security/vex.openvex.json",
   "author": "IronFlock",
   "timestamp": "2026-10-22T00:00:00Z",
-  "version": 1,
+  "last_updated": "2026-11-04T00:00:00Z",
+  "version": 2,
   "statements": [
     {
       "vulnerability": { "name": "GO-2026-4883", "aliases": ["CVE-2026-33997", "GHSA-pxq6-2prw-chj9"] },
@@ -28,6 +29,30 @@
       "justification": "vulnerable_code_not_present",
       "impact_statement": "golang.org/x/crypto/openpgp is not linked: frp does not import it. The embedded frpc is built stripped (like the upstream release), so govulncheck's binary mode cannot see which packages are linked and reports the whole module; an unstripped build from the same frp/ module shows the package as not reachable. Our own code: not reachable.",
       "timestamp": "2026-10-22T00:00:00Z"
+    },
+    {
+      "vulnerability": { "name": "GO-2026-5617", "aliases": ["CVE-2026-42306", "GHSA-rg2x-37c3-w2rh"] },
+      "products": [{ "@id": "pkg:github/IronFlock/device-agent" }],
+      "status": "not_affected",
+      "justification": "vulnerable_code_not_in_execute_path",
+      "impact_statement": "Race in the Docker daemon's `docker cp` that redirects a bind mount to a host path. Daemon-side; the agent only uses the Docker API client and govulncheck finds no call into the vulnerable code (module-level finding). No fix on the github.com/docker/docker module path (it ends at v28.5.2); the fix exists only in the still-beta github.com/moby/moby/v2; migrate when it is stable (docs/SECURITY-SCANNING.md).",
+      "timestamp": "2026-11-04T00:00:00Z"
+    },
+    {
+      "vulnerability": { "name": "GO-2026-5668", "aliases": ["CVE-2026-41568", "GHSA-vp62-88p7-qqf5"] },
+      "products": [{ "@id": "pkg:github/IronFlock/device-agent" }],
+      "status": "not_affected",
+      "justification": "vulnerable_code_not_in_execute_path",
+      "impact_statement": "Race in the Docker daemon's `docker cp` that creates arbitrary empty files on the host through a symlink swap. Daemon-side; the agent only uses the Docker API client and govulncheck finds no call into the vulnerable code (module-level finding). No fix on the github.com/docker/docker module path (it ends at v28.5.2); the fix exists only in the still-beta github.com/moby/moby/v2; migrate when it is stable (docs/SECURITY-SCANNING.md).",
+      "timestamp": "2026-11-04T00:00:00Z"
+    },
+    {
+      "vulnerability": { "name": "GO-2026-5746", "aliases": ["CVE-2026-41567", "GHSA-x86f-5xw2-fm2r"] },
+      "products": [{ "@id": "pkg:github/IronFlock/device-agent" }],
+      "status": "not_affected",
+      "justification": "vulnerable_code_not_in_execute_path",
+      "impact_statement": "The Docker daemon's `PUT /containers/{id}/archive` executes a container binary on the host. Daemon-side; the agent only uses the Docker API client and govulncheck finds no call into the vulnerable code (module-level finding). No fix on the github.com/docker/docker module path (it ends at v28.5.2); the fix exists only in the still-beta github.com/moby/moby/v2; migrate when it is stable (docs/SECURITY-SCANNING.md).",
+      "timestamp": "2026-11-04T00:00:00Z"
     }
   ]
 }
