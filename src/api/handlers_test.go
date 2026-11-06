@@ -5,6 +5,7 @@ import (
 	"errors"
 	"reagent/common"
 	"reagent/config"
+	"reagent/diskguard"
 	"reagent/errdefs"
 	"reagent/messenger"
 	"reagent/messenger/topics"
@@ -306,6 +307,27 @@ func TestGetStorageDataHandler(t *testing.T) {
 			assert.Contains(t, dict, key, "missing key %q", key)
 			_ = present
 		}
+	})
+
+	t.Run("carries the disk guard's filesystems and disk_level", func(t *testing.T) {
+		// A report-only guard on the real disk: reading only, nothing filled.
+		diskguard.New(nil, diskguard.Config{AgentDir: t.TempDir()})
+		ex := &External{Config: testConfig(), Privilege: priv(t, true)}
+
+		res, err := ex.getStorageDataHandler(context.Background(), messenger.Result{
+			Details: systemDetails(),
+		})
+
+		require.NoError(t, err)
+		dict, ok := res.Arguments[0].(common.Dict)
+		require.True(t, ok)
+		filesystems, ok := dict["filesystems"].([]common.Dict)
+		require.True(t, ok, "missing filesystems list")
+		require.NotEmpty(t, filesystems)
+		for _, key := range []string{"mount", "roles", "total", "used", "free", "inodes_total", "inodes_free", "warn_free", "emergency_free", "level"} {
+			assert.Contains(t, filesystems[0], key)
+		}
+		assert.Contains(t, []any{"ok", "warn", "emergency"}, dict["disk_level"])
 	})
 
 	t.Run("returns insufficient privileges error when denied", func(t *testing.T) {

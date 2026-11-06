@@ -1,21 +1,44 @@
-// Package diskguard keeps a device's disk from filling up, which would take it
-// offline and unreachable. It runs as a background loop in the agent and has
-// three jobs:
+// Package diskguard keeps a device's disks from filling up, which would take
+// it offline and unreachable. It watches every filesystem the device depends
+// on, not only Docker's: the root filesystem fills from logs as readily as the
+// data partition from images. It runs as a background loop in the agent and
+// has four jobs:
 //
 //   - EnsurePreventionConfig: a one-time, idempotent pass that caps the two
 //     unbounded log sinks that most often fill a device — Docker container logs
 //     (daemon.json log-opts) and the systemd journal.
-//   - Run: a periodic loop that, below a warn threshold, reclaims space safely
-//     (prune dangling images + build cache + certainly-unused volumes, vacuum
-//     journald, apt clean, truncate runaway container logs); and below a
-//     critical threshold, enters a device-wide EMERGENCY state.
+//   - The watch set (measure): the filesystems holding /, Docker's data-root,
+//     the agent's folder and, where they exist, /var/log, /var/log/journal,
+//     and the separate mounts /data, /boot/efi and /var/lib/docker —
+//     deduplicated by device, read-only and pseudo filesystems left out. Each
+//     carries the roles it serves (root, docker, agent, data, boot, logs,
+//     journal) and a level (ok, warn, emergency). App space (docker, agent or
+//     data: /data on FlockOS) has absolute floors, 3 GiB and 1 GiB whatever its
+//     size, so when the apps run out of room never depends on the disk size;
+//     a system filesystem (a root slot without app data, the ESP, a separate
+//     /var/log) has floors relative to its size, so a 4 GiB root slot and a
+//     256 MiB ESP get bands of their own (see thresholds). Inodes count too
+//     where the filesystem has them.
+//   - Run: a periodic loop that, while a filesystem is below its warn floor,
+//     reclaims space safely on that filesystem — the Docker steps (prune
+//     dangling images + build cache + certainly-unused volumes, truncate
+//     runaway container logs) only for one holding Docker's data, the journal
+//     vacuum for the journal's, apt clean for the apt cache's, and at
+//     emergency the rotated log archives and core dumps; and while a
+//     filesystem apps can fill (role root, data, docker or agent) is below
+//     its emergency floor, holds a device-wide EMERGENCY state. A filesystem
+//     serving only boot, logs or journal (the ESP, a zram /var/log) is
+//     reported and cleaned at every level, but never stops the apps (see
+//     emergencyRoles).
 //   - The EMERGENCY state (IsEmergency) is exported so the rest of the agent can
 //     react: it is reported to the cloud in the device status, and the app state
 //     machine fails any transition to RUNNING/BUILDING/DOWNLOADING so apps can't
 //     pull, build, or start and grow the disk further. While in the state the
 //     guard also stops every running container that is not part of the
 //     ironflock-appliance compose stack, halting current disk growth without
-//     touching that stack (which carries remote reachability).
+//     touching that stack (which carries remote reachability). The
+//     filesystems and their levels ride in the device stats (StatsFields), so
+//     the platform can warn users before it comes to that.
 //
 // SAFE: it never removes in-use images, and never removes a tagged image whose
 // registry the device may be unable to reach (offline devices can't re-pull).
@@ -25,7 +48,9 @@
 // known to be unused (see pruneOrphanedVolumes); anything attributable to an
 // installed app — stopped or running — or not attributable at all is left
 // alone. App containers are ephemeral — their state lives in volumes/bind
-// mounts — so stopping them is non-destructive.
+// mounts — so stopping them is non-destructive. Files are only removed when
+// nothing writes them any more: rotated log archives and core dumps, never an
+// active log (see removeRotatedLogs).
 package diskguard
 
 import (
@@ -38,6 +63,7 @@ import (
 	"reagent/common"
 	"reagent/container"
 	"reagent/safe"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -72,10 +98,18 @@ const (
 
 	// Registry GC drains in-flight image transfers and walks the whole blob
 	// tree, so it gets a generous deadline — and a floor between runs: while
-	// in EMERGENCY safeCleanup re-runs every few seconds, and hammering the
+	// in EMERGENCY the cleanup re-runs every few seconds, and hammering the
 	// sweep would starve app syncs without freeing anything new.
 	registryGCTimeout     = 5 * time.Minute
 	registryGCMinInterval = 15 * time.Minute
+
+	// checkNowTimeout bounds the startup check, which runs before the agent
+	// connects: a statfs hung on a dead disk must not keep it from connecting.
+	checkNowTimeout = 30 * time.Second
+	// A report (heartbeat, get_storage_data) re-reads the filesystems when its
+	// snapshot is older than reportMaxAge, and waits reportTimeout for that.
+	reportMaxAge  = 10 * time.Second
+	reportTimeout = 2 * time.Second
 )
 
 // emergency is the device-wide disk-emergency flag. It is read by the app state
@@ -102,24 +136,36 @@ const (
 	journaldDropin = "/etc/systemd/journald.conf.d/10-ironflock.conf"
 )
 
-type action int
-
-const (
-	actNone action = iota
-	actWarn
-	actEmergency
-)
-
-// Config tunes the guard. Zero values fall back to sensible defaults. The
-// thresholds are absolute free-byte floors (not percentages) because keeping the
-// agent online needs an absolute headroom regardless of disk size.
+// Config tunes the guard. Zero values fall back to sensible defaults. Each
+// watched filesystem gets its own floors (see thresholds): app space the
+// absolute ones below, whatever its size; a system filesystem the absolute
+// ones lowered to a share of its size.
 type Config struct {
-	DataRoot           string        // filesystem to watch (default /var/lib/docker)
-	Interval           time.Duration // normal poll cadence (default 5m)
-	EmergencyInterval  time.Duration // poll cadence while in EMERGENCY, for fast recovery (default 5s)
-	WarnFreeBytes      int64         // run safe cleanup below this; also clears EMERGENCY at/above it (default 3 GiB)
-	EmergencyFreeBytes int64         // enter EMERGENCY below this (default 1 GiB)
-	LogMaxBytes        int64         // truncate container logs larger than this (default 50 MiB)
+	DataRoot          string        // Docker's data-root, watched with role docker (default /var/lib/docker)
+	AgentDir          string        // the agent's folder, watched with role agent (empty: not watched)
+	Interval          time.Duration // poll cadence, and the floor between cleanups below emergency (default 5m)
+	WarnInterval      time.Duration // poll cadence while a filesystem is below its warn floor, to catch it nearing emergency (default 30s)
+	EmergencyInterval time.Duration // poll cadence while in EMERGENCY, for fast recovery (default 5s)
+	// WarnFreeBytes: warn and run safe cleanup on app space below this; an
+	// EMERGENCY of it also clears only at/above it (default 3 GiB).
+	// EmergencyFreeBytes: enter EMERGENCY below this on app space (default
+	// 1 GiB). On a system filesystem both are caps.
+	WarnFreeBytes      int64
+	EmergencyFreeBytes int64
+	// WarnFreePercent/EmergencyFreePercent lower those floors to this share
+	// of a system filesystem's size (defaults 15 and 5), and
+	// MinWarnFreeBytes/MinEmergencyFreeBytes keep them from shrinking below
+	// this on a tiny one (defaults 8 MiB and 2 MiB).
+	WarnFreePercent       int
+	EmergencyFreePercent  int
+	MinWarnFreeBytes      int64
+	MinEmergencyFreeBytes int64
+	// WarnFreeInodesPercent/EmergencyFreeInodesPercent: a filesystem with an
+	// inode limit is at warn/emergency below this share of free inodes too
+	// (defaults 10 and 3).
+	WarnFreeInodesPercent      int
+	EmergencyFreeInodesPercent int
+	LogMaxBytes                int64 // truncate container logs larger than this (default 50 MiB)
 	// AppsComposeDir/AppsBuildDir are the roots holding one directory per
 	// compose app (PROD/DEV respectively). A dangling compose volume is only
 	// attributed to the agent — and thus deletable when its app is gone — if a
@@ -141,7 +187,8 @@ type Config struct {
 	// stages. Anything else under AppImageRegistry is a superseded leftover. An
 	// error means the wanted set is unknown — no app image is then touched.
 	WantedAppImages func() (map[string]bool, error)
-	// OnRecover is called once when the device leaves EMERGENCY, to reinstate the
+	// OnRecover is called once when the device leaves EMERGENCY (every
+	// filesystem apps can fill back at its warn floor), to reinstate the
 	// apps' previous requested states (which were stopped/blocked during it).
 	OnRecover func()
 }
@@ -153,6 +200,9 @@ func (c *Config) withDefaults() {
 	if c.Interval == 0 {
 		c.Interval = 5 * time.Minute
 	}
+	if c.WarnInterval == 0 {
+		c.WarnInterval = 30 * time.Second
+	}
 	if c.EmergencyInterval == 0 {
 		c.EmergencyInterval = 5 * time.Second
 	}
@@ -161,6 +211,24 @@ func (c *Config) withDefaults() {
 	}
 	if c.EmergencyFreeBytes == 0 {
 		c.EmergencyFreeBytes = 1 * gib
+	}
+	if c.WarnFreePercent == 0 {
+		c.WarnFreePercent = 15
+	}
+	if c.EmergencyFreePercent == 0 {
+		c.EmergencyFreePercent = 5
+	}
+	if c.MinWarnFreeBytes == 0 {
+		c.MinWarnFreeBytes = 8 * mib
+	}
+	if c.MinEmergencyFreeBytes == 0 {
+		c.MinEmergencyFreeBytes = 2 * mib
+	}
+	if c.WarnFreeInodesPercent == 0 {
+		c.WarnFreeInodesPercent = 10
+	}
+	if c.EmergencyFreeInodesPercent == 0 {
+		c.EmergencyFreeInodesPercent = 3
 	}
 	if c.LogMaxBytes == 0 {
 		c.LogMaxBytes = 50 * mib
@@ -172,6 +240,27 @@ type Guard struct {
 	cfg    Config
 	docker Docker
 
+	// The host the guard reads and acts on; tests replace them.
+	stat     func(path string) (reading, error)
+	runCmd   func(ctx context.Context, name string, args ...string) error
+	lookPath func(file string) (string, error)
+	paths    hostPaths
+
+	reportMaxAge  time.Duration
+	reportTimeout time.Duration
+	// wake cuts the Run loop's wait short when a report finds a filesystem
+	// worse off than the last pass did.
+	wake chan struct{}
+
+	mu          sync.Mutex
+	levels      map[string]Level // per filesystem (device ID), as the last pass left them: the hysteresis
+	passLevel   Level            // the worst of levels
+	snapshot    []Filesystem     // the latest reading, served by Report
+	snapshotAt  time.Time
+	refreshing  chan struct{} // closed when the report refresh in flight ends; nil when none is
+	statErrs    map[string]bool
+	lastCleanup time.Time
+
 	// registryGC asks the appliance-local appstore registry for an immediate
 	// garbage collection. Wired via SetRegistryGC after the WAMP session
 	// exists (the guard itself is built and first run before any connection);
@@ -182,11 +271,28 @@ type Guard struct {
 	lastRegistryGC time.Time
 }
 
-// New builds a Guard. docker may be nil (the container-dependent steps are then
-// skipped).
+// New builds a Guard and makes it the one StatsFields reports on (an agent
+// builds one). docker may be nil (the container-dependent steps are then
+// skipped). New only builds: nothing is read or changed until CheckNow, Run or
+// a report.
 func New(docker Docker, cfg Config) *Guard {
 	cfg.withDefaults()
-	return &Guard{cfg: cfg, docker: docker}
+	g := &Guard{
+		cfg:           cfg,
+		docker:        docker,
+		stat:          statPath,
+		runCmd:        runCommand,
+		lookPath:      exec.LookPath,
+		paths:         defaultHostPaths(),
+		reportMaxAge:  reportMaxAge,
+		reportTimeout: reportTimeout,
+		wake:          make(chan struct{}, 1),
+		levels:        map[string]Level{},
+		passLevel:     LevelOK,
+		statErrs:      map[string]bool{},
+	}
+	reporter.Store(g)
+	return g
 }
 
 // SetRegistryGC wires the immediate-registry-GC trigger once the WAMP session
@@ -200,88 +306,194 @@ func (g *Guard) SetRegistryGC(fn func(ctx context.Context)) {
 	g.registryGC = fn
 }
 
-// decide maps free bytes to an action band. Pure function (testable). The warn
-// band (between Emergency and Warn) is hysteresis: an active emergency is held
-// there, so it only clears once free rises back to WarnFreeBytes.
-func (g *Guard) decide(freeBytes int64) action {
-	switch {
-	case freeBytes < g.cfg.EmergencyFreeBytes:
-		return actEmergency
-	case freeBytes < g.cfg.WarnFreeBytes:
-		return actWarn
-	default:
-		return actNone
-	}
-}
-
-// CheckNow runs a single guard pass synchronously: it (re)evaluates free disk,
-// updates the emergency state, and acts on it (safe cleanup, and on emergency
-// stops non-platform containers). Call it once at startup BEFORE starting apps
-// so the emergency gate is active before any container start, instead of racing
-// the background Run loop.
+// CheckNow evaluates every watched filesystem synchronously and sets the
+// emergency state from it (stopping non-platform containers when it is on).
+// Call it once at startup BEFORE starting apps so the emergency gate is active
+// before any container start, instead of racing the background Run loop. It
+// runs before the agent connects, so it does no cleanup (Run's first pass, right
+// after, does) and waits at most checkNowTimeout: past that the check goes on
+// in the background and the start goes on without it.
 func (g *Guard) CheckNow() {
-	g.runOnce()
+	done := make(chan struct{})
+	safe.Go(func() {
+		defer close(done)
+		at := time.Now()
+		fss := g.measure()
+		g.commit(fss, at)
+		g.updateEmergency(fss)
+	})
+	timer := time.NewTimer(checkNowTimeout)
+	defer timer.Stop()
+	select {
+	case <-done:
+	case <-timer.C:
+		log.Warn().Dur("timeout", checkNowTimeout).Msg("diskguard: startup disk check still running; going on without it")
+	}
 }
 
 // Run executes one pass immediately, then repeats until ctx is done. While in
 // EMERGENCY it polls at EmergencyInterval (a few seconds) so it recovers — and
-// reinstates the apps — promptly once space is freed; otherwise at Interval.
+// reinstates the apps — promptly once space is freed; while a filesystem is
+// below its warn floor at WarnInterval, so it catches one nearing emergency;
+// otherwise at Interval. A report that finds a filesystem worse off wakes it
+// at once.
 func (g *Guard) Run(ctx context.Context) {
 	for {
 		g.runOnce()
 
 		interval := g.cfg.Interval
-		if IsEmergency() {
+		switch {
+		case IsEmergency():
 			interval = g.cfg.EmergencyInterval
+		case g.lastPassLevel() != LevelOK:
+			interval = g.cfg.WarnInterval
 		}
 
+		timer := time.NewTimer(interval)
 		select {
 		case <-ctx.Done():
+			timer.Stop()
 			return
-		case <-time.After(interval):
+		case <-timer.C:
+		case <-g.wake:
+			timer.Stop()
 		}
 	}
 }
 
+func (g *Guard) lastPassLevel() Level {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return g.passLevel
+}
+
 func (g *Guard) runOnce() {
-	free := g.freeBytes()
+	at := time.Now()
+	fss := g.measure()
 	// Latch a critical reading BEFORE attempting any cleanup: the emergency
 	// flag (app-start gate + EMERGENCY heartbeat status) must never wait on
 	// cleanup steps, which all talk to a daemon that may be wedged. The steps
 	// are deadline-bounded too, but minutes of accumulated timeouts would
 	// still delay the report; the flag itself needs none of them.
-	if g.decide(free) == actEmergency {
-		g.updateEmergency(free)
+	if worstLevel(fss) == LevelEmergency {
+		g.commit(fss, at)
+		g.updateEmergency(fss)
 	}
-	if g.decide(free) != actNone {
-		log.Warn().Int64("free_mb", free>>20).Str("path", g.cfg.DataRoot).Msg("diskguard: low disk, running safe cleanup")
-		g.safeCleanup()
-		free = g.freeBytes()
+	if g.cleanupDue(fss) {
+		for _, f := range fss {
+			if f.Level != LevelOK {
+				log.Warn().Str("mount", f.Mount).Strs("roles", f.Roles).Str("level", string(f.Level)).
+					Uint64("free_mb", f.Free>>20).Msg("diskguard: low disk, running safe cleanup")
+			}
+		}
+		before := fss
+		g.cleanup(fss)
+		at = time.Now()
+		fss = g.measure()
+		logFreed(before, fss)
 	}
-	g.updateEmergency(free)
+	g.commit(fss, at)
+	g.updateEmergency(fss)
 }
 
-// updateEmergency enters or clears the emergency state with hysteresis: enter
-// below EmergencyFreeBytes, clear at/above WarnFreeBytes, hold in between.
-func (g *Guard) updateEmergency(free int64) {
-	switch g.decide(free) {
-	case actEmergency:
+// cleanupDue reports whether this pass cleans up: while a filesystem is low,
+// every pass in an emergency (as fast as the emergency poll) and otherwise at
+// most once per Interval, however often the warn poll looks.
+func (g *Guard) cleanupDue(fss []Filesystem) bool {
+	worst := worstLevel(fss)
+	if worst == LevelOK {
+		return false
+	}
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if worst != LevelEmergency && !g.lastCleanup.IsZero() && time.Since(g.lastCleanup) < g.cfg.Interval {
+		return false
+	}
+	g.lastCleanup = time.Now()
+	return true
+}
+
+// logFreed logs what a cleanup freed on each filesystem that was low.
+func logFreed(before, after []Filesystem) {
+	for _, b := range before {
+		if b.Level == LevelOK {
+			continue
+		}
+		for _, a := range after {
+			if a.key != b.key {
+				continue
+			}
+			var freed uint64
+			if a.Free > b.Free {
+				freed = a.Free - b.Free
+			}
+			log.Info().Str("mount", a.Mount).Uint64("freed_mb", freed>>20).Uint64("free_mb", a.Free>>20).
+				Str("level", string(a.Level)).Msg("diskguard: cleanup done")
+		}
+	}
+}
+
+// updateEmergency sets the device-wide emergency from the filesystems' levels:
+// on while a filesystem apps can fill (see emergencyRoles) is at emergency,
+// each with its own hysteresis (see level), off once every one of them has
+// recovered. A boot- or log-only filesystem at emergency is reported and
+// cleaned, but leaves the device out of it.
+func (g *Guard) updateEmergency(fss []Filesystem) {
+	var causes []string
+	for _, f := range fss {
+		if f.Level == LevelEmergency && f.stopsApps() {
+			causes = append(causes, f.Mount)
+		}
+	}
+	if len(causes) > 0 {
 		if setEmergency(true) {
-			log.Error().Int64("free_mb", free>>20).
+			log.Error().Strs("filesystems", causes).
 				Msg("diskguard: ENTERING disk-emergency — failing new app start/build/download and stopping non-platform containers")
 		}
 		g.stopForeignContainers()
-	case actNone:
-		if setEmergency(false) {
-			log.Info().Int64("free_mb", free>>20).Msg("diskguard: cleared disk-emergency state; reinstating app states")
-			if g.cfg.OnRecover != nil {
-				safe.Go(g.cfg.OnRecover)
-			}
+		return
+	}
+	if setEmergency(false) {
+		log.Info().Msg("diskguard: cleared disk-emergency state, every filesystem apps can fill has recovered; reinstating app states")
+		if g.cfg.OnRecover != nil {
+			safe.Go(g.cfg.OnRecover)
 		}
 	}
 }
 
-func (g *Guard) safeCleanup() {
+// cleanup reclaims space on the filesystems that are low, each step aimed at
+// what it frees: the Docker steps only for a filesystem holding Docker's data,
+// the journal vacuum for the journal's, apt's cache for its own, and at
+// emergency only the rotated log archives and core dumps. A low filesystem no
+// step can free (a full ESP) gets none.
+func (g *Guard) cleanup(fss []Filesystem) {
+	dockerLow := false
+	for _, f := range fss {
+		if f.Level != LevelOK && slices.Contains(f.Roles, RoleDocker) {
+			dockerLow = true
+		}
+	}
+	if dockerLow {
+		g.cleanupDocker()
+	}
+	if f, ok := g.holding(fss, g.paths.journal); ok && f.Level != LevelOK {
+		g.run("journalctl", "--vacuum-size=100M")
+	}
+	if f, ok := g.holding(fss, g.paths.aptCache); ok && f.Level != LevelOK {
+		if _, err := g.lookPath("apt-get"); err == nil {
+			g.run("apt-get", "clean")
+		}
+	}
+	if f, ok := g.holding(fss, g.paths.logs); ok && f.Level == LevelEmergency {
+		g.removeRotatedLogs(g.paths.logs)
+	}
+	if f, ok := g.holding(fss, g.paths.coredumps); ok && f.Level == LevelEmergency {
+		g.removeCoreDumps(g.paths.coredumps)
+	}
+}
+
+// cleanupDocker runs the steps that free a filesystem holding Docker's data.
+func (g *Guard) cleanupDocker() {
 	// Registry blobs of removed/superseded apps are often the largest
 	// reclaimable block on an appliance, and outside this path they wait on
 	// the registry's debounced sweep. First: it needs no Docker daemon (which
@@ -304,10 +516,6 @@ func (g *Guard) safeCleanup() {
 		}()
 		g.pruneOrphanedVolumes()
 		g.reclaimSupersededAppImages()
-	}
-	g.run("journalctl", "--vacuum-size=100M")
-	if _, err := exec.LookPath("apt-get"); err == nil {
-		g.run("apt-get", "clean")
 	}
 	g.truncateOversizedLogs()
 }
@@ -639,9 +847,13 @@ func (g *Guard) truncateOversizedLogs() {
 func (g *Guard) run(name string, args ...string) {
 	ctx, cancel := context.WithTimeout(context.Background(), cmdTimeout)
 	defer cancel()
-	if err := exec.CommandContext(ctx, name, args...).Run(); err != nil { //nolint:gosec // G204: fixed system commands (systemctl/journalctl) chosen by the agent
+	if err := g.runCmd(ctx, name, args...); err != nil {
 		log.Warn().Err(err).Str("cmd", name).Msg("diskguard: command failed")
 	}
+}
+
+func runCommand(ctx context.Context, name string, args ...string) error {
+	return exec.CommandContext(ctx, name, args...).Run() //nolint:gosec // G204: fixed system commands (journalctl/apt-get) chosen by the agent
 }
 
 // EnsurePreventionConfig caps Docker container logs and the systemd journal so

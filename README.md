@@ -32,6 +32,7 @@ running in containers on the device and retrieve their result and logs.
     - [Versioning](#versioning)
     - [Local build/publish (fallback)](#local-buildpublish-fallback)
   - [Implementation](#implementation)
+    - [Disk guard](#disk-guard)
     - [WAMP](#wamp)
       - [References](#references)
     - [Docker](#docker)
@@ -611,6 +612,95 @@ IronFlock/flockos). Other devices keep the ReswarmOS files
   the booted slot good (RAUC `Mark("good", "booted")`). It does this in the
   background, bounded to 30 s, and only logs a failure. A slot that never gets
   there stays unmarked, and the bootloader falls back to the previous one.
+
+### Disk guard
+
+A full disk takes a device offline, and not only Docker's: the root filesystem
+fills up with logs as easily. The disk guard (`src/diskguard`) watches every
+filesystem the device depends on, cleans up before one fills, and puts the
+device into its disk-emergency mode while one is nearly full. On Linux:
+
+- **What it watches:** the filesystems that hold `/`, Docker's data-root, the
+  agent's folder, `/var/log` and `/var/log/journal`, and `/data`, `/boot/efi`
+  and `/var/lib/docker` when they are mounts of their own. There is one entry
+  per device (`st_dev`). Read-only and pseudo filesystems (proc, sysfs, tmpfs
+  and the like) are left out. Each entry names its roles: `root`, `docker`,
+  `agent`, `data`, `boot`, `logs`, `journal`. On FlockOS these are the ESP
+  `/boot/efi` (`boot`), the root slot `/` (`root`, `logs`) and `/data`
+  (`data`, `journal`, `docker`, `agent`).
+- **Levels:** each filesystem is `ok`, `warn` or `emergency`.
+  - **App space**, a filesystem with the role `docker`, `agent` or `data` (on
+    FlockOS `/data`, on a single-disk host `/`), is at `warn` below 3 GiB free
+    and at `emergency` below 1 GiB, whatever its size. When the apps run out
+    of room does not depend on how big the disk is. App space smaller than
+    that is at `warn` or `emergency` from the start: there is too little room
+    for apps.
+  - **A system filesystem**, one without these roles (a root slot without app
+    data, the ESP, a separate `/var/log`), is at `warn` below
+    `min(3 GiB, 15 % of its size)` free and at `emergency` below
+    `min(1 GiB, 5 % of its size)`, but these floors never go below 8 MiB and
+    2 MiB.
+
+  A filesystem with inodes is also at `warn` below 10 % free inodes and at
+  `emergency` below 3 %. An emergency clears only when the filesystem is back
+  at its warn floor.
+
+  | Filesystem                      | `warn` below | `emergency` below |
+  |---------------------------------|--------------|-------------------|
+  | App space, any size             | 3 GiB        | 1 GiB             |
+  | System, 20 GiB and larger       | 3 GiB        | 1 GiB             |
+  | System: 8 GiB root slot         | 1.2 GiB      | 410 MiB           |
+  | System: 4 GiB root slot         | 614 MiB      | 205 MiB           |
+  | System: 256 MiB ESP             | 38 MiB       | 13 MiB            |
+
+- **Disk emergency:** while a filesystem that apps can fill (one with the role
+  `root`, `data`, `docker` or `agent`) is at `emergency`, the state machine
+  refuses to start, build or download apps, the guard stops every container
+  outside the `ironflock-appliance` stack, and the heartbeat reports
+  `EMERGENCY` instead of `CONNECTED`. The log names the filesystems that caused
+  it. When every one of them has recovered, the apps get their requested
+  states back. A filesystem with only the roles `boot`, `logs` or `journal`
+  (the ESP, a separate `/var/log` on zram or log2ram) does not cause it:
+  stopping apps would not free it. Its level is still reported (also
+  `emergency`, and in `disk_level`), and its cleanup still runs.
+- **Cleanup, aimed at what is low:**
+  - a filesystem with the `docker` role: the registry garbage collection
+    (appliances), dangling images, the build cache, orphaned volumes,
+    superseded app images of an on-box registry, container logs over 50 MiB;
+  - the journal's filesystem: `journalctl --vacuum-size=100M`;
+  - the filesystem of `/var/cache/apt`: `apt-get clean`;
+  - at `emergency` only: the rotated log archives under `/var/log` (`*.gz`,
+    `*.[0-9]`, `*.[0-9].gz`, `*.old`) and the core dumps in
+    `/var/lib/systemd/coredump`.
+
+  Active logs and other files are never removed. Every step has a deadline,
+  and the log says what it freed. Below `emergency` it cleans at most every
+  5 minutes; in an emergency, at every check.
+- **Checks:** every 5 minutes, every 30 seconds while a filesystem is at
+  `warn`, every 5 seconds in an emergency. A heartbeat that finds a
+  filesystem worse off starts a check at once. At start the agent checks
+  before it starts any app (for at most 30 seconds, without cleanup).
+- **Prevention:** at start the agent caps Docker's container logs
+  (`daemon.json` `log-opts`) and the journal (`SystemMaxUse=200M`).
+- **Report:** the heartbeat's `stats` and `get_storage_data` carry
+  `filesystems` and `disk_level`, the worst level. The platform warns users
+  from them. `storage_*` and `docker_apps_*` are unchanged. A FlockOS device:
+
+  ```json
+  "disk_level": "ok",
+  "filesystems": [
+    {"mount": "/", "roles": ["root", "logs"], "total": 4127195136, "used": 2348810240, "free": 1564475392,
+     "inodes_total": 262144, "inodes_free": 201305, "warn_free": 619079270, "emergency_free": 206359756, "level": "ok"},
+    {"mount": "/data", "roles": ["data", "journal", "docker", "agent"], "total": 61202034688, "used": 18253611008, "free": 39823437824,
+     "inodes_total": 3825664, "inodes_free": 3712000, "warn_free": 3221225472, "emergency_free": 1073741824, "level": "ok"},
+    {"mount": "/boot/efi", "roles": ["boot"], "total": 267386880, "used": 12582912, "free": 254803968,
+     "inodes_total": 0, "inodes_free": 0, "warn_free": 40108032, "emergency_free": 13369344, "level": "ok"}
+  ]
+  ```
+
+On Windows and macOS the guard only reports: `filesystems` and `disk_level`
+show the system drive (macOS: the data volume) and the agent's folder. There is
+no cleanup and no disk emergency there.
 
 ### WAMP
 

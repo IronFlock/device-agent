@@ -3,8 +3,10 @@ package api
 import (
 	"context"
 	"errors"
+	"maps"
 	"path/filepath"
 	"reagent/common"
+	"reagent/diskguard"
 	"reagent/errdefs"
 	"reagent/messenger"
 )
@@ -35,6 +37,8 @@ func (ex *External) getStorageDataHandler(ctx context.Context, response messenge
 		"docker_apps_free":    stats.DockerAppsFree,
 		"docker_apps_mounted": stats.DockerAppsMounted,
 	}
+	// filesystems and disk_level, as on the heartbeat (see diskguard.StatsFields).
+	maps.Copy(result, diskguard.StatsFields())
 
 	return &messenger.InvokeResult{
 		Arguments: []interface{}{result},

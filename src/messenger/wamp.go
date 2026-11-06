@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"math/rand"
 	"os"
 	"path/filepath"
@@ -1061,6 +1062,13 @@ func (s *WampSession) UpdateRemoteDeviceStatus(status DeviceStatus) error {
 		"docker_apps_free":    stats.DockerAppsFree,
 		"docker_apps_mounted": stats.DockerAppsMounted,
 	}
+
+	// Every watched filesystem with its level, and the worst of them
+	// (filesystems, disk_level; see diskguard.StatsFields): the platform warns
+	// users from them before the device has to enter its disk-emergency. Read
+	// from a snapshot whose refresh is bounded, so a hung statfs cannot hold
+	// up the heartbeat.
+	maps.Copy(statsDict, diskguard.StatsFields())
 
 	// Docker daemon health, probed live at send time so the payload is
 	// truthful even for outages nothing else has noticed yet (a hung daemon,

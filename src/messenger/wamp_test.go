@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"reagent/common"
+	"reagent/diskguard"
 	"reagent/errdefs"
 	"strings"
 	"sync"
@@ -562,6 +563,28 @@ func TestUpdateRemoteDeviceStatusPayload(t *testing.T) {
 		stats, ok := payload["stats"].(common.Dict)
 		require.True(t, ok)
 		assert.Equal(t, true, stats["docker_available"])
+	})
+
+	t.Run("carries the disk guard's filesystems and disk_level inside stats", func(t *testing.T) {
+		// A report-only guard on the real disk: reading only, nothing filled.
+		diskguard.New(nil, diskguard.Config{AgentDir: t.TempDir()})
+		session, mockClient := newSession(t)
+
+		require.NoError(t, session.UpdateRemoteDeviceStatus(CONNECTED))
+
+		stats, ok := payloadOf(t, mockClient)["stats"].(common.Dict)
+		require.True(t, ok)
+		filesystems, ok := stats["filesystems"].([]common.Dict)
+		require.True(t, ok, "stats must carry a filesystems list")
+		require.NotEmpty(t, filesystems, "the host has a writable disk")
+		for _, f := range filesystems {
+			assert.Contains(t, []any{"ok", "warn", "emergency"}, f["level"])
+		}
+		assert.Contains(t, []any{"ok", "warn", "emergency"}, stats["disk_level"])
+		// The fields the current platform reads stay as they were.
+		for _, key := range []string{"storage_total", "storage_used", "storage_free", "docker_apps_total", "docker_apps_used", "docker_apps_free", "docker_apps_mounted"} {
+			assert.Contains(t, stats, key)
+		}
 	})
 }
 

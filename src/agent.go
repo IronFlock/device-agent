@@ -378,12 +378,19 @@ func NewAgent(generalConfig *config.Config) (agent *Agent) {
 	}
 
 	// Disk-full guard: keep the device online and remotely reachable by capping
-	// the unbounded log sinks now and, as the disk runs low, reclaiming space
-	// safely and entering a disk-emergency state (see diskguard.IsEmergency) that
-	// stops non-platform containers and is reported to the cloud, while the state
-	// machine fails new RUNNING/BUILDING/DOWNLOADING transitions.
+	// the unbounded log sinks now and, as any of its filesystems (root, Docker's
+	// data-root, the agent's folder, /data, /boot/efi, the logs) runs low,
+	// reclaiming space safely; as one that apps can fill (root, /data, Docker's,
+	// the agent's) runs out, entering a disk-emergency state (see
+	// diskguard.IsEmergency) that stops non-platform containers and is reported
+	// to the cloud, while the state machine fails new RUNNING/BUILDING/DOWNLOADING
+	// transitions. The filesystems and their levels ride in the device stats.
 	var diskGuard *diskguard.Guard
-	if runtime.GOOS == "linux" {
+	if runtime.GOOS != "linux" {
+		// Elsewhere (Windows, macOS) the guard only reports, for the device
+		// stats: no emergency and no cleanup, whose steps are Linux-only.
+		diskguard.New(nil, diskguard.Config{AgentDir: cliArgs.AgentDir})
+	} else {
 		diskguard.EnsurePreventionConfig()
 		// Watch the daemon's actual data-root: on FlockOS it lives on the apps
 		// partition (e.g. /apps/docker), not the /var/lib/docker default.
@@ -397,6 +404,7 @@ func NewAgent(generalConfig *config.Config) (agent *Agent) {
 		cancelInfo()
 		diskGuard = diskguard.New(container, diskguard.Config{
 			DataRoot:       dataRoot,
+			AgentDir:       cliArgs.AgentDir,
 			AppsComposeDir: cliArgs.AppsComposeDir,
 			AppsBuildDir:   cliArgs.AppsBuildDir,
 			// Volumes of every locally known app (stopped included) are
@@ -456,6 +464,8 @@ func NewAgent(generalConfig *config.Config) (agent *Agent) {
 		// if the device boots disk-critical the emergency flag (and the app-start
 		// gate) is active before any container is started — and any containers
 		// Docker auto-restarted are stopped — instead of racing the Run loop.
+		// Bounded (CheckNow waits at most 30 s) and without cleanup, which the
+		// Run loop's first pass does right after.
 		diskGuard.CheckNow()
 		safe.Go(func() { diskGuard.Run(context.Background()) })
 	}
