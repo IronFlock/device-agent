@@ -9,6 +9,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"path"
 	"path/filepath"
@@ -23,6 +24,34 @@ const CacheDir = "/var/cache/flockos"
 
 // stallTimeout gives up a download that delivers no byte for this long.
 var stallTimeout = 60 * time.Second
+
+// BundleURL is where a device downloads the bundle of version: below its own
+// update base, at <base>/flockos/<version>/<file>, where <file> is the last
+// path segment of the catalog's url. The catalog's urls name the cloud copy
+// (instance-registry.ironflock.com/dl/flockos/<version>/<file>), and the
+// catalog is signed, so no mirror can rewrite them; a device behind an
+// appliance reaches only the appliance, whose mirror serves the same tree
+// next to the catalog it read. On the cloud the two urls are the same. Size
+// and SHA-256 still come from the signed catalog, so the host serving the
+// bytes does not matter to their integrity.
+func BundleURL(base, version string, b Bundle) (string, error) {
+	base = strings.TrimRight(base, "/")
+	if base == "" {
+		return "", errors.New("no update base to download the bundle from")
+	}
+	if !versionRe.MatchString(version) {
+		return "", fmt.Errorf("release version %q is not a version", version)
+	}
+	u, err := url.Parse(b.URL)
+	if err != nil {
+		return "", fmt.Errorf("bundle url %q: %w", b.URL, err)
+	}
+	name := path.Base(u.Path)
+	if !strings.HasSuffix(name, ".raucb") || name == ".raucb" || strings.ContainsAny(name, `\`) {
+		return "", fmt.Errorf("bundle url %q does not name a .raucb file", b.URL)
+	}
+	return base + "/flockos/" + version + "/" + name, nil
+}
 
 // Download fetches the bundle into dir: streamed to <name>.part, checked for
 // size and SHA-256, then renamed to <name>. Other bundles and partial

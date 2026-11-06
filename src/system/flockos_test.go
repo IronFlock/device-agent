@@ -17,10 +17,15 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// flockOSDevice sets the seams: a FlockOS device running version, a catalog
-// whose test channel offers 1.0.1 with the bundle at bundleURL, the cache in
-// a temporary directory, and RAUC replaced by install.
-func flockOSDevice(t *testing.T, version, bundleURL string, bundle []byte, install func(string, func(string, uint64)) error) *System {
+// cloudBundleURL is where the signed catalog says the bundle is: the cloud
+// copy, which a device downloads only when the cloud is its update base.
+const cloudBundleURL = "https://cloud.example/dl/flockos/1.0.1/flockos-amd64-efi-base-1.0.1.raucb"
+
+// flockOSDevice sets the seams: a FlockOS device running version whose update
+// base is base, a catalog there whose test channel offers 1.0.1 with the
+// bundle at cloudBundleURL, the cache in a temporary directory, and RAUC
+// replaced by install.
+func flockOSDevice(t *testing.T, version, base string, bundle []byte, install func(string, func(string, uint64)) error) *System {
 	t.Helper()
 	sum := sha256.Sum256(bundle)
 	catalog := osupdate.Catalog{
@@ -30,7 +35,7 @@ func flockOSDevice(t *testing.T, version, bundleURL string, bundle []byte, insta
 			"1.0.0": {Images: map[string]osupdate.Image{}},
 			"1.0.1": {BuildID: "20261130T141003Z-g5d6e7f8", MinAgent: "0.0.1", Images: map[string]osupdate.Image{
 				"flockos-amd64-efi-base": {Bundle: &osupdate.Bundle{
-					Artifact:   osupdate.Artifact{URL: bundleURL, SHA256: hex.EncodeToString(sum[:]), Size: int64(len(bundle))},
+					Artifact:   osupdate.Artifact{URL: cloudBundleURL, SHA256: hex.EncodeToString(sum[:]), Size: int64(len(bundle))},
 					Compatible: "flockos-amd64-efi-base",
 				}},
 			}},
@@ -50,7 +55,7 @@ func flockOSDevice(t *testing.T, version, bundleURL string, bundle []byte, insta
 		return osupdate.Running{ID: "flockos", ImageID: "flockos-amd64-efi-base", ImageVersion: version}, nil
 	}
 	fetchSmallC = func(url string) ([]byte, int, error) {
-		if url != "https://dl.example/flockos/manifest.json" {
+		if url != base+"/flockos/manifest.json" {
 			return nil, http.StatusNotFound, nil
 		}
 		return []byte("signed catalog"), http.StatusOK, nil
@@ -63,19 +68,27 @@ func flockOSDevice(t *testing.T, version, bundleURL string, bundle []byte, insta
 	}
 	cacheDir = t.TempDir()
 	installRauc = install
-	return &System{config: &config.Config{ReswarmConfig: &config.ReswarmConfig{Environment: "test", UpdateURL: "https://dl.example"}}}
+	return &System{config: &config.Config{ReswarmConfig: &config.ReswarmConfig{Environment: "test", UpdateURL: base}}}
 }
 
+// serve is an update base (an appliance's mirror) that serves the bundle at
+// <base>/flockos/1.0.1/<file> and nothing else.
 func serve(t *testing.T, body []byte) string {
 	t.Helper()
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { _, _ = w.Write(body) }))
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/flockos/1.0.1/flockos-amd64-efi-base-1.0.1.raucb" {
+			http.NotFound(w, r)
+			return
+		}
+		_, _ = w.Write(body)
+	}))
 	t.Cleanup(srv.Close)
-	return srv.URL + "/flockos/1.0.1/flockos-amd64-efi-base-1.0.1.raucb"
+	return srv.URL
 }
 
 func TestFlockOSOffer(t *testing.T) {
 	t.Run("the device's channel offers its release", func(t *testing.T) {
-		sys := flockOSDevice(t, "1.0.0", "https://dl.example/b.raucb", []byte("x"), nil)
+		sys := flockOSDevice(t, "1.0.0", "https://dl.example", []byte("x"), nil)
 		running, offer, err := sys.FlockOSOffer()
 		require.NoError(t, err)
 		assert.Equal(t, "1.0.0", running.ImageVersion)
@@ -85,7 +98,7 @@ func TestFlockOSOffer(t *testing.T) {
 	})
 
 	t.Run("not FlockOS", func(t *testing.T) {
-		sys := flockOSDevice(t, "1.0.0", "", nil, nil)
+		sys := flockOSDevice(t, "1.0.0", "https://dl.example", nil, nil)
 		readRunning = func() (osupdate.Running, error) { return osupdate.Running{ID: "debian"}, nil }
 		_, _, err := sys.FlockOSOffer()
 		assert.ErrorIs(t, err, ErrNotFlockOS)
@@ -93,7 +106,7 @@ func TestFlockOSOffer(t *testing.T) {
 	})
 
 	t.Run("a catalog that does not verify is refused", func(t *testing.T) {
-		sys := flockOSDevice(t, "1.0.0", "", nil, nil)
+		sys := flockOSDevice(t, "1.0.0", "https://dl.example", nil, nil)
 		fetchSmallC = func(string) ([]byte, int, error) { return []byte("forged"), http.StatusOK, nil }
 		_, _, err := sys.FlockOSOffer()
 		require.Error(t, err)
@@ -101,7 +114,7 @@ func TestFlockOSOffer(t *testing.T) {
 	})
 
 	t.Run("no catalog at the update base", func(t *testing.T) {
-		sys := flockOSDevice(t, "1.0.0", "", nil, nil)
+		sys := flockOSDevice(t, "1.0.0", "https://dl.example", nil, nil)
 		sys.config.ReswarmConfig.UpdateURL = "https://elsewhere.example"
 		_, _, err := sys.FlockOSOffer()
 		require.Error(t, err)

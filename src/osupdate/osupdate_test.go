@@ -368,3 +368,54 @@ func TestDownload(t *testing.T) {
 		assert.Less(t, time.Since(start), 5*time.Second)
 	})
 }
+
+func TestBundleURL(t *testing.T) {
+	b := Bundle{Artifact: Artifact{URL: "https://instance-registry.ironflock.com/dl/flockos/1.0.1/flockos-amd64-efi-base-1.0.1.raucb"}}
+
+	t.Run("below the device's update base, not the catalog's host", func(t *testing.T) {
+		got, err := BundleURL("http://appliance.lan:15002/dl", "1.0.1", b)
+		require.NoError(t, err)
+		assert.Equal(t, "http://appliance.lan:15002/dl/flockos/1.0.1/flockos-amd64-efi-base-1.0.1.raucb", got)
+	})
+
+	t.Run("on the cloud it is the catalog's url", func(t *testing.T) {
+		got, err := BundleURL("https://instance-registry.ironflock.com/dl/", "1.0.1", b)
+		require.NoError(t, err)
+		assert.Equal(t, b.URL, got)
+	})
+
+	t.Run("a query does not end up in the file name", func(t *testing.T) {
+		q := Bundle{Artifact: Artifact{URL: b.URL + "?x=1"}}
+		got, err := BundleURL("https://dl.example", "1.0.1", q)
+		require.NoError(t, err)
+		assert.Equal(t, "https://dl.example/flockos/1.0.1/flockos-amd64-efi-base-1.0.1.raucb", got)
+	})
+
+	for name, c := range map[string]struct {
+		base, version, url string
+	}{
+		"no update base":       {"", "1.0.1", b.URL},
+		"a version that walks": {"https://dl.example", "../1.0.1", b.URL},
+		"not a version":        {"https://dl.example", "latest", b.URL},
+		"not a bundle":         {"https://dl.example", "1.0.1", "https://cloud.example/dl/flockos/1.0.1/flockos.img.gz"},
+		"no file name":         {"https://dl.example", "1.0.1", "https://cloud.example/dl/flockos/1.0.1/.raucb"},
+	} {
+		t.Run(name+" is refused", func(t *testing.T) {
+			_, err := BundleURL(c.base, c.version, Bundle{Artifact: Artifact{URL: c.url}})
+			assert.Error(t, err)
+		})
+	}
+}
+
+func TestImageIDReport(t *testing.T) {
+	id, ok := ImageIDReport(Running{ID: "flockos", ImageID: "flockos-amd64-efi-base", ImageVersion: "1.0.0"}, nil)
+	assert.True(t, ok)
+	assert.Equal(t, "flockos-amd64-efi-base", id)
+
+	id, ok = ImageIDReport(Running{ID: "debian"}, nil)
+	assert.True(t, ok, "another OS is reported, so a reflashed device loses its image id")
+	assert.Empty(t, id)
+
+	_, ok = ImageIDReport(Running{}, os.ErrNotExist)
+	assert.False(t, ok, "no os-release (Windows): left out of the report")
+}

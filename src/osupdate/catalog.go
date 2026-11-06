@@ -87,6 +87,10 @@ type Catalog struct {
 
 var sha256Hex = regexp.MustCompile(`^[0-9a-f]{64}$`)
 
+// versionRe is a release version as the catalog schema has it: safe as a
+// path segment.
+var versionRe = regexp.MustCompile(`^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z.-]+)?$`)
+
 // OpenCatalog verifies a published catalog (the updatesig envelope) and
 // returns it with the id of the key that signed it.
 func OpenCatalog(data []byte) (Catalog, string, error) {
