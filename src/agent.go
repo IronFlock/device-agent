@@ -18,6 +18,7 @@ import (
 	"reagent/messenger"
 	"reagent/messenger/topics"
 	"reagent/network"
+	"reagent/osupdate"
 	"reagent/persistence"
 	"reagent/privilege"
 	"reagent/release"
@@ -280,6 +281,11 @@ func (agent *Agent) updateRemoteDevice() error {
 		"arch":          sysInfo.Arch,
 		"variant":       sysInfo.Variant,
 		"agent_version": release.GetVersion(),
+	}
+	// The FlockOS image the device runs: an appliance mirrors the OS updates
+	// of the images its devices run. A small file read, no blocking.
+	if imageID, ok := osupdate.ImageIDReport(osupdate.ReadRunning()); ok {
+		payload["os_image_id"] = imageID
 	}
 
 	_, err := agent.Messenger.Call(ctx, topics.UpdateDeviceArchitecture, []interface{}{payload}, nil, nil, nil)

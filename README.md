@@ -597,8 +597,16 @@ IronFlock/flockos). Other devices keep the ReswarmOS files
   - `slots`: `booted`, `primary`, and per slot `name`, `class`, `bootname`,
     `state`, `boot_status`, `bundle_version`, `installed`; or `slotsError`.
 - **`download_os_update`** streams the bundle to `/var/cache/flockos`, on
-  `/data`. It checks the size and SHA-256 the catalog names, publishes progress
-  on `download_os_update_progress`, and returns the bundle's path.
+  `/data`. It downloads it from the same update base as the catalog,
+  `<update base>/flockos/<version>/<file>` (`<file>` is the last part of the
+  bundle's `url` in the catalog, which names the cloud's copy): on the cloud
+  that is the same file, behind an IronFlock appliance its OS mirror. It checks
+  the size and SHA-256 the catalog names, publishes progress on
+  `download_os_update_progress`, and returns the bundle's path.
+- **The image id** (`IMAGE_ID` of os-release) goes to the platform with the
+  agent's startup report (`update_device_architecture`, `os_image_id`; `""` on
+  another OS, left out when os-release cannot be read). An appliance mirrors
+  the OS updates of the images its devices run.
 - **`install_os_update`** has RAUC install the downloaded bundle into the other
   slot, with progress on `install_os_update_progress`. RAUC checks the bundle's
   signature and compatible. Its errors are returned (they used to be logged

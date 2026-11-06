@@ -108,8 +108,14 @@ func (sys *System) DownloadFlockOSUpdate(ctx context.Context, progress func(file
 		log.Info().Msgf("FlockOS %s is downloaded already: %s", offer.Version, path)
 		return path, nil
 	}
-	log.Info().Msgf("downloading FlockOS %s (%s) from %s", offer.Version, offer.Channel, offer.Bundle.URL)
-	return osupdate.Download(ctx, offer.Bundle, cacheDir, progress)
+	// From the update base the catalog came from (an appliance's mirror, or
+	// the cloud), not from the cloud url the signed catalog names.
+	bundle := offer.Bundle
+	if bundle.URL, err = osupdate.BundleURL(sys.updateBaseURL(), offer.Version, offer.Bundle); err != nil {
+		return "", err
+	}
+	log.Info().Msgf("downloading FlockOS %s (%s) from %s", offer.Version, offer.Channel, bundle.URL)
+	return osupdate.Download(ctx, bundle, cacheDir, progress)
 }
 
 // InstallFlockOSUpdate installs the downloaded bundle of the offered

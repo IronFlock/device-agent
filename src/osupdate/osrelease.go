@@ -30,6 +30,21 @@ func (r Running) IsFlockOS() bool {
 	return r.ID == "flockos" && r.ImageID != "" && r.ImageVersion != ""
 }
 
+// ImageIDReport is what the agent reports to the platform as os_image_id
+// (ReadRunning's result): the IMAGE_ID of a FlockOS image, "" on any other
+// OS, and ok false when the os-release cannot be read (Windows), so that the
+// report leaves the key out and the platform keeps what it knows. An
+// appliance mirrors the bundles of the image ids its devices report.
+func ImageIDReport(r Running, err error) (id string, ok bool) {
+	if err != nil {
+		return "", false
+	}
+	if !r.IsFlockOS() {
+		return "", true
+	}
+	return r.ImageID, true
+}
+
 // osReleasePaths are read in order (os-release(5)).
 var osReleasePaths = []string{"/etc/os-release", "/usr/lib/os-release"}
 
