@@ -335,18 +335,19 @@ clean:
     rm -f src/embedded/frpc_binary
 
 # Promote a staged version to live: sign it (sign-release, which also seals
-# build/manifest-v2.json), republish the `latest` alias, then publish
-# version.txt, availableVersions.json and the signed manifest-v2.json.
+# build/manifest-v2.json), republish the `latest` alias and release-notes.json,
+# then publish version.txt, availableVersions.json and the signed
+# manifest-v2.json.
 # Releases are promoted by CI (`promote-ci`, release.yml). This is the
 # emergency promotion by hand (a rollback, a broken KMS), signed through
 # OpenBao (needs the production cluster).
-promote: sign-release publish-latest-alias publish-version publish-latestVersions
+promote: sign-release publish-latest-alias publish-release-notes publish-version publish-latestVersions
 
 # What release.yml's promote job runs after the tag's binaries are staged: sign
 # through Cloud KMS (identity agent-signer, KMS_CREDENTIALS) and publish
 # manifest-v2.json. manifest.json stays where the last `promote-bridge` put it.
 promote-ci:
-    SIGNER=kms MANIFESTS=manifest-v2.json {{just_executable()}} sign-release publish-latest-alias publish-version publish-latestVersions
+    SIGNER=kms MANIFESTS=manifest-v2.json {{just_executable()}} sign-release publish-latest-alias publish-release-notes publish-version publish-latestVersions
 
 # By hand, through OpenBao: re-sign the version availableVersions.json names
 # and move manifest.json (read by agents that trust only the OpenBao key, by
@@ -354,7 +355,7 @@ promote-ci:
 # and manifest-v2.json to it. First for the bridge release 1.3.5; again
 # whenever those readers should catch up (1.3.8).
 promote-bridge:
-    SIGNER=openbao MANIFESTS="manifest.json manifest-v2.json" {{just_executable()}} sign-release publish-latest-alias publish-version publish-latestVersions
+    SIGNER=openbao MANIFESTS="manifest.json manifest-v2.json" {{just_executable()}} sign-release publish-latest-alias publish-release-notes publish-version publish-latestVersions
 
 # Docs and manual (Windows) installs need a link that never goes stale — there is no installer
 # on Windows to resolve the channel versions for the user. Server-side copy, so the
@@ -390,6 +391,73 @@ agent-update-pubkeys:
 # Publish the binaries from the build folder
 publish:
     scripts/publish.sh
+
+# Release notes: release-notes/<version>.md, English Markdown for the people
+# who run devices, with the sections `## Security`, `## New`, `## Fixed` and
+# `## Changed`, in that order, each once, the empty ones left out (no heading
+# of its own: the emails name the version). Optional: the cloud emails a new
+# production version, with its notes, to the members of every project with a
+# device (the System emails of the profile), and only a version that has
+# notes; a version without them sends nothing, and the next email carries the
+# notes since the last one. Commit the file before `just release-patch`.
+# Checks every file, or the ones given.
+[positional-arguments]
+check-release-notes *FILES:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    shopt -s nullglob
+    files=("$@")
+    [ ${#files[@]} -gt 0 ] || files=(release-notes/*.md)
+    # None yet (bash 3.2 calls an empty array unbound).
+    [ ${#files[@]} -gt 0 ] || exit 0
+    rc=0
+    for f in "${files[@]}"; do
+        if ! [[ "$(basename "$f")" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.md$ ]]; then
+            echo "$f: the name must be <x.y.z>.md" >&2
+            rc=1
+            continue
+        fi
+        awk -v f="$f" '
+            BEGIN { order["Security"] = 1; order["New"] = 2; order["Fixed"] = 3; order["Changed"] = 4 }
+            function close_section() {
+                if (section != "" && !content) { print f ": section \"" section "\" is empty: leave it out"; bad = 1 }
+            }
+            /^#( |$)/ { print f ":" NR ": no level-1 heading (the emails name the version)"; bad = 1; next }
+            /^## / {
+                close_section()
+                h = $0; sub(/^##[ \t]+/, "", h); sub(/[ \t]+$/, "", h)
+                if (!(h in order)) { print f ":" NR ": unknown section \"" h "\" (Security, New, Fixed, Changed)"; bad = 1 }
+                else if (order[h] <= last) { print f ":" NR ": \"" h "\" twice or out of order (Security, New, Fixed, Changed)"; bad = 1 }
+                else last = order[h]
+                section = h; content = 0; next
+            }
+            /^[ \t]*$/ { next }
+            { if (section == "") { print f ":" NR ": text before the first section"; bad = 1 } else content = 1 }
+            END {
+                close_section()
+                if (last == 0 && !bad) { print f ": no section (Security, New, Fixed, Changed)"; bad = 1 }
+                exit bad
+            }' "$f" >&2 || rc=1
+    done
+    exit $rc
+
+# release-notes.json as promotion publishes it: { version: markdown } of every
+# version with release notes, {} without any.
+release-notes-json OUT="build/release-notes.json": check-release-notes
+    #!/usr/bin/env bash
+    set -euo pipefail
+    shopt -s nullglob
+    mkdir -p "$(dirname "{{OUT}}")"
+    for f in release-notes/*.md; do
+        jq -n --arg v "$(basename "$f" .md)" --rawfile n "$f" '{($v): $n}'
+    done | jq -s 'add // {}' > "{{OUT}}"
+    echo "==> {{OUT}}: $(jq length "{{OUT}}") version(s) with release notes"
+
+# Before the version files flip, so a version never goes live without its
+# notes (the cloud reads them next to availableVersions.json). Always
+# published, {} included: the bucket answers a missing object with 403.
+publish-release-notes: release-notes-json
+    gsutil -q -h "Cache-Control:public, max-age=0" cp build/release-notes.json gs://ironflock-downloads/device-agent/release-notes.json
 
 publish-version: sign-release
     gsutil -q -h "Cache-Control:public, max-age=0" cp "src/release/version.txt" gs://ironflock-downloads/device-agent/version.txt

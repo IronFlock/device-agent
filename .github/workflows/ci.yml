@@ -78,6 +78,8 @@ jobs:
       - uses: extractions/setup-just@53165ef7e734c5c07cb06b3c8e7b647c5aa16db3 # v4
         with:
           just-version: "1.59.0"
+      # The release notes' format (release-notes/*.md), here to save a runner.
+      - run: just check-release-notes
       - run: just build-frpc
       - name: integration suite (no race; self-skips frps/dbus)
         run: cd src && go test -tags integration -count=1 ./...
