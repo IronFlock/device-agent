@@ -7,6 +7,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"reagent/config"
@@ -185,4 +186,119 @@ func TestMarkFlockOSSlotGoodSkipsOtherSystems(t *testing.T) {
 	t.Cleanup(func() { readRunning = old })
 	readRunning = func() (osupdate.Running, error) { return osupdate.Running{ID: "debian"}, nil }
 	assert.NoError(t, MarkFlockOSSlotGood(context.Background()), "no RAUC is asked on a device that is not FlockOS")
+}
+
+// slotReads sets the seams of slotImage: the running image is 1.1.0, and a
+// slot's device holds the os-release in images (none: the read fails). It
+// returns the devices read, in order.
+func slotReads(t *testing.T, images map[string]string) *[]string {
+	t.Helper()
+	oldRead, oldRunning := readSlotOSRelease, readRunning
+	t.Cleanup(func() {
+		readSlotOSRelease, readRunning = oldRead, oldRunning
+		slotImages.Lock()
+		slotImages.m = map[string]slotImageEntry{}
+		slotImages.Unlock()
+	})
+	slotImages.Lock()
+	slotImages.m = map[string]slotImageEntry{}
+	slotImages.Unlock()
+	readRunning = func() (osupdate.Running, error) {
+		return osupdate.Running{ID: "flockos", ImageID: "flockos-amd64-efi-base", ImageVersion: "1.1.0", BuildID: "20261201T000000Z-gaaaaaaa"}, nil
+	}
+	var reads []string
+	readSlotOSRelease = func(_ context.Context, device string) ([]byte, error) {
+		reads = append(reads, device)
+		data, ok := images[device]
+		if !ok {
+			return nil, errors.New("Bad magic number in super-block")
+		}
+		return []byte(data), nil
+	}
+	return &reads
+}
+
+const flashedOSRelease = `NAME="FlockOS"
+ID=flockos
+IMAGE_ID=flockos-amd64-efi-base
+IMAGE_VERSION=1.0.0
+BUILD_ID=20261107T122204Z-gef21459
+`
+
+func TestSlotImage(t *testing.T) {
+	const devA, devB = "/dev/disk/by-partlabel/rootfs-a", "/dev/disk/by-partlabel/rootfs-b"
+
+	t.Run("the booted slot is the running image, its device is not read", func(t *testing.T) {
+		reads := slotReads(t, map[string]string{devA: flashedOSRelease})
+		slot := Slot{Name: "rootfs.1", Bootname: "B", State: "booted", BootStatus: "good", BundleVersion: "1.1.0"}
+		slotImage(context.Background(), &slot, "ext4", devB)
+		assert.Equal(t, "1.1.0", slot.ImageVersion)
+		assert.Equal(t, "20261201T000000Z-gaaaaaaa", slot.BuildID)
+		assert.Empty(t, *reads)
+	})
+
+	t.Run("a flashed slot RAUC has no version for is read from its device", func(t *testing.T) {
+		reads := slotReads(t, map[string]string{devA: flashedOSRelease})
+		slot := Slot{Name: "rootfs.0", Bootname: "A", State: "inactive", BootStatus: "good"}
+		slotImage(context.Background(), &slot, "ext4", devA)
+		assert.Equal(t, "1.0.0", slot.ImageVersion)
+		assert.Equal(t, "20261107T122204Z-gef21459", slot.BuildID)
+		assert.Equal(t, []string{devA}, *reads)
+	})
+
+	t.Run("read once while RAUC's status stays, again once an install changes it", func(t *testing.T) {
+		images := map[string]string{devA: flashedOSRelease}
+		reads := slotReads(t, images)
+		slot := func(status, installed, bundle string) Slot {
+			s := Slot{Name: "rootfs.0", Bootname: "A", State: "inactive", BootStatus: status, Installed: installed, BundleVersion: bundle}
+			slotImage(context.Background(), &s, "ext4", devA)
+			return s
+		}
+		assert.Equal(t, "1.0.0", slot("good", "", "").ImageVersion)
+		assert.Equal(t, "1.0.0", slot("good", "", "").ImageVersion)
+		assert.Len(t, *reads, 1, "the same status: the slot is not read again")
+
+		// An install marks the slot bad when it starts and leaves a new
+		// timestamp and bundle version when it ends.
+		images[devA] = strings.Replace(flashedOSRelease, "IMAGE_VERSION=1.0.0", "IMAGE_VERSION=1.2.0", 1)
+		assert.Equal(t, "1.2.0", slot("bad", "", "").ImageVersion)
+		assert.Equal(t, "1.2.0", slot("good", "2026-12-01T00:00:00Z", "1.2.0").ImageVersion)
+		assert.Len(t, *reads, 3)
+	})
+
+	t.Run("an empty slot has no version and is read again next time", func(t *testing.T) {
+		reads := slotReads(t, map[string]string{devA: ""})
+		for range 2 {
+			slot := Slot{Name: "rootfs.1", Bootname: "B", State: "inactive", BootStatus: "bad"}
+			slotImage(context.Background(), &slot, "ext4", devB)
+			assert.Empty(t, slot.ImageVersion, "no file system")
+			slot = Slot{Name: "rootfs.0", Bootname: "A", State: "inactive", BootStatus: "bad"}
+			slotImage(context.Background(), &slot, "ext4", devA)
+			assert.Empty(t, slot.ImageVersion, "a file system without an os-release")
+		}
+		assert.Equal(t, []string{devB, devA, devB, devA}, *reads)
+	})
+
+	t.Run("boot partitions, other file systems and other paths are not read", func(t *testing.T) {
+		reads := slotReads(t, map[string]string{devA: flashedOSRelease, "rootfs-a": flashedOSRelease})
+		boot := Slot{Name: "boot.0", State: "inactive", BootStatus: "good"}
+		slotImage(context.Background(), &boot, "vfat", "/dev/disk/by-partlabel/boot-a")
+		other := Slot{Name: "rootfs.0", Bootname: "A", State: "inactive"}
+		slotImage(context.Background(), &other, "squashfs", devA)
+		notDev := Slot{Name: "rootfs.0", Bootname: "A", State: "inactive"}
+		slotImage(context.Background(), &notDev, "ext4", "rootfs-a")
+		assert.Empty(t, boot.ImageVersion+other.ImageVersion+notDev.ImageVersion)
+		assert.Empty(t, *reads)
+	})
+}
+
+func TestCappedBuffer(t *testing.T) {
+	b := &cappedBuffer{max: 4}
+	n, err := b.Write([]byte("abc"))
+	assert.Equal(t, 3, n)
+	assert.NoError(t, err)
+	n, err = b.Write([]byte("defg"))
+	assert.Equal(t, 4, n, "the writer takes everything")
+	assert.NoError(t, err)
+	assert.Equal(t, "abcd", b.String())
 }
