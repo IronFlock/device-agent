@@ -595,7 +595,13 @@ IronFlock/flockos). Other devices keep the ReswarmOS files
   - `latestRelease`: `Name`, `Version`, `BuildTime`, `BuildID`, `Channel`,
     `UpdateAvailable`, or `Error`.
   - `slots`: `booted`, `primary`, and per slot `name`, `class`, `bootname`,
-    `state`, `boot_status`, `bundle_version`, `installed`; or `slotsError`.
+    `state`, `boot_status`, `bundle_version`, `installed`, `image_version`,
+    `build_id`; or `slotsError`. `bundle_version` is what RAUC installed into
+    the slot, so a slot written by flashing the image has none.
+    `image_version` and `build_id` are the image's own (`IMAGE_VERSION`,
+    `BUILD_ID` of its os-release): the running one for the booted slot, read
+    with `debugfs` for another root slot, without mounting it; empty for a
+    slot that holds no image.
 - **`download_os_update`** streams the bundle to `/var/cache/flockos`, on
   `/data`. It downloads it from the same update base as the catalog,
   `<update base>/flockos/<version>/<file>` (`<file>` is the last part of the

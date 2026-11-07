@@ -90,6 +90,7 @@ func (ex *External) flockOSRelease(ctx context.Context) *messenger.InvokeResult 
 			list = append(list, common.Dict{
 				"name": s.Name, "class": s.Class, "bootname": s.Bootname, "state": s.State,
 				"boot_status": s.BootStatus, "bundle_version": s.BundleVersion, "installed": s.Installed,
+				"image_version": s.ImageVersion, "build_id": s.BuildID,
 			})
 		}
 		result["slots"] = common.Dict{"booted": booted, "primary": primary, "slots": list}

@@ -83,7 +83,7 @@ func useFakeFlockOS(t *testing.T, flockOS bool, f *fakeFlockOS) {
 		}
 		return "rootfs.0", "rootfs.0", []system.Slot{
 			{Name: "rootfs.0", Class: "rootfs", Bootname: "A", State: "booted", BootStatus: "good", BundleVersion: "1.0.0"},
-			{Name: "rootfs.1", Class: "rootfs", Bootname: "B", State: "inactive", BootStatus: "good"},
+			{Name: "rootfs.1", Class: "rootfs", Bootname: "B", State: "inactive", BootStatus: "good", ImageVersion: "0.9.0", BuildID: "20261107T122204Z-gef21459"},
 		}, nil
 	}
 }
@@ -131,7 +131,12 @@ func TestGetOSReleaseOnFlockOS(t *testing.T) {
 		assert.Equal(t, true, latest["UpdateAvailable"])
 		slots := dict["slots"].(common.Dict)
 		assert.Equal(t, "rootfs.0", slots["booted"])
-		assert.Len(t, slots["slots"], 2)
+		require.Len(t, slots["slots"], 2)
+		// A flashed slot: no bundle version from RAUC, the image's own.
+		b := slots["slots"].([]common.Dict)[1]
+		assert.Equal(t, "", b["bundle_version"])
+		assert.Equal(t, "0.9.0", b["image_version"])
+		assert.Equal(t, "20261107T122204Z-gef21459", b["build_id"])
 	})
 
 	t.Run("a catalog or RAUC that fails leaves its error, not a failed call", func(t *testing.T) {

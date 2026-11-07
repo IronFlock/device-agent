@@ -1,13 +1,16 @@
 package system
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
 	"net/http"
+	"os/exec"
 	"reagent/filesystem"
 	"reagent/osupdate"
 	"reagent/release"
+	"strings"
 	"sync"
 	"time"
 
@@ -179,6 +182,12 @@ type Slot struct {
 	BootStatus    string // good, bad
 	BundleVersion string
 	Installed     string
+	// ImageVersion and BuildID are the IMAGE_VERSION and BUILD_ID of the
+	// image the root slot holds, from its os-release; "" when it holds none
+	// or it cannot be read. RAUC knows the version of what it installed
+	// only (BundleVersion): a slot written by flashing the image has none.
+	ImageVersion string
+	BuildID      string
 }
 
 // FlockOSSlots returns RAUC's slots and the names of the slot booted and
@@ -205,6 +214,7 @@ func FlockOSSlots(ctx context.Context) (booted string, primary string, slots []S
 		if slot.State == "booted" {
 			booted = slot.Name
 		}
+		slotImage(ctx, &slot, variantString(s.Status, "type"), variantString(s.Status, "device"))
 		slots = append(slots, slot)
 	}
 	// Not every bootloader backend reports the primary; the slots stand
@@ -214,6 +224,113 @@ func FlockOSSlots(ctx context.Context) (booted string, primary string, slots []S
 		primary = ""
 	}
 	return booted, primary, slots, nil
+}
+
+// --- The image a slot holds -------------------------------------------------
+
+// slotReadTimeout bounds the read of one slot's os-release.
+const slotReadTimeout = 5 * time.Second
+
+// slotOSReleasePath is where a FlockOS image keeps its os-release (FlockOS
+// build/customize.sh); /etc/os-release links to it.
+const slotOSReleasePath = "/usr/lib/os-release"
+
+// slotOSReleaseMax caps what is kept of a slot's os-release: a few hundred
+// bytes on every image.
+const slotOSReleaseMax = 64 << 10
+
+// readSlotOSRelease is a seam for the tests.
+var readSlotOSRelease = debugfsOSRelease
+
+// slotImages remembers per slot name the image read from it and the RAUC
+// status it was read at. A slot's content changes only when RAUC writes it,
+// and every install changes its status (marked bad when it starts, a new
+// installed timestamp when it ends), so the slot is read again then.
+var slotImages = struct {
+	sync.Mutex
+	m map[string]slotImageEntry
+}{m: map[string]slotImageEntry{}}
+
+type slotImageEntry struct {
+	at      string
+	running osupdate.Running
+}
+
+// slotImage fills in ImageVersion and BuildID of a root slot (one with a
+// bootname): for the booted slot from the running os-release, for another
+// ext4 slot from the os-release on its device. A slot that cannot be read
+// keeps them empty: the slot status stands without them.
+func slotImage(ctx context.Context, slot *Slot, fsType, device string) {
+	if slot.Bootname == "" {
+		return
+	}
+	if slot.State == "booted" {
+		if r, err := readRunning(); err == nil {
+			slot.ImageVersion, slot.BuildID = r.ImageVersion, r.BuildID
+		}
+		return
+	}
+	if fsType != "ext4" || !strings.HasPrefix(device, "/dev/") {
+		return
+	}
+	at := strings.Join([]string{device, slot.BootStatus, slot.Installed, slot.BundleVersion}, "\x00")
+	slotImages.Lock()
+	entry, ok := slotImages.m[slot.Name]
+	slotImages.Unlock()
+	if !ok || entry.at != at {
+		data, err := readSlotOSRelease(ctx, device)
+		if err != nil {
+			log.Debug().Err(err).Str("slot", slot.Name).Msg("could not read the slot's os-release")
+			return
+		}
+		fields := osupdate.ParseOSRelease(data)
+		entry = slotImageEntry{at: at, running: osupdate.Running{
+			ID: fields["ID"], ImageID: fields["IMAGE_ID"], ImageVersion: fields["IMAGE_VERSION"], BuildID: fields["BUILD_ID"],
+		}}
+		// An empty slot (a file system without the file, or none) has
+		// nothing to remember: it is read again next time.
+		if !entry.running.IsFlockOS() {
+			return
+		}
+		slotImages.Lock()
+		slotImages.m[slot.Name] = entry
+		slotImages.Unlock()
+	}
+	slot.ImageVersion, slot.BuildID = entry.running.ImageVersion, entry.running.BuildID
+}
+
+// debugfsOSRelease reads a slot's os-release straight from its ext4 device
+// with debugfs (e2fsprogs, on every FlockOS image), read-only and without
+// mounting it: a mounted slot would make RAUC refuse to install into it.
+func debugfsOSRelease(ctx context.Context, device string) ([]byte, error) {
+	ctx, cancel := context.WithTimeout(ctx, slotReadTimeout)
+	defer cancel()
+	out := &cappedBuffer{max: slotOSReleaseMax}
+	// -c opens the file system read-only without reading its bitmaps; the
+	// device comes from RAUC's system.conf.
+	cmd := exec.CommandContext(ctx, "debugfs", "-c", "-R", "cat "+slotOSReleasePath, device) //nolint:gosec // G204: fixed command, device from RAUC's slot status
+	cmd.Stdout = out
+	if err := cmd.Run(); err != nil {
+		return nil, fmt.Errorf("debugfs %s: %w", device, err)
+	}
+	return out.Bytes(), nil
+}
+
+// cappedBuffer keeps the first max bytes written to it and drops the rest.
+type cappedBuffer struct {
+	bytes.Buffer
+	max int
+}
+
+func (c *cappedBuffer) Write(p []byte) (int, error) {
+	if room := c.max - c.Len(); room > 0 {
+		if len(p) > room {
+			c.Buffer.Write(p[:room])
+		} else {
+			c.Buffer.Write(p)
+		}
+	}
+	return len(p), nil
 }
 
 func variantString(m map[string]dbus.Variant, key string) string {
