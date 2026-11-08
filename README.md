@@ -355,17 +355,20 @@ Building, publishing and promoting is done by **CI** (GitHub Actions), on the me
    Commit your own work first, with your own message — the release commit carries the version bump alone. This is the shared IronFlock release process; see [`REDeployments/docs/RELEASE.md`](../deployments/docs/RELEASE.md).
 
    **Release notes** (optional): `release-notes/<version>.md`, English Markdown for the people who run devices, with the sections `## Security`, `## New`, `## Fixed` and `## Changed` in that order, the empty ones left out, and no heading of its own (`just check-release-notes`; CI checks every file). Commit it before `just release-patch`. Promotion publishes all notes as `gs://ironflock-downloads/device-agent/release-notes.json` (`{version: markdown}`) before the version files flip, and the cloud emails a new production version with its notes to the members of every project with a device, unless they switched off the System emails in their profile. A version without notes (an internal change) sends no email; the next one with notes carries the notes since the last email.
-2. [`.github/workflows/release.yml`](.github/workflows/release.yml) then, for every entry in the [`targets`](targets) file: builds the binary, generates its CycloneDX SBOM (`just sbom-bin`: the modules from the binary's build info, and for every agent but the Windows one the frpc it embeds, with that frpc's modules), records a sigstore-signed **SBOM attestation** bound to the binary's digest, publishes the binary to `gs://ironflock-downloads/device-agent/<os>/<arch>/<version>/device-agent[.exe]` with the SBOM next to it as `device-agent[.exe].cdx.json`, and pushes the multi-arch agent images to Artifact Registry. This **stages** the version: the binaries exist, unsigned, and no agent updates to it yet.
+2. [`.github/workflows/release.yml`](.github/workflows/release.yml) then, for every entry in the [`targets`](targets) file: builds the binary, generates its CycloneDX SBOM (`just sbom-bin`: the modules from the binary's build info, and for every agent but the Windows one the frpc it embeds, with that frpc's modules), records sigstore-signed **SLSA build provenance** and a sigstore-signed **SBOM attestation**, both bound to the binary's digest (the Windows agent's after its Authenticode signature, so that they name the published bytes), publishes the binary to `gs://ironflock-downloads/device-agent/<os>/<arch>/<version>/device-agent[.exe]` with the SBOM next to it as `device-agent[.exe].cdx.json`, and pushes the multi-arch agent images to Artifact Registry. This **stages** the version: the binaries exist, unsigned, and no agent updates to it yet.
 3. Its `promote` job then signs and **promotes** the version (`just promote-ci`, see the next section): from this moment agents update to it. The channels are those in the merged `availableVersions.json`, which `just release-patch` sets to the new version.
 4. Last, the release GitHub App sets the tag `vX.Y.Z` on the merged commit: a tag means "released". A failed run can be re-run; a re-run after the tag does nothing.
 
 A manual run from the Actions tab (`workflow_dispatch`) is a dry run: it builds, but neither publishes nor promotes.
 
-Verify a published binary's provenance any time with:
+Verify a published binary any time. A published binary has two attestations, and `gh attestation verify` looks only for the SLSA build provenance unless `--predicate-type` names another one:
 ```Shell
-gh attestation verify device-agent-linux-amd64 --repo IronFlock/device-agent
-# up to v1.2.13 the build was named reagent-<os>-<arch>; up to v1.2.8 attested before the repo moved from RecordEvolution:
-gh attestation verify reagent-linux-amd64 --owner IronFlock --signer-repo RecordEvolution/DeviceManagementAgent
+gh attestation verify device-agent --repo IronFlock/device-agent
+gh attestation verify device-agent --repo IronFlock/device-agent --predicate-type https://cyclonedx.org/bom
+```
+Releases up to v1.6.4 have only the SBOM attestation: use the second command, the first returns HTTP 404. Their Windows agents do not verify at all, because the attestation names the bytes before Authenticode signing. Up to v1.2.13 the binary was named `reagent`. Releases up to v1.2.8 were attested before the repository moved from RecordEvolution:
+```Shell
+gh attestation verify reagent --owner RecordEvolution --signer-repo RecordEvolution/DeviceManagementAgent --predicate-type https://cyclonedx.org/bom
 ```
 
 ### Promote a version

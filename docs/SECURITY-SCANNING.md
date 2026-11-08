@@ -96,22 +96,35 @@ to the Security tab (code scanning), without the vulnerabilities `security/vex.o
 accepts: the tab and the report agree, and an upload without findings closes the alerts
 of earlier scans. Nothing is dismissed by hand there; the VEX file is the record.
 
-## Signed SBOM attestation (release provenance)
+## Signed build provenance and SBOM attestations
 
-The **release** workflow (`.github/workflows/release.yml`, tag `vX.Y.Z` / manual) attests
-**the exact binaries it publishes**. For every target it builds the binary, generates a
-per-binary CycloneDX SBOM (`just sbom-bin`), records a **sigstore-signed SBOM attestation**
-bound to the binary's digest (`actions/attest-sbom`), and then publishes that same binary to
-`gs://ironflock-downloads/device-agent`. No GHAS required. Verify any published binary with:
+The **release** workflow (`.github/workflows/release.yml`, on the merge of a release pull
+request) attests **the exact agent binaries it publishes**. For every target it builds the
+binary, generates a per-binary CycloneDX SBOM (`just sbom-bin`), records **sigstore-signed
+SLSA build provenance** and a **sigstore-signed SBOM attestation**, both bound to the
+binary's digest (`actions/attest`), and then publishes that same binary to
+`gs://ironflock-downloads/device-agent`. The Windows agent is attested in the `publish` job,
+after its Authenticode signature, which changes its bytes. No GHAS required.
+
+The provenance is SLSA Build Level 2: the build runs on a hosted platform and the
+provenance is signed, but the attesting step shares a job with the build. A published binary has two attestations, and `gh attestation verify` looks only for the SLSA build provenance unless `--predicate-type` names another one:
 
 ```bash
-gh attestation verify device-agent-linux-amd64 --repo IronFlock/device-agent   # reagent-linux-amd64 up to v1.2.13
-# releases up to v1.2.8 were attested before the repo moved from RecordEvolution:
-gh attestation verify reagent-linux-amd64 --owner IronFlock --signer-repo RecordEvolution/DeviceManagementAgent
+gh attestation verify device-agent --repo IronFlock/device-agent
+gh attestation verify device-agent --repo IronFlock/device-agent --predicate-type https://cyclonedx.org/bom
+```
+
+Releases up to v1.6.4 have only the SBOM attestation: use the second command, the first returns HTTP 404. Their Windows agents do not verify at all, because the attestation names the bytes before Authenticode signing. Up to v1.2.13 the binary was named `reagent`. Releases up to v1.2.8 were attested before the repository moved from RecordEvolution:
+
+```bash
+gh attestation verify reagent --owner RecordEvolution --signer-repo RecordEvolution/DeviceManagementAgent --predicate-type https://cyclonedx.org/bom
 ```
 
 Because CI both attests and publishes the same bytes, the attestation matches what ships —
-as long as releases go through CI (tag push) rather than a local `just rollout`.
+as long as releases go through CI (the merge of a release pull request) rather than a local
+`just rollout`. The Windows frpc has no attestation: a release uploads it only when
+`FRP_VERSION` changes and otherwise keeps the signed object already in the bucket, so the
+bytes a release builds are usually not the bytes that ship.
 
 ## Remediation status
 

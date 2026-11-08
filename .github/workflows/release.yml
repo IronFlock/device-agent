@@ -1,5 +1,6 @@
 # Build + publish the device agent (binaries to GCS, multi-arch images to
-# Artifact Registry) and record a signed SBOM attestation per binary.
+# Artifact Registry) and record signed SLSA provenance and a signed SBOM
+# attestation per binary.
 #
 # The binaries are staged WITHOUT the Ed25519 signature (.sig) agents require
 # before installing an update or frpc. GitHub holds no signing material: the
@@ -42,7 +43,7 @@ on:
 permissions:
   contents: read
   id-token: write # WIF (GCP) + sigstore attestation signing
-  attestations: write # store the SBOM attestations
+  attestations: write # store the provenance and SBOM attestations
 
 concurrency:
   group: release-${{ github.ref }}
@@ -144,9 +145,17 @@ jobs:
           BIN: ${{ steps.bin.outputs.name }}
         run: just sbom-bin "build/$BIN"
 
-      - name: Attest SBOM (sigstore-signed, bound to the binary digest)
+      # An attestation names the binary's digest. Authenticode signing changes
+      # the bytes of the Windows agent, so `publish` attests that one, signed.
+      - name: Attest build provenance (SLSA, sigstore-signed, bound to the binary digest)
         # Only a release run publishes; a pull request or manual run is a dry run.
-        if: needs.verify.outputs.mode == 'release'
+        if: needs.verify.outputs.mode == 'release' && !startsWith(matrix.target, 'windows/')
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-path: build/${{ steps.bin.outputs.name }}
+
+      - name: Attest SBOM (sigstore-signed, bound to the binary digest)
+        if: needs.verify.outputs.mode == 'release' && !startsWith(matrix.target, 'windows/')
         uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
         with:
           subject-path: build/${{ steps.bin.outputs.name }}
@@ -174,6 +183,7 @@ jobs:
     permissions:
       contents: read
       id-token: write
+      attestations: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -256,6 +266,21 @@ jobs:
       # the dry run's throwaway root in a dry run).
       - name: Signed binaries pass the agents' Authenticode check
         run: just codesign-check build/device-agent-windows-amd64 build/frpc-windows-amd64
+
+      # The attestations of the Windows agent, on the signed bytes that agents
+      # download (see `build`). The Windows frpc has none: a release uploads it
+      # only when FRP_VERSION changes, so the bytes built here rarely ship.
+      - name: Attest build provenance of the signed Windows agent
+        if: needs.verify.outputs.mode == 'release'
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-path: build/device-agent-windows-amd64
+      - name: Attest SBOM of the signed Windows agent
+        if: needs.verify.outputs.mode == 'release'
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-path: build/device-agent-windows-amd64
+          sbom-path: build/device-agent-windows-amd64.cdx.json
 
       - name: Publish agent binaries to gs://ironflock-downloads/device-agent
         # Only a release run publishes; a pull request or manual run is a dry run.
