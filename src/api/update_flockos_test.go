@@ -11,6 +11,7 @@ import (
 	"reagent/errdefs"
 	"reagent/filesystem"
 	"reagent/messenger"
+	"reagent/messenger/topics"
 	"reagent/osupdate"
 	"reagent/system"
 	"reagent/testutil/fakes"
@@ -26,6 +27,7 @@ type fakeFlockOS struct {
 	downloadErr error
 	installErr  error
 	slotsErr    error
+	runningErr  error
 	steps       []string
 	rebooted    chan struct{}
 }
@@ -40,14 +42,24 @@ func useFakeFlockOS(t *testing.T, flockOS bool, f *fakeFlockOS) {
 		install  func(*system.System, func(string, uint64)) error
 		reboot   func(*system.System) error
 		slots    func(context.Context) (string, string, []system.Slot, error)
+		running  func() (osupdate.Running, error)
 		delay    time.Duration
-	}{runsFlockOS, flockOSOffer, downloadFlockOS, installFlockOS, rebootSystem, flockOSSlots, rebootDelay}
+	}{runsFlockOS, flockOSOffer, downloadFlockOS, installFlockOS, rebootSystem, flockOSSlots, readRunning, rebootDelay}
 	t.Cleanup(func() {
 		runsFlockOS, flockOSOffer, downloadFlockOS, installFlockOS = old.runs, old.offer, old.download, old.install
-		rebootSystem, flockOSSlots, rebootDelay = old.reboot, old.slots, old.delay
+		rebootSystem, flockOSSlots, readRunning, rebootDelay = old.reboot, old.slots, old.running, old.delay
 	})
 	rebootDelay = 0
 	runsFlockOS = func() bool { return flockOS }
+	readRunning = func() (osupdate.Running, error) {
+		if f.runningErr != nil {
+			return osupdate.Running{}, f.runningErr
+		}
+		if !flockOS {
+			return osupdate.Running{ID: "debian"}, nil
+		}
+		return osupdate.Running{ID: "flockos", ImageID: "flockos-amd64-efi-base", ImageVersion: "1.0.0", BuildID: "20261120T095512Z-g1a2b3c4"}, nil
+	}
 	flockOSOffer = func(*system.System) (osupdate.Running, osupdate.Offer, error) {
 		running := osupdate.Running{ID: "flockos", ImageID: "flockos-amd64-efi-base", ImageVersion: "1.0.0", BuildID: "20261120T095512Z-g1a2b3c4"}
 		if f.offerErr != nil {
@@ -105,7 +117,17 @@ func flockOSExternal(t *testing.T) (*External, *fakes.Messenger) {
 	logs := fakes.NewMessenger()
 	cfg := testConfig()
 	cfg.ReswarmConfig.SerialNumber = "SER-1"
-	return &External{Config: cfg, Privilege: priv(t, true), LogMessenger: logs, System: &system.System{}}, logs
+	return &External{Config: cfg, Privilege: priv(t, true), Messenger: fakes.NewMessenger(), LogMessenger: logs, System: &system.System{}}, logs
+}
+
+// reportedOSRelease waits for the report the agent sends in the background.
+func reportedOSRelease(t *testing.T, ex *External) common.Dict {
+	t.Helper()
+	m := ex.Messenger.(*fakes.Messenger)
+	require.Eventually(t, func() bool { return len(m.GetCallCalls()) > 0 }, 2*time.Second, 5*time.Millisecond)
+	call := m.GetCallCalls()[0]
+	assert.Equal(t, topics.UpdateDeviceArchitecture, call.Topic)
+	return call.Args[0].(common.Dict)["os_release"].(common.Dict)
 }
 
 func TestBuildTime(t *testing.T) {
@@ -151,6 +173,69 @@ func TestGetOSReleaseOnFlockOS(t *testing.T) {
 	})
 }
 
+func TestOSReleaseReport(t *testing.T) {
+	t.Run("FlockOS: the running image and the slots, no release offered", func(t *testing.T) {
+		useFakeFlockOS(t, true, &fakeFlockOS{offerErr: errors.New("must not be asked")})
+		report, ok := OSReleaseReport(context.Background())
+		require.True(t, ok)
+		assert.Equal(t, "1.0.0", report["currentRelease"].(common.Dict)["Version"])
+		assert.Equal(t, "flockos-amd64-efi-base", report["currentRelease"].(common.Dict)["ImageID"])
+		assert.Equal(t, "rootfs.0", report["slots"].(common.Dict)["booted"])
+		require.Len(t, report["slots"].(common.Dict)["slots"], 2)
+		assert.NotContains(t, report, "latestRelease")
+	})
+
+	t.Run("RAUC that fails leaves its error beside the running image", func(t *testing.T) {
+		useFakeFlockOS(t, true, &fakeFlockOS{slotsErr: errors.New("no RAUC")})
+		report, ok := OSReleaseReport(context.Background())
+		require.True(t, ok)
+		assert.Equal(t, "1.0.0", report["currentRelease"].(common.Dict)["Version"])
+		assert.Contains(t, report["slotsError"], "no RAUC")
+		assert.NotContains(t, report, "slots")
+	})
+
+	t.Run("another OS reports nothing to show, which clears what was known", func(t *testing.T) {
+		useFakeFlockOS(t, false, &fakeFlockOS{})
+		report, ok := OSReleaseReport(context.Background())
+		require.True(t, ok)
+		assert.Empty(t, report)
+	})
+
+	t.Run("no os-release (Windows) leaves the report out", func(t *testing.T) {
+		useFakeFlockOS(t, true, &fakeFlockOS{runningErr: errors.New("no such file")})
+		_, ok := OSReleaseReport(context.Background())
+		assert.False(t, ok)
+	})
+}
+
+func TestFailedInstallReportsTheSlots(t *testing.T) {
+	t.Run("perform_os_update", func(t *testing.T) {
+		useFakeFlockOS(t, true, &fakeFlockOS{installErr: errors.New("RAUC: signature verification failed")})
+		ex, _ := flockOSExternal(t)
+		_, err := ex.performOSUpdateHandler(context.Background(), messenger.Result{Details: systemDetails()})
+		require.Error(t, err)
+		report := reportedOSRelease(t, ex)
+		assert.Equal(t, "rootfs.0", report["slots"].(common.Dict)["booted"])
+	})
+
+	t.Run("install_os_update", func(t *testing.T) {
+		useFakeFlockOS(t, true, &fakeFlockOS{installErr: errors.New("RAUC: Compatible mismatch")})
+		ex, _ := flockOSExternal(t)
+		_, err := ex.installOSUpdateHandler(context.Background(), messenger.Result{Details: systemDetails()})
+		require.Error(t, err)
+		reportedOSRelease(t, ex)
+	})
+
+	t.Run("a failed download changes no slot and reports nothing", func(t *testing.T) {
+		useFakeFlockOS(t, true, &fakeFlockOS{downloadErr: errors.New("no network")})
+		ex, _ := flockOSExternal(t)
+		_, err := ex.performOSUpdateHandler(context.Background(), messenger.Result{Details: systemDetails()})
+		require.Error(t, err)
+		time.Sleep(20 * time.Millisecond)
+		assert.Empty(t, ex.Messenger.(*fakes.Messenger).GetCallCalls())
+	})
+}
+
 func TestDownloadAndInstallOnFlockOS(t *testing.T) {
 	t.Run("download returns the bundle's path, with progress", func(t *testing.T) {
 		useFakeFlockOS(t, true, &fakeFlockOS{})
@@ -167,6 +252,7 @@ func TestDownloadAndInstallOnFlockOS(t *testing.T) {
 		_, err := ex.installOSUpdateHandler(context.Background(), messenger.Result{Details: systemDetails()})
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "Compatible mismatch")
+		reportedOSRelease(t, ex)
 	})
 }
 
@@ -198,6 +284,7 @@ func TestPerformOSUpdate(t *testing.T) {
 		ex, _ := flockOSExternal(t)
 		_, err := ex.performOSUpdateHandler(context.Background(), messenger.Result{Details: systemDetails()})
 		require.Error(t, err)
+		reportedOSRelease(t, ex)
 		time.Sleep(50 * time.Millisecond)
 		assert.Equal(t, []string{"download", "install"}, f.done())
 	})
