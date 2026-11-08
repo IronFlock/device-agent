@@ -8,7 +8,6 @@ import (
 	"reagent/api"
 	"reagent/apps"
 	"reagent/benchmark"
-	"reagent/common"
 	"reagent/config"
 	"reagent/container"
 	"reagent/diskguard"
@@ -18,10 +17,8 @@ import (
 	"reagent/messenger"
 	"reagent/messenger/topics"
 	"reagent/network"
-	"reagent/osupdate"
 	"reagent/persistence"
 	"reagent/privilege"
-	"reagent/release"
 	"reagent/safe"
 	"reagent/store"
 	"reagent/system"
@@ -201,8 +198,12 @@ func (agent *Agent) OnConnect(reconnect bool) error {
 	// Docker runs, so the slot this device booted is good. A slot that never
 	// gets here stays unmarked and the bootloader falls back to the previous
 	// one. In the background, bounded, logged: it never holds up the rest of
-	// the connect. Not FlockOS: nothing to do.
-	safe.Go(system.MarkFlockOSSlotGoodNow)
+	// the connect. Not FlockOS: nothing to do. The report follows the mark, so
+	// that the booted slot is reported as confirmed.
+	safe.Go(func() {
+		system.MarkFlockOSSlotGoodNow()
+		agent.External.ReportOSRelease()
+	})
 
 	// Step 1: Fetch requested app states from backend
 	log.Info().Msg("Fetching requested app states from backend...")
@@ -269,31 +270,8 @@ func (agent *Agent) OnConnect(reconnect bool) error {
 }
 
 func (agent *Agent) updateRemoteDevice() error {
-	config := agent.Config
-	ctx := context.Background()
-
-	sysInfo := release.GetSystemInfo()
-	payload := common.Dict{
-		"swarm_key":     config.ReswarmConfig.SwarmKey,
-		"device_key":    config.ReswarmConfig.DeviceKey,
-		"architecture":  sysInfo.Arch + sysInfo.Variant,
-		"os":            sysInfo.DetailedOS,
-		"arch":          sysInfo.Arch,
-		"variant":       sysInfo.Variant,
-		"agent_version": release.GetVersion(),
-	}
-	// The FlockOS image the device runs: an appliance mirrors the OS updates
-	// of the images its devices run. A small file read, no blocking.
-	if imageID, ok := osupdate.ImageIDReport(osupdate.ReadRunning()); ok {
-		payload["os_image_id"] = imageID
-	}
-
-	_, err := agent.Messenger.Call(ctx, topics.UpdateDeviceArchitecture, []interface{}{payload}, nil, nil, nil)
-	if err != nil {
-		return err
-	}
-
-	return nil
+	_, err := agent.Messenger.Call(context.Background(), topics.UpdateDeviceArchitecture, []interface{}{agent.External.DeviceReport()}, nil, nil, nil)
+	return err
 }
 
 // ensureAppCABundle refreshes the CA bundle app containers verify TLS against.

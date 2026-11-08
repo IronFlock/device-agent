@@ -10,6 +10,7 @@ import (
 	"reagent/filesystem"
 	"reagent/messenger"
 	"reagent/messenger/topics"
+	"reagent/safe"
 	"reagent/system"
 	"strings"
 )
@@ -157,6 +158,8 @@ func (ex *External) installOSUpdateHandler(ctx context.Context, response messeng
 
 	if runsFlockOS() {
 		if err := installFlockOS(ex.System, progressCallback); err != nil {
+			// RAUC marked the slot bad when it started, and nothing reconnects.
+			safe.Go(ex.ReportOSRelease)
 			return nil, err
 		}
 		return &messenger.InvokeResult{}, nil
