@@ -1,9 +1,9 @@
-// Package firmware reads the device's firmware inventory from fwupd, over its
-// D-Bus API (org.freedesktop.fwupd on the system bus). Read-only: FlockOS
-// ships boot firmware with its OS releases, and component firmware through
-// fwupd starts as an inventory the platform shows (FlockOS ADR-0009). Nothing
-// here runs before the connection: Read is called per request, opens its own
-// bus connection and gives up after its context's deadline.
+// Package firmware talks to fwupd over its D-Bus API (org.freedesktop.fwupd on
+// the system bus): the device's firmware inventory, the updates offered for it
+// and their installation (FlockOS ADR-0007, lane 3). FlockOS ships boot firmware
+// with its OS releases; this is component firmware. Nothing here runs before
+// the connection: each call opens its own bus connection and gives up after
+// its context's deadline.
 package firmware
 
 import (
@@ -46,6 +46,8 @@ type Device struct {
 	Flags             []string
 	UpdateState       string
 	UpdateError       string
+	// Update is the newest version fwupd offers, from Snapshot.
+	Update *Release
 }
 
 // Inventory is what fwupd reports for the whole device.
@@ -54,6 +56,8 @@ type Inventory struct {
 	HostVendor   string
 	HostProduct  string
 	Devices      []Device
+	// History is the latest updates, from Snapshot.
+	History []HistoryEntry
 }
 
 // Read asks fwupd on the system bus for its devices. fwupd is D-Bus

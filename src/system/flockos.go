@@ -38,6 +38,19 @@ var osUpdateMu sync.Mutex
 // ErrOSUpdateRunning: another download or install is running.
 var ErrOSUpdateRunning = errors.New("an OS update is already running on this device")
 
+// ErrUpdateRunning is returned when a firmware update cannot start because an
+// OS or firmware update is running.
+var ErrUpdateRunning = errors.New("an update is already running on this device")
+
+// TryLockUpdate claims the device for a firmware update, which excludes OS
+// updates and other firmware updates, as both can end in a restart.
+func TryLockUpdate() (unlock func(), ok bool) {
+	if !osUpdateMu.TryLock() {
+		return nil, false
+	}
+	return osUpdateMu.Unlock, true
+}
+
 // Seams for the tests.
 var (
 	readRunning = osupdate.ReadRunning

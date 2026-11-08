@@ -154,6 +154,8 @@ func (agent *Agent) OnConnect(reconnect bool) error {
 	// unavailable-but-alive state while it retries — the agent and app starts
 	// are unaffected.
 	if !reconnect {
+		safe.Go(agent.External.WatchFirmwareUpdates)
+
 		// Before frpc starts: Windows cannot replace a running frpc.exe.
 		err = acquireFrpcWithin(agent.System.DownloadFrpIfNotExists, frpcAcquireWait)
 		if err != nil {
@@ -205,7 +207,7 @@ func (agent *Agent) OnConnect(reconnect bool) error {
 	safe.Go(func() {
 		system.MarkFlockOSSlotGoodNow()
 		agent.External.ReportOSRelease()
-		agent.External.ReportFirmwareInventory()
+		agent.External.CheckFirmwareUpdates()
 	})
 
 	// Step 1: Fetch requested app states from backend
