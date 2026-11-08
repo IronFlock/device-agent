@@ -70,39 +70,39 @@ func TestRefreshThroughTheMirror(t *testing.T) {
 	t.Run("the mirror comes first", func(t *testing.T) {
 		fake := &fakeFwupd{}
 		conn, url := busWithFwupd(t, fake, files)
-		fake.remotes = []map[string]dbus.Variant{lvfs(url)}
+		fake.setRemotes(lvfs(url))
 		require.NoError(t, refresh(context.Background(), conn, 0, url+"/dl/lvfs"))
-		require.Len(t, fake.updated, 1)
-		assert.Equal(t, mirrored, fake.updated[0].data)
+		require.Len(t, fake.metadata(), 1)
+		assert.Equal(t, mirrored, fake.metadata()[0].data)
 	})
 
 	t.Run("an appliance without it falls back to LVFS", func(t *testing.T) {
 		fake := &fakeFwupd{}
 		conn, url := busWithFwupd(t, fake, files)
-		fake.remotes = []map[string]dbus.Variant{lvfs(url)}
+		fake.setRemotes(lvfs(url))
 		require.NoError(t, refresh(context.Background(), conn, 0, url+"/old-appliance/lvfs"))
-		require.Len(t, fake.updated, 1)
-		assert.Equal(t, direct, fake.updated[0].data)
+		require.Len(t, fake.metadata(), 1)
+		assert.Equal(t, direct, fake.metadata()[0].data)
 	})
 
 	t.Run("what fwupd refuses from the mirror is not the end", func(t *testing.T) {
 		fake := &fakeFwupd{refuse: mirrored}
 		conn, url := busWithFwupd(t, fake, files)
-		fake.remotes = []map[string]dbus.Variant{lvfs(url)}
+		fake.setRemotes(lvfs(url))
 		require.NoError(t, refresh(context.Background(), conn, 0, url+"/dl/lvfs"))
-		require.Len(t, fake.updated, 1)
-		assert.Equal(t, direct, fake.updated[0].data)
+		require.Len(t, fake.metadata(), 1)
+		assert.Equal(t, direct, fake.metadata()[0].data)
 	})
 
 	t.Run("only LVFS comes from the mirror", func(t *testing.T) {
 		fake := &fakeFwupd{}
 		conn, url := busWithFwupd(t, fake, files)
-		fake.remotes = []map[string]dbus.Variant{variants(map[string]interface{}{
+		fake.setRemotes(variants(map[string]interface{}{
 			"RemoteId": "vendor", "Enabled": true, "Type": uint32(remoteKindDownload), "Uri": url + "/firmware.xml.zst",
-		})}
+		}))
 		require.NoError(t, refresh(context.Background(), conn, 0, url+"/dl/lvfs"))
-		require.Len(t, fake.updated, 1)
-		assert.Equal(t, direct, fake.updated[0].data)
+		require.Len(t, fake.metadata(), 1)
+		assert.Equal(t, direct, fake.metadata()[0].data)
 	})
 }
 
@@ -110,7 +110,7 @@ func TestInstallThroughTheMirror(t *testing.T) {
 	cab := []byte("the firmware")
 	install2 := func(t *testing.T, fake *fakeFwupd, conn *dbus.Conn, mirror string, locations ...string) error {
 		t.Helper()
-		fake.upgrades = map[string][]map[string]dbus.Variant{"a": {release("2", map[string]interface{}{"Locations": locations, "Checksum": sum(cab)})}}
+		fake.setUpgrades(map[string][]map[string]dbus.Variant{"a": {release("2", map[string]interface{}{"Locations": locations, "Checksum": sum(cab)})}})
 		_, err := install(context.Background(), conn, "a", "2", mirror, func(Progress) {})
 		return err
 	}
@@ -119,15 +119,15 @@ func TestInstallThroughTheMirror(t *testing.T) {
 		fake := &fakeFwupd{devices: []map[string]dbus.Variant{updatable("a", nil)}}
 		conn, url := busWithFwupd(t, fake, map[string][]byte{"/dl/lvfs/abc-a.cab": cab})
 		require.NoError(t, install2(t, fake, conn, url+"/dl/lvfs", "abc-a.cab"))
-		require.Len(t, fake.installed, 1)
+		require.Len(t, fake.firmware(), 1)
 	})
 
 	t.Run("a bad copy on the mirror falls through to the address", func(t *testing.T) {
 		fake := &fakeFwupd{devices: []map[string]dbus.Variant{updatable("a", nil)}}
 		conn, url := busWithFwupd(t, fake, map[string][]byte{"/dl/lvfs/abc-a.cab": []byte("tampered"), "/abc-a.cab": cab})
 		require.NoError(t, install2(t, fake, conn, url+"/dl/lvfs", url+"/abc-a.cab"))
-		require.Len(t, fake.installed, 1)
-		assert.Equal(t, cab, fake.installed[0].data)
+		require.Len(t, fake.firmware(), 1)
+		assert.Equal(t, cab, fake.firmware()[0].data)
 	})
 
 	t.Run("a bad copy and nothing else never reaches fwupd", func(t *testing.T) {
@@ -136,7 +136,7 @@ func TestInstallThroughTheMirror(t *testing.T) {
 		err := install2(t, fake, conn, url+"/dl/lvfs", url+"/abc-a.cab")
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "checksum")
-		assert.Empty(t, fake.installed)
+		assert.Empty(t, fake.firmware())
 	})
 
 	t.Run("an appliance without a domain serves plain http", func(t *testing.T) {
@@ -145,7 +145,7 @@ func TestInstallThroughTheMirror(t *testing.T) {
 		plain := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { _, _ = w.Write(cab) }))
 		t.Cleanup(plain.Close)
 		require.NoError(t, install2(t, fake, conn, plain.URL+"/dl/lvfs", "abc-a.cab"))
-		require.Len(t, fake.installed, 1)
+		require.Len(t, fake.firmware(), 1)
 	})
 }
 

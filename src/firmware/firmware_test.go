@@ -112,6 +112,33 @@ func (f *fakeFwupd) asked() []string {
 	return append([]string(nil), f.askedFor...)
 }
 
+// setRemotes and setUpgrades change what the fake answers once it is on the
+// bus, where its methods run on goroutines of their own. The tests only know
+// the address of the file server by then.
+func (f *fakeFwupd) setRemotes(remotes ...map[string]dbus.Variant) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.remotes = remotes
+}
+
+func (f *fakeFwupd) setUpgrades(upgrades map[string][]map[string]dbus.Variant) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.upgrades = upgrades
+}
+
+func (f *fakeFwupd) metadata() []updatedMetadata {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]updatedMetadata(nil), f.updated...)
+}
+
+func (f *fakeFwupd) firmware() []installedFirmware {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]installedFirmware(nil), f.installed...)
+}
+
 func (f *fakeFwupd) GetUpgrades(id string) ([]map[string]dbus.Variant, *dbus.Error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -134,6 +161,8 @@ func (f *fakeFwupd) GetHistory() ([]map[string]dbus.Variant, *dbus.Error) {
 }
 
 func (f *fakeFwupd) GetRemotes() ([]map[string]dbus.Variant, *dbus.Error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	return f.remotes, nil
 }
 
