@@ -61,7 +61,7 @@ func TestBestChecksum(t *testing.T) {
 }
 
 func TestFetchRefusesPlainHTTP(t *testing.T) {
-	err := fetch(context.Background(), "http://cdn.example/a.cab", 10, io.Discard, nil)
+	err := fetch(context.Background(), source{url: "http://cdn.example/a.cab"}, 10, io.Discard, nil)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "refusing")
 }
@@ -169,7 +169,7 @@ func TestRefresh(t *testing.T) {
 		fake := &fakeFwupd{}
 		conn, url := busWithFwupd(t, fake, files)
 		fake.remotes = []map[string]dbus.Variant{remote(url, nil)}
-		require.NoError(t, refresh(context.Background(), conn, 0))
+		require.NoError(t, refresh(context.Background(), conn, 0, ""))
 		require.Len(t, fake.updated, 1)
 		assert.Equal(t, updatedMetadata{id: "lvfs", data: metadata, signature: signature}, fake.updated[0])
 	})
@@ -178,7 +178,7 @@ func TestRefresh(t *testing.T) {
 		fake := &fakeFwupd{}
 		conn, url := busWithFwupd(t, fake, files)
 		fake.remotes = []map[string]dbus.Variant{remote(url, map[string]interface{}{"Checksum": sum(signature)})}
-		require.NoError(t, refresh(context.Background(), conn, 0))
+		require.NoError(t, refresh(context.Background(), conn, 0, ""))
 		assert.Empty(t, fake.updated)
 	})
 
@@ -190,7 +190,7 @@ func TestRefresh(t *testing.T) {
 			remote(url, map[string]interface{}{"Type": uint32(2)}),
 			remote(url, map[string]interface{}{"ModificationTime": uint64(time.Now().Unix())}),
 		}
-		require.NoError(t, refresh(context.Background(), conn, time.Hour))
+		require.NoError(t, refresh(context.Background(), conn, time.Hour, ""))
 		assert.Empty(t, fake.updated)
 	})
 
@@ -198,7 +198,7 @@ func TestRefresh(t *testing.T) {
 		fake := &fakeFwupd{}
 		conn, url := busWithFwupd(t, fake, files)
 		fake.remotes = []map[string]dbus.Variant{remote(url, map[string]interface{}{"ModificationTime": uint64(time.Now().Unix())})}
-		require.NoError(t, refresh(context.Background(), conn, 0))
+		require.NoError(t, refresh(context.Background(), conn, 0, ""))
 		assert.Len(t, fake.updated, 1)
 	})
 
@@ -209,7 +209,7 @@ func TestRefresh(t *testing.T) {
 			variants(map[string]interface{}{"RemoteId": "gone", "Enabled": true, "Type": uint32(remoteKindDownload), "Uri": url + "/gone.xml"}),
 			remote(url, nil),
 		}
-		require.Error(t, refresh(context.Background(), conn, 0))
+		require.Error(t, refresh(context.Background(), conn, 0, ""))
 		assert.Len(t, fake.updated, 1)
 	})
 }
@@ -244,7 +244,7 @@ func TestInstall(t *testing.T) {
 		fake.afterInstall = []map[string]dbus.Variant{updatable("a", map[string]interface{}{"Flags": uint64(1<<1 | 1<<8)})}
 		progress, seen := collect()
 
-		result, err := install(context.Background(), conn, "a", "2", progress)
+		result, err := install(context.Background(), conn, "a", "2", "", progress)
 		require.NoError(t, err)
 		assert.Equal(t, Result{Version: "2", NeedsReboot: true}, result)
 		require.Len(t, fake.installed, 1)
@@ -270,7 +270,7 @@ func TestInstall(t *testing.T) {
 		fake := &fakeFwupd{devices: []map[string]dbus.Variant{updatable("a", nil)}}
 		conn, url := busWithFwupd(t, fake, files)
 		fake.upgrades = map[string][]map[string]dbus.Variant{"a": offered(url, sum(cab))}
-		result, err := install(context.Background(), conn, "a", "2", func(Progress) {})
+		result, err := install(context.Background(), conn, "a", "2", "", func(Progress) {})
 		require.NoError(t, err)
 		assert.False(t, result.NeedsReboot)
 	})
@@ -279,7 +279,7 @@ func TestInstall(t *testing.T) {
 		fake := &fakeFwupd{devices: []map[string]dbus.Variant{updatable("a", nil)}}
 		conn, url := busWithFwupd(t, fake, files)
 		fake.upgrades = map[string][]map[string]dbus.Variant{"a": offered(url, sum(cab))}
-		_, err := install(context.Background(), conn, "a", "9", func(Progress) {})
+		_, err := install(context.Background(), conn, "a", "9", "", func(Progress) {})
 		require.ErrorIs(t, err, ErrNotOffered)
 		assert.Empty(t, fake.installed)
 	})
@@ -288,7 +288,7 @@ func TestInstall(t *testing.T) {
 		fake := &fakeFwupd{devices: []map[string]dbus.Variant{updatable("a", nil)}}
 		conn, url := busWithFwupd(t, fake, files)
 		fake.upgrades = map[string][]map[string]dbus.Variant{"a": offered(url, sum([]byte("other")))}
-		_, err := install(context.Background(), conn, "a", "2", func(Progress) {})
+		_, err := install(context.Background(), conn, "a", "2", "", func(Progress) {})
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "checksum")
 		assert.Empty(t, fake.installed)
@@ -298,7 +298,7 @@ func TestInstall(t *testing.T) {
 		fake := &fakeFwupd{devices: []map[string]dbus.Variant{updatable("a", nil)}}
 		conn, url := busWithFwupd(t, fake, files)
 		fake.upgrades = map[string][]map[string]dbus.Variant{"a": {release("2", map[string]interface{}{"Locations": []string{url + "/a.cab"}})}}
-		_, err := install(context.Background(), conn, "a", "2", func(Progress) {})
+		_, err := install(context.Background(), conn, "a", "2", "", func(Progress) {})
 		require.Error(t, err)
 		assert.Empty(t, fake.installed)
 	})
@@ -310,7 +310,7 @@ func TestInstall(t *testing.T) {
 		}
 		conn, url := busWithFwupd(t, fake, files)
 		fake.upgrades = map[string][]map[string]dbus.Variant{"a": offered(url, sum(cab))}
-		_, err := install(context.Background(), conn, "a", "2", func(Progress) {})
+		_, err := install(context.Background(), conn, "a", "2", "", func(Progress) {})
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "shim")
 		var dbusErr dbus.Error

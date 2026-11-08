@@ -44,6 +44,18 @@ const (
 	historyLength    = 10
 	progressInterval = time.Second
 	userAgent        = "ironflock-device-agent"
+
+	// lvfsRemote is the id of fwupd's remote for LVFS, the one remote the
+	// update base carries.
+	lvfsRemote = "lvfs"
+	// mirrorDir is LVFS below the update base: the cloud's download proxy or
+	// an appliance's mirror.
+	mirrorDir    = "lvfs"
+	metadataFile = "firmware.xml.zst"
+	// lvfsFirmwareBase is what a bare file name in LVFS's metadata is relative
+	// to (FirmwareBaseURI of fwupd's lvfs.conf).
+	lvfsFirmwareBase = "https://fwupd.org/downloads"
+	announceTimeout  = 10 * time.Second
 )
 
 // ErrNotOffered is returned when fwupd does not offer the requested version
@@ -66,6 +78,35 @@ var (
 		return nil
 	}}
 )
+
+// MirrorURL is where the update base serves LVFS, "" for a base that is not
+// an http(s) URL.
+func MirrorURL(base string) string {
+	u, err := url.Parse(base)
+	if err != nil || u.Host == "" || (u.Scheme != "https" && u.Scheme != "http") {
+		return ""
+	}
+	return strings.TrimRight(base, "/") + "/" + mirrorDir
+}
+
+// source is a place to read a file from. Only the update base may be plain
+// http, as an appliance without a domain is: what comes from it is checked
+// against fwupd's signed metadata, not trusted for its transport.
+type source struct {
+	url   string
+	plain bool
+}
+
+func (s source) check() error {
+	u, err := url.Parse(s.url)
+	if err != nil {
+		return err
+	}
+	if u.Scheme != "https" && !(s.plain && u.Scheme == "http") {
+		return fmt.Errorf("refusing to download over %q: %s", u.Scheme, s.url)
+	}
+	return nil
+}
 
 // Release is a firmware version fwupd offers for a device.
 type Release struct {
@@ -106,6 +147,36 @@ type Progress struct {
 type Result struct {
 	Version     string
 	NeedsReboot bool
+}
+
+// fileName is the release's file, the last part of its first location.
+func (r *Release) fileName() string {
+	if len(r.Locations) == 0 {
+		return ""
+	}
+	location := r.Locations[0]
+	if i := strings.IndexAny(location, "?#"); i >= 0 {
+		location = location[:i]
+	}
+	location = location[strings.LastIndexByte(location, '/')+1:]
+	return location
+}
+
+// sources lists where the release can be downloaded from: the update base,
+// then what the metadata names. LVFS's metadata has bare file names as well
+// as URLs.
+func (r *Release) sources(mirror string) []source {
+	var all []source
+	if file := r.fileName(); mirror != "" && file != "" {
+		all = append(all, source{url: mirror + "/" + url.PathEscape(file), plain: true})
+	}
+	for _, location := range r.Locations {
+		if !strings.Contains(location, "://") {
+			location = lvfsFirmwareBase + "/" + url.PathEscape(location)
+		}
+		all = append(all, source{url: location})
+	}
+	return all
 }
 
 // FWUPD_RELEASE_URGENCY_*.
@@ -267,14 +338,11 @@ func snapshot(ctx context.Context, conn *dbus.Conn) (Inventory, error) {
 }
 
 // fetch writes url to w, up to limit bytes. onBytes follows the download.
-func fetch(ctx context.Context, rawURL string, limit int64, w io.Writer, onBytes func(current, total int64)) error {
-	u, err := url.Parse(rawURL)
-	if err != nil {
+func fetch(ctx context.Context, src source, limit int64, w io.Writer, onBytes func(current, total int64)) error {
+	if err := src.check(); err != nil {
 		return err
 	}
-	if u.Scheme != "https" {
-		return fmt.Errorf("refusing to download over %q: %s", u.Scheme, rawURL)
-	}
+	rawURL := src.url
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
 	if err != nil {
 		return err
@@ -333,12 +401,12 @@ func tempFile() (*os.File, error) {
 }
 
 // fetchToFile downloads url into a temporary file, rewound for reading.
-func fetchToFile(ctx context.Context, rawURL string, limit int64, onBytes func(current, total int64)) (*os.File, error) {
+func fetchToFile(ctx context.Context, src source, limit int64, onBytes func(current, total int64)) (*os.File, error) {
 	f, err := tempFile()
 	if err != nil {
 		return nil, err
 	}
-	if err := fetch(ctx, rawURL, limit, f, onBytes); err != nil {
+	if err := fetch(ctx, src, limit, f, onBytes); err != nil {
 		_ = f.Close()
 		return nil, err
 	}
@@ -352,16 +420,18 @@ func fetchToFile(ctx context.Context, rawURL string, limit int64, onBytes func(c
 // Refresh brings fwupd's metadata up to date, for the enabled remotes last
 // fetched more than maxAge ago (0: all of them). fwupd checks the signature.
 // The FlockOS image has no fwupd-refresh timer: this is what replaces it.
-func Refresh(ctx context.Context, maxAge time.Duration) error {
+// mirror is MirrorURL of the update base; LVFS itself is the fallback, so
+// that a device behind an appliance without the mirror keeps working.
+func Refresh(ctx context.Context, maxAge time.Duration, mirror string) error {
 	conn, err := dbus.ConnectSystemBus(dbus.WithContext(ctx))
 	if err != nil {
 		return fmt.Errorf("%w: %v", ErrUnavailable, err)
 	}
 	defer func() { _ = conn.Close() }()
-	return refresh(ctx, conn, maxAge)
+	return refresh(ctx, conn, maxAge, mirror)
 }
 
-func refresh(ctx context.Context, conn *dbus.Conn, maxAge time.Duration) error {
+func refresh(ctx context.Context, conn *dbus.Conn, maxAge time.Duration, mirror string) error {
 	obj := conn.Object(busName, objectPath)
 	var remotes []map[string]dbus.Variant
 	if err := obj.CallWithContext(ctx, iface+".GetRemotes", 0).Store(&remotes); err != nil {
@@ -381,7 +451,7 @@ func refresh(ctx context.Context, conn *dbus.Conn, maxAge time.Duration) error {
 			time.Since(time.Unix(int64(age), 0)) < maxAge {
 			continue
 		}
-		if err := refreshRemote(ctx, obj, remote); err != nil {
+		if err := refreshRemote(ctx, obj, remote, mirror); err != nil {
 			failed = append(failed, fmt.Errorf("remote %s: %w", str(remote, "RemoteId"), err))
 		}
 	}
@@ -397,11 +467,29 @@ func variantBool(d map[string]dbus.Variant, key string) (bool, bool) {
 	return b, ok
 }
 
-// refreshRemote fetches the signature first: an unchanged one means the
+// refreshRemote takes the metadata from the first source that gives fwupd
+// something it accepts.
+func refreshRemote(ctx context.Context, obj dbus.BusObject, remote map[string]dbus.Variant, mirror string) error {
+	sources := []source{{url: str(remote, "Uri")}}
+	if mirror != "" && str(remote, "RemoteId") == lvfsRemote {
+		sources = append([]source{{url: mirror + "/" + metadataFile, plain: true}}, sources...)
+	}
+	var failed []error
+	for _, src := range sources {
+		err := refreshFrom(ctx, obj, remote, src)
+		if err == nil {
+			return nil
+		}
+		log.Warn().Err(err).Msgf("no firmware metadata from %s", src.url)
+		failed = append(failed, err)
+	}
+	return errors.Join(failed...)
+}
+
+// refreshFrom fetches the signature first: an unchanged one means the
 // metadata is unchanged, and it is a fraction of the size.
-func refreshRemote(ctx context.Context, obj dbus.BusObject, remote map[string]dbus.Variant) error {
-	uri := str(remote, "Uri")
-	signature, err := fetchToFile(ctx, uri+".jcat", maxSignatureBytes, nil)
+func refreshFrom(ctx context.Context, obj dbus.BusObject, remote map[string]dbus.Variant, src source) error {
+	signature, err := fetchToFile(ctx, source{url: src.url + ".jcat", plain: src.plain}, maxSignatureBytes, nil)
 	if err != nil {
 		return err
 	}
@@ -417,7 +505,7 @@ func refreshRemote(ctx context.Context, obj dbus.BusObject, remote map[string]db
 		}
 	}
 
-	metadata, err := fetchToFile(ctx, uri, maxMetadataBytes, nil)
+	metadata, err := fetchToFile(ctx, src, maxMetadataBytes, nil)
 	if err != nil {
 		return err
 	}
@@ -447,21 +535,63 @@ func matchesChecksum(f *os.File, want string) (bool, error) {
 	return hex.EncodeToString(h.Sum(nil)) == want, nil
 }
 
+// Announce tells the update base which firmware files this device was
+// offered, so that an appliance holds them before anyone installs them. It is
+// a HEAD for each file; the answer does not matter, and neither does a failure.
+func Announce(ctx context.Context, mirror string, inv Inventory) {
+	if mirror == "" {
+		return
+	}
+	seen := map[string]bool{}
+	for _, device := range inv.Devices {
+		if device.Update == nil {
+			continue
+		}
+		file := device.Update.fileName()
+		if file == "" || seen[file] {
+			continue
+		}
+		seen[file] = true
+		if err := announce(ctx, source{url: mirror + "/" + url.PathEscape(file), plain: true}); err != nil {
+			log.Debug().Err(err).Msgf("could not announce firmware %s", file)
+		}
+	}
+}
+
+func announce(ctx context.Context, src source) error {
+	if err := src.check(); err != nil {
+		return err
+	}
+	ctx, cancel := context.WithTimeout(ctx, announceTimeout)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodHead, src.url, nil)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("User-Agent", userAgent)
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		return err
+	}
+	return resp.Body.Close()
+}
+
 // Install downloads the given version of a device's firmware and has fwupd
 // install it. The version must be one fwupd offers: nothing but the device's
-// id and the version comes from the caller, and the download address and
-// checksum come from fwupd's signed metadata. Firmware has no A/B slot, so
-// ctx should not be tied to the caller's connection.
-func Install(ctx context.Context, deviceID, version string, progress func(Progress)) (Result, error) {
+// id and the version comes from the caller, and the file and its checksum
+// come from fwupd's signed metadata; mirror is MirrorURL of the update base.
+// Firmware has no A/B slot, so ctx should not be tied to the caller's
+// connection.
+func Install(ctx context.Context, deviceID, version, mirror string, progress func(Progress)) (Result, error) {
 	conn, err := dbus.ConnectSystemBus(dbus.WithContext(ctx))
 	if err != nil {
 		return Result{}, fmt.Errorf("%w: %v", ErrUnavailable, err)
 	}
 	defer func() { _ = conn.Close() }()
-	return install(ctx, conn, deviceID, version, progress)
+	return install(ctx, conn, deviceID, version, mirror, progress)
 }
 
-func install(ctx context.Context, conn *dbus.Conn, deviceID, version string, progress func(Progress)) (Result, error) {
+func install(ctx context.Context, conn *dbus.Conn, deviceID, version, mirror string, progress func(Progress)) (Result, error) {
 	obj := conn.Object(busName, objectPath)
 	releases, err := upgrades(ctx, obj, deviceID)
 	if err != nil {
@@ -478,7 +608,7 @@ func install(ctx context.Context, conn *dbus.Conn, deviceID, version string, pro
 		return Result{}, ErrNotOffered
 	}
 
-	f, err := downloadRelease(ctx, release, progress)
+	f, err := downloadRelease(ctx, release, mirror, progress)
 	if err != nil {
 		return Result{}, err
 	}
@@ -511,9 +641,9 @@ func install(ctx context.Context, conn *dbus.Conn, deviceID, version string, pro
 	return result, nil
 }
 
-// downloadRelease fetches the firmware from the first location that serves
-// it and verifies it against the checksum of the signed metadata.
-func downloadRelease(ctx context.Context, release *Release, progress func(Progress)) (*os.File, error) {
+// downloadRelease fetches the firmware from the first source that serves it
+// and verifies it against the checksum of the signed metadata.
+func downloadRelease(ctx context.Context, release *Release, mirror string, progress func(Progress)) (*os.File, error) {
 	if len(release.Locations) == 0 {
 		return nil, errors.New("the release names no location to download it from")
 	}
@@ -533,8 +663,8 @@ func downloadRelease(ctx context.Context, release *Release, progress func(Progre
 		progress(Progress{Stage: "download", CurrentBytes: current, TotalBytes: total})
 	}
 	var failed []error
-	for _, location := range release.Locations {
-		f, err := fetchToFile(ctx, location, maxFirmwareBytes, onBytes)
+	for _, src := range release.sources(mirror) {
+		f, err := fetchToFile(ctx, src, maxFirmwareBytes, onBytes)
 		if err != nil {
 			failed = append(failed, err)
 			continue
@@ -546,7 +676,9 @@ func downloadRelease(ctx context.Context, release *Release, progress func(Progre
 		}
 		if got := hex.EncodeToString(h.Sum(nil)); got != want {
 			_ = f.Close()
-			return nil, fmt.Errorf("firmware checksum mismatch: expected %s, got %s", want, got)
+			// A mirror's copy can be bad and LVFS's still good.
+			failed = append(failed, fmt.Errorf("firmware checksum mismatch from %s: expected %s, got %s", src.url, want, got))
+			continue
 		}
 		if _, err := f.Seek(0, io.SeekStart); err != nil {
 			_ = f.Close()

@@ -21,9 +21,12 @@ import (
 
 func fakeRefresh(t *testing.T, err error) *[]time.Duration {
 	t.Helper()
+	oldAnnounce := announceFirmware
+	announceFirmware = func(context.Context, string, firmware.Inventory) {}
+	t.Cleanup(func() { announceFirmware = oldAnnounce })
 	var ages []time.Duration
 	old := refreshFirmware
-	refreshFirmware = func(_ context.Context, maxAge time.Duration) error {
+	refreshFirmware = func(_ context.Context, maxAge time.Duration, _ string) error {
 		ages = append(ages, maxAge)
 		return err
 	}
@@ -41,7 +44,7 @@ func fakeInstall(t *testing.T, result firmware.Result, err error) *[]firmwareIns
 	t.Helper()
 	var installs []firmwareInstall
 	old := installFirmware
-	installFirmware = func(ctx context.Context, deviceID, version string, progress func(firmware.Progress)) (firmware.Result, error) {
+	installFirmware = func(ctx context.Context, deviceID, version, _ string, progress func(firmware.Progress)) (firmware.Result, error) {
 		deadline, _ := ctx.Deadline()
 		installs = append(installs, firmwareInstall{deviceID, version, time.Until(deadline), ctx.Err() != nil})
 		progress(firmware.Progress{Stage: "download", CurrentBytes: 5, TotalBytes: 10})
@@ -173,6 +176,52 @@ func TestCheckFirmwareUpdates(t *testing.T) {
 	})
 }
 
+func TestFirmwareGoesThroughTheUpdateBase(t *testing.T) {
+	const base = "http://appliance:15002/dl"
+	inventory := firmware.Inventory{Devices: []firmware.Device{{ID: "a", Name: "SSD", Update: &firmware.Release{Version: "2"}}}}
+	useBase := func(ex *External) {
+		ex.Config.ReswarmConfig.UpdateURL = base
+	}
+
+	t.Run("a check reads the mirror and announces what is on offer", func(t *testing.T) {
+		useFakeFlockOS(t, true, &fakeFlockOS{})
+		withFirmware(t, inventory, nil)
+		var refreshed, announced []string
+		oldRefresh, oldAnnounce := refreshFirmware, announceFirmware
+		t.Cleanup(func() { refreshFirmware, announceFirmware = oldRefresh, oldAnnounce })
+		refreshFirmware = func(_ context.Context, _ time.Duration, mirror string) error {
+			refreshed = append(refreshed, mirror)
+			return nil
+		}
+		announceFirmware = func(_ context.Context, mirror string, inv firmware.Inventory) {
+			announced = append(announced, mirror)
+			assert.Len(t, inv.Devices, 1)
+		}
+		ex, _ := flockOSExternal(t)
+		useBase(ex)
+		ex.CheckFirmwareUpdates()
+		assert.Equal(t, []string{base + "/lvfs"}, refreshed)
+		assert.Equal(t, []string{base + "/lvfs"}, announced)
+	})
+
+	t.Run("an install reads the mirror", func(t *testing.T) {
+		useFakeFlockOS(t, true, &fakeFlockOS{})
+		withFirmware(t, inventory, nil)
+		var mirrors []string
+		old := installFirmware
+		t.Cleanup(func() { installFirmware = old })
+		installFirmware = func(_ context.Context, _, _, mirror string, _ func(firmware.Progress)) (firmware.Result, error) {
+			mirrors = append(mirrors, mirror)
+			return firmware.Result{Version: "2"}, nil
+		}
+		ex, _ := flockOSExternal(t)
+		useBase(ex)
+		_, err := ex.installFirmwareUpdateHandler(context.Background(), installArgs("a", "2"))
+		require.NoError(t, err)
+		assert.Equal(t, []string{base + "/lvfs"}, mirrors)
+	})
+}
+
 func TestRefreshFirmwareUpdatesHandler(t *testing.T) {
 	inventory := firmware.Inventory{Devices: []firmware.Device{
 		{ID: "a", Name: "SSD", Update: &firmware.Release{Version: "2"}},
@@ -294,7 +343,7 @@ func TestInstallFirmwareUpdateHandler(t *testing.T) {
 		old := installFirmware
 		t.Cleanup(func() { installFirmware = old })
 		var lockedDuring bool
-		installFirmware = func(context.Context, string, string, func(firmware.Progress)) (firmware.Result, error) {
+		installFirmware = func(context.Context, string, string, string, func(firmware.Progress)) (firmware.Result, error) {
 			unlock, ok := system.TryLockUpdate()
 			if ok {
 				unlock()

@@ -2,6 +2,7 @@ package firmware
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"io"
 	"os"
@@ -88,6 +89,7 @@ type fakeFwupd struct {
 	history      []map[string]dbus.Variant
 	remotes      []map[string]dbus.Variant
 	updated      []updatedMetadata
+	refuse       []byte // metadata UpdateMetadata answers an error for
 	installed    []installedFirmware
 	installErr   *dbus.Error
 	installTakes time.Duration
@@ -152,6 +154,9 @@ func (f *fakeFwupd) UpdateMetadata(id string, data, signature dbus.UnixFD) *dbus
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.refuse != nil && bytes.Equal(d, f.refuse) {
+		return dbus.NewError("org.freedesktop.fwupd.SignatureInvalid", []interface{}{"the signature does not match"})
+	}
 	f.updated = append(f.updated, updatedMetadata{id, d, s})
 	return nil
 }

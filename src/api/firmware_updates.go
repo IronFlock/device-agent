@@ -41,6 +41,7 @@ var (
 	snapshotFirmware = firmware.Snapshot
 	refreshFirmware  = firmware.Refresh
 	installFirmware  = firmware.Install
+	announceFirmware = firmware.Announce
 	tryLockUpdate    = system.TryLockUpdate
 )
 
@@ -139,18 +140,39 @@ func (ex *External) reportFirmware() (firmware.Inventory, error) {
 	return inventory, err
 }
 
-// CheckFirmwareUpdates fetches fwupd's metadata if it is old, then reports.
-// A failed refresh is logged and the report goes out with what fwupd has.
+// firmwareMirror is LVFS below this device's update base: an appliance's
+// mirror, or the cloud's download proxy.
+func (ex *External) firmwareMirror() string {
+	if ex.System == nil {
+		return ""
+	}
+	return firmware.MirrorURL(ex.System.UpdateBaseURL())
+}
+
+// announceOffered lets the update base know what this device was offered.
+func (ex *External) announceOffered(inventory firmware.Inventory) {
+	ctx, cancel := context.WithTimeout(context.Background(), firmwareTimeout)
+	defer cancel()
+	announceFirmware(ctx, ex.firmwareMirror(), inventory)
+}
+
+// CheckFirmwareUpdates fetches fwupd's metadata if it is old, then reports
+// and announces what is on offer. A failed refresh is logged and the report
+// goes out with what fwupd has.
 func (ex *External) CheckFirmwareUpdates() {
 	if !runsFlockOS() {
 		return
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), firmwareRefreshTimeout)
 	defer cancel()
-	if err := refreshFirmware(ctx, firmwareMetadataMaxAge); err != nil {
+	if err := refreshFirmware(ctx, firmwareMetadataMaxAge, ex.firmwareMirror()); err != nil {
 		log.Warn().Err(err).Msg("failed to refresh the firmware metadata")
 	}
-	ex.ReportFirmwareInventory()
+	inventory, err := ex.reportFirmware()
+	if err != nil {
+		log.Error().Err(err).Msg("failed to report the firmware inventory")
+	}
+	ex.announceOffered(inventory)
 }
 
 // WatchFirmwareUpdates checks once a day, for devices that stay connected.
@@ -191,13 +213,14 @@ func (ex *External) refreshFirmwareUpdatesHandler(ctx context.Context, response 
 	}
 	refreshCtx, cancel := context.WithTimeout(ctx, firmwareRefreshTimeout)
 	defer cancel()
-	if err := refreshFirmware(refreshCtx, 0); err != nil {
+	if err := refreshFirmware(refreshCtx, 0, ex.firmwareMirror()); err != nil {
 		return nil, err
 	}
 	inventory, err := ex.reportFirmware()
 	if err != nil {
 		return nil, err
 	}
+	ex.announceOffered(inventory)
 	return &messenger.InvokeResult{
 		Arguments: []interface{}{common.Dict{"updates": countFirmwareUpdates(inventory)}},
 	}, nil
@@ -252,7 +275,7 @@ func (ex *External) installFirmwareUpdateHandler(ctx context.Context, response m
 	installCtx, cancel := context.WithTimeout(context.Background(), firmwareInstallTimeout)
 	defer cancel()
 	log.Info().Msgf("installing firmware %s on device %s", version, deviceID)
-	result, err := installFirmware(installCtx, deviceID, version, progress)
+	result, err := installFirmware(installCtx, deviceID, version, ex.firmwareMirror(), progress)
 	ex.ReportFirmwareInventory()
 	if err != nil {
 		return nil, err

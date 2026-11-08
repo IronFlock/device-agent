@@ -74,6 +74,10 @@ func (sys *System) updateBaseURL() string {
 	return sys.config.CommandLineArguments.RemoteUpdateURL
 }
 
+// UpdateBaseURL is the base URL for OTA downloads, for what lives outside this
+// package.
+func (sys *System) UpdateBaseURL() string { return sys.updateBaseURL() }
+
 // Agent download trees below the update base.
 //
 //	<base>/device-agent/manifest-v2.json                     signed channel map (updatesig.Envelope),
