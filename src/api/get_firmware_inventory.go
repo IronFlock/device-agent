@@ -7,15 +7,82 @@ import (
 	"reagent/errdefs"
 	"reagent/firmware"
 	"reagent/messenger"
+	"reagent/messenger/topics"
 	"time"
+
+	"github.com/rs/zerolog/log"
 )
 
 // firmwareTimeout bounds one inventory read. fwupd is D-Bus activated and
 // probes its devices when it starts, so the first read after boot is slow.
 const firmwareTimeout = 90 * time.Second
 
+// firmwareReportCallTimeout bounds the report's call, after the read.
+const firmwareReportCallTimeout = 30 * time.Second
+
 // readFirmware is firmware.Read; the tests replace it.
 var readFirmware = firmware.Read
+
+// ReportFirmwareInventory tells the platform which firmware this FlockOS
+// device runs, which Studio shows from the device list store, online or
+// offline. Sent after a connect. Not FlockOS: nothing to report. Errors are
+// logged, never returned: the report is for display only, and the platform
+// keeps what it knows.
+func (ex *External) ReportFirmwareInventory() {
+	if !runsFlockOS() {
+		return
+	}
+	readCtx, cancelRead := context.WithTimeout(context.Background(), firmwareTimeout)
+	defer cancelRead()
+	inventory, err := readFirmware(readCtx)
+	if err != nil {
+		log.Error().Err(err).Msg("failed to read the firmware inventory")
+		return
+	}
+	payload := ex.DeviceReport()
+	payload["firmware_inventory"] = firmwareReport(inventory)
+	callCtx, cancelCall := context.WithTimeout(context.Background(), firmwareReportCallTimeout)
+	defer cancelCall()
+	if _, err := ex.Messenger.Call(callCtx, topics.UpdateDeviceArchitecture, []interface{}{payload}, nil, nil, nil); err != nil {
+		log.Error().Err(err).Msg("failed to report the firmware inventory to the backend")
+	}
+}
+
+// firmwareReport is the inventory as the platform stores it. It travels with
+// the device list, so it stays small: empty fields are left out, and the
+// GUIDs, which only fwupd needs to find updates, stay on the device.
+func firmwareReport(inventory firmware.Inventory) common.Dict {
+	devices := make([]common.Dict, 0, len(inventory.Devices))
+	for _, d := range inventory.Devices {
+		device := common.Dict{"id": d.ID, "name": d.Name}
+		for key, value := range map[string]string{
+			"parent_id":          d.ParentID,
+			"summary":            d.Summary,
+			"vendor":             d.Vendor,
+			"version":            d.Version,
+			"version_lowest":     d.VersionLowest,
+			"version_bootloader": d.VersionBootloader,
+			"plugin":             d.Plugin,
+			"protocol":           d.Protocol,
+			"update_state":       d.UpdateState,
+			"update_error":       d.UpdateError,
+		} {
+			if value != "" {
+				device[key] = value
+			}
+		}
+		if len(d.Flags) > 0 {
+			device["flags"] = d.Flags
+		}
+		devices = append(devices, device)
+	}
+	return common.Dict{
+		"fwupd_version": inventory.FwupdVersion,
+		"host_vendor":   inventory.HostVendor,
+		"host_product":  inventory.HostProduct,
+		"devices":       devices,
+	}
+}
 
 // getFirmwareInventoryHandler answers get_firmware_inventory: fwupd's devices
 // and their firmware versions, read-only (FlockOS ADR-0009). A device without

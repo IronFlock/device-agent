@@ -94,14 +94,18 @@ func read(ctx context.Context, conn *dbus.Conn) (Inventory, error) {
 	for _, d := range raw {
 		inv.Devices = append(inv.Devices, decodeDevice(d))
 	}
-	// Parents before their children, then by name: a stable order for the
-	// platform's view.
+	// Parents before their children, then by name and id: a stable order for
+	// the platform's view, so that an unchanged inventory is an unchanged
+	// report.
 	sort.SliceStable(inv.Devices, func(i, j int) bool {
 		a, b := inv.Devices[i], inv.Devices[j]
 		if (a.ParentID == "") != (b.ParentID == "") {
 			return a.ParentID == ""
 		}
-		return a.Name < b.Name
+		if a.Name != b.Name {
+			return a.Name < b.Name
+		}
+		return a.ID < b.ID
 	})
 	return inv, nil
 }

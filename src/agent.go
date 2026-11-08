@@ -199,10 +199,13 @@ func (agent *Agent) OnConnect(reconnect bool) error {
 	// gets here stays unmarked and the bootloader falls back to the previous
 	// one. In the background, bounded, logged: it never holds up the rest of
 	// the connect. Not FlockOS: nothing to do. The report follows the mark, so
-	// that the booted slot is reported as confirmed.
+	// that the booted slot is reported as confirmed. The firmware inventory
+	// comes last, and not alongside: fwupd can take a while to answer, and two
+	// reports at once would race for the device's row, so one could be lost.
 	safe.Go(func() {
 		system.MarkFlockOSSlotGoodNow()
 		agent.External.ReportOSRelease()
+		agent.External.ReportFirmwareInventory()
 	})
 
 	// Step 1: Fetch requested app states from backend
