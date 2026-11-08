@@ -20,14 +20,15 @@ import (
 func withFirmware(t *testing.T, inv firmware.Inventory, err error) *time.Duration {
 	t.Helper()
 	var budget time.Duration
-	old := readFirmware
-	readFirmware = func(ctx context.Context) (firmware.Inventory, error) {
+	read := func(ctx context.Context) (firmware.Inventory, error) {
 		if deadline, ok := ctx.Deadline(); ok {
 			budget = time.Until(deadline)
 		}
 		return inv, err
 	}
-	t.Cleanup(func() { readFirmware = old })
+	oldRead, oldSnapshot := readFirmware, snapshotFirmware
+	readFirmware, snapshotFirmware = read, read
+	t.Cleanup(func() { readFirmware, snapshotFirmware = oldRead, oldSnapshot })
 	return &budget
 }
 

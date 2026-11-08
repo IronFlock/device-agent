@@ -163,6 +163,12 @@ func TestBuildProgressTopics(t *testing.T) {
 			expected: "re.mgmt.serial-1.install_os_update_progress",
 		},
 		{
+			name:     "install firmware update progress",
+			build:    BuildInstallFirmwareUpdateProgress,
+			serial:   "serial-1",
+			expected: "re.mgmt.serial-1.install_firmware_update_progress",
+		},
+		{
 			name:     "perform os update progress",
 			build:    BuildPerformOSUpdateProgress,
 			serial:   "serial-1",

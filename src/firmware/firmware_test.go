@@ -2,11 +2,14 @@ package firmware
 
 import (
 	"bufio"
+	"bytes"
 	"context"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -63,10 +66,34 @@ func TestDecodeDevice(t *testing.T) {
 
 // --- fwupd on a private bus --------------------------------------------------
 
+type updatedMetadata struct {
+	id              string
+	data, signature []byte
+}
+
+type installedFirmware struct {
+	id      string
+	data    []byte
+	options map[string]dbus.Variant
+}
+
 type fakeFwupd struct {
+	mu      sync.Mutex
 	devices []map[string]dbus.Variant
 	err     *dbus.Error
 	delay   time.Duration
+
+	upgrades     map[string][]map[string]dbus.Variant
+	upgradeErr   *dbus.Error
+	askedFor     []string
+	history      []map[string]dbus.Variant
+	remotes      []map[string]dbus.Variant
+	updated      []updatedMetadata
+	refuse       []byte // metadata UpdateMetadata answers an error for
+	installed    []installedFirmware
+	installErr   *dbus.Error
+	installTakes time.Duration
+	afterInstall []map[string]dbus.Variant
 }
 
 func (f *fakeFwupd) GetDevices() ([]map[string]dbus.Variant, *dbus.Error) {
@@ -74,7 +101,111 @@ func (f *fakeFwupd) GetDevices() ([]map[string]dbus.Variant, *dbus.Error) {
 	if f.err != nil {
 		return nil, f.err
 	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	return f.devices, nil
+}
+
+func (f *fakeFwupd) asked() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]string(nil), f.askedFor...)
+}
+
+// setRemotes and setUpgrades change what the fake answers once it is on the
+// bus, where its methods run on goroutines of their own. The tests only know
+// the address of the file server by then.
+func (f *fakeFwupd) setRemotes(remotes ...map[string]dbus.Variant) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.remotes = remotes
+}
+
+func (f *fakeFwupd) setUpgrades(upgrades map[string][]map[string]dbus.Variant) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.upgrades = upgrades
+}
+
+func (f *fakeFwupd) metadata() []updatedMetadata {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]updatedMetadata(nil), f.updated...)
+}
+
+func (f *fakeFwupd) firmware() []installedFirmware {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]installedFirmware(nil), f.installed...)
+}
+
+func (f *fakeFwupd) GetUpgrades(id string) ([]map[string]dbus.Variant, *dbus.Error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.askedFor = append(f.askedFor, id)
+	if f.upgradeErr != nil {
+		return nil, f.upgradeErr
+	}
+	releases, ok := f.upgrades[id]
+	if !ok {
+		return nil, dbus.NewError(errNothingToDo, []interface{}{"no upgrades"})
+	}
+	return releases, nil
+}
+
+func (f *fakeFwupd) GetHistory() ([]map[string]dbus.Variant, *dbus.Error) {
+	if len(f.history) == 0 {
+		return nil, dbus.NewError(errNothingToDo, []interface{}{"no history"})
+	}
+	return f.history, nil
+}
+
+func (f *fakeFwupd) GetRemotes() ([]map[string]dbus.Variant, *dbus.Error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.remotes, nil
+}
+
+func readFD(fd dbus.UnixFD) ([]byte, error) {
+	file := os.NewFile(uintptr(fd), "fd")
+	defer func() { _ = file.Close() }()
+	return io.ReadAll(file)
+}
+
+func (f *fakeFwupd) UpdateMetadata(id string, data, signature dbus.UnixFD) *dbus.Error {
+	d, err := readFD(data)
+	if err != nil {
+		return dbus.MakeFailedError(err)
+	}
+	s, err := readFD(signature)
+	if err != nil {
+		return dbus.MakeFailedError(err)
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.refuse != nil && bytes.Equal(d, f.refuse) {
+		return dbus.NewError("org.freedesktop.fwupd.SignatureInvalid", []interface{}{"the signature does not match"})
+	}
+	f.updated = append(f.updated, updatedMetadata{id, d, s})
+	return nil
+}
+
+func (f *fakeFwupd) Install(id string, handle dbus.UnixFD, options map[string]dbus.Variant) *dbus.Error {
+	data, err := readFD(handle)
+	if err != nil {
+		return dbus.MakeFailedError(err)
+	}
+	time.Sleep(f.installTakes)
+	if f.installErr != nil {
+		return f.installErr
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.installed = append(f.installed, installedFirmware{id, data, options})
+	if f.afterInstall != nil {
+		f.devices = f.afterInstall
+	}
+	return nil
 }
 
 // privateBus starts a dbus-daemon of the test's own and returns its address.
@@ -121,6 +252,8 @@ func serve(t *testing.T, addr string, fake *fakeFwupd) {
 	_, err = prop.Export(conn, objectPath, prop.Map{iface: {
 		"DaemonVersion": {Value: "2.0.20", Emit: prop.EmitFalse},
 		"HostProduct":   {Value: "Standard PC (Q35 + ICH9, 2009)", Emit: prop.EmitFalse},
+		"Status":        {Value: uint32(5), Emit: prop.EmitFalse},
+		"Percentage":    {Value: uint32(40), Emit: prop.EmitFalse},
 	}})
 	require.NoError(t, err)
 	reply, err := conn.RequestName(busName, dbus.NameFlagDoNotQueue)

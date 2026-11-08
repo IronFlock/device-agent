@@ -7,7 +7,6 @@ import (
 	"reagent/errdefs"
 	"reagent/firmware"
 	"reagent/messenger"
-	"reagent/messenger/topics"
 	"time"
 
 	"github.com/rs/zerolog/log"
@@ -32,19 +31,8 @@ func (ex *External) ReportFirmwareInventory() {
 	if !runsFlockOS() {
 		return
 	}
-	readCtx, cancelRead := context.WithTimeout(context.Background(), firmwareTimeout)
-	defer cancelRead()
-	inventory, err := readFirmware(readCtx)
-	if err != nil {
-		log.Error().Err(err).Msg("failed to read the firmware inventory")
-		return
-	}
-	payload := ex.DeviceReport()
-	payload["firmware_inventory"] = firmwareReport(inventory)
-	callCtx, cancelCall := context.WithTimeout(context.Background(), firmwareReportCallTimeout)
-	defer cancelCall()
-	if _, err := ex.Messenger.Call(callCtx, topics.UpdateDeviceArchitecture, []interface{}{payload}, nil, nil, nil); err != nil {
-		log.Error().Err(err).Msg("failed to report the firmware inventory to the backend")
+	if _, err := ex.reportFirmware(); err != nil {
+		log.Error().Err(err).Msg("failed to report the firmware inventory")
 	}
 }
 
@@ -74,18 +62,25 @@ func firmwareReport(inventory firmware.Inventory) common.Dict {
 		if len(d.Flags) > 0 {
 			device["flags"] = d.Flags
 		}
+		if d.Update != nil {
+			device["update"] = firmwareReleaseReport(d.Update)
+		}
 		devices = append(devices, device)
 	}
-	return common.Dict{
+	report := common.Dict{
 		"fwupd_version": inventory.FwupdVersion,
 		"host_vendor":   inventory.HostVendor,
 		"host_product":  inventory.HostProduct,
 		"devices":       devices,
 	}
+	if len(inventory.History) > 0 {
+		report["history"] = firmwareHistoryReport(inventory.History)
+	}
+	return report
 }
 
 // getFirmwareInventoryHandler answers get_firmware_inventory: fwupd's devices
-// and their firmware versions, read-only (FlockOS ADR-0009). A device without
+// and their firmware versions. A device without
 // fwupd (another Linux, Windows) answers available false with the reason,
 // not an error, so the platform can say so.
 func (ex *External) getFirmwareInventoryHandler(ctx context.Context, response messenger.Result) (*messenger.InvokeResult, error) {

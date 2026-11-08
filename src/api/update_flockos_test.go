@@ -117,7 +117,8 @@ func flockOSExternal(t *testing.T) (*External, *fakes.Messenger) {
 	logs := fakes.NewMessenger()
 	cfg := testConfig()
 	cfg.ReswarmConfig.SerialNumber = "SER-1"
-	return &External{Config: cfg, Privilege: priv(t, true), Messenger: fakes.NewMessenger(), LogMessenger: logs, System: &system.System{}}, logs
+	sys := system.New(cfg, nil)
+	return &External{Config: cfg, Privilege: priv(t, true), Messenger: fakes.NewMessenger(), LogMessenger: logs, System: &sys}, logs
 }
 
 // reportedOSRelease waits for the report the agent sends in the background.

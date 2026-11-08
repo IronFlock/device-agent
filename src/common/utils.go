@@ -99,6 +99,10 @@ func BuildInstallOSUpdateProgress(serialNumber string) string {
 	return fmt.Sprintf("%s.%s.%s", topicPrefix, serialNumber, topics.InstallOSUpdateProgress)
 }
 
+func BuildInstallFirmwareUpdateProgress(serialNumber string) string {
+	return fmt.Sprintf("%s.%s.%s", topicPrefix, serialNumber, topics.InstallFirmwareUpdateProgress)
+}
+
 func BuildPerformOSUpdateProgress(serialNumber string) string {
 	return fmt.Sprintf("%s.%s.%s", topicPrefix, serialNumber, topics.PerformOSUpdateProgress)
 }

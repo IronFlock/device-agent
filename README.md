@@ -618,6 +618,12 @@ IronFlock/flockos). Other devices keep the ReswarmOS files
   agent's startup report (`update_device_architecture`, `os_image_id`; `""` on
   another OS, left out when os-release cannot be read). An appliance mirrors
   the OS updates of the images its devices run.
+- **Firmware** (fwupd, LVFS) comes from `<update base>/lvfs/` first and LVFS
+  itself if that fails: the cloud's download proxy, or behind an IronFlock
+  appliance its firmware mirror. Nothing from that path is trusted: fwupd checks
+  the signature of the metadata and the agent the checksum it names, which is
+  why it may be plain `http` there. After a check the agent sends a `HEAD` for
+  each file it was offered, so that an appliance holds it before an install.
 - **`install_os_update`** has RAUC install the downloaded bundle into the other
   slot, with progress on `install_os_update_progress`. RAUC checks the bundle's
   signature and compatible. Its errors are returned (they used to be logged
