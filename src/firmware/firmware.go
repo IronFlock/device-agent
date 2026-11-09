@@ -1,6 +1,6 @@
 // Package firmware talks to fwupd over its D-Bus API (org.freedesktop.fwupd on
 // the system bus): the device's firmware inventory, the updates offered for it
-// and their installation (FlockOS ADR-0007, lane 3). FlockOS ships boot firmware
+// and their installation (IronFlockOS ADR-0007, lane 3). IronFlockOS ships boot firmware
 // with its OS releases; this is component firmware. Nothing here runs before
 // the connection: each call opens its own bus connection and gives up after
 // its context's deadline.

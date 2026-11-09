@@ -68,11 +68,11 @@ func TestMigratedDeviceIsCurrentEvenWithTheCompatLink(t *testing.T) {
 
 func TestImageLayoutsStay(t *testing.T) {
 	cases := map[string]func(t *testing.T, root string){
-		"FlockOS marker": func(t *testing.T, root string) {
+		"IronFlockOS marker": func(t *testing.T, root string) {
 			legacyInstall(t, root)
 			require.NoError(t, os.WriteFile(filepath.Join(root, legacyFlockOSMarker), nil, 0o644))
 		},
-		"FlockOS units": func(t *testing.T, root string) {
+		"IronFlockOS units": func(t *testing.T, root string) {
 			legacyInstall(t, root)
 			require.NoError(t, os.MkdirAll(filepath.Join(root, legacyFlockOSUnits), 0o755))
 		},

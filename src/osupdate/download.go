@@ -18,7 +18,7 @@ import (
 	"time"
 )
 
-// CacheDir holds the one bundle a device downloads: on FlockOS a directory
+// CacheDir holds the one bundle a device downloads: on IronFlockOS a directory
 // of /data, so a download survives a reboot and never fills a root slot.
 const CacheDir = "/var/cache/flockos"
 

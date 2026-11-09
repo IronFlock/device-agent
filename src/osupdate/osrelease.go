@@ -1,7 +1,7 @@
-// Package osupdate is the device side of FlockOS updates (FlockOS master
+// Package osupdate is the device side of IronFlockOS updates (IronFlockOS master
 // plan, section 3.5; WP-2.4): which image the device runs (os-release), the
 // signed release catalog the release pipeline publishes (dl/flockos/
-// manifest.json, FlockOS ADR-0009 and docs/manifest.schema.json), and the
+// manifest.json, IronFlockOS ADR-0009 and docs/manifest.schema.json), and the
 // download of an update bundle. RAUC installs the bundle and checks its
 // signature and compatible itself (system.InstallBundle).
 //
@@ -17,21 +17,21 @@ import (
 
 // Running is the image this device runs, from its os-release.
 type Running struct {
-	ID           string // ID: flockos on FlockOS
+	ID           string // ID: flockos on IronFlockOS
 	ImageID      string // IMAGE_ID: flockos-<target>-<variant>[-rt], the RAUC compatible
-	ImageVersion string // IMAGE_VERSION: the FlockOS version
+	ImageVersion string // IMAGE_VERSION: the IronFlockOS version
 	BuildID      string // BUILD_ID: <UTC build time>Z-g<commit>
 	PrettyName   string
 }
 
-// IsFlockOS reports whether the device runs a FlockOS image that RAUC
+// IsFlockOS reports whether the device runs an IronFlockOS image that RAUC
 // updates: ID flockos with an image id and version.
 func (r Running) IsFlockOS() bool {
 	return r.ID == "flockos" && r.ImageID != "" && r.ImageVersion != ""
 }
 
 // ImageIDReport is what the agent reports to the platform as os_image_id
-// (ReadRunning's result): the IMAGE_ID of a FlockOS image, "" on any other
+// (ReadRunning's result): the IMAGE_ID of an IronFlockOS image, "" on any other
 // OS, and ok false when the os-release cannot be read (Windows), so that the
 // report leaves the key out and the platform keeps what it knows. An
 // appliance mirrors the bundles of the image ids its devices report.

@@ -68,7 +68,7 @@ func statPath(path string) (reading, error) {
 
 // mountPoint returns the topmost directory above path (path included) on
 // device dev: the mount point of the filesystem holding path, or of the bind
-// mount path came through (/opt/ironflock on FlockOS, a bind of /data/ironflock).
+// mount path came through (/opt/ironflock on IronFlockOS, a bind of /data/ironflock).
 func mountPoint(path string, dev uint64) string {
 	p := path
 	if resolved, err := filepath.EvalSymlinks(path); err == nil {

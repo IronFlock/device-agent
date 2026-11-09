@@ -14,7 +14,7 @@ import (
 // or the cloud's instance-registry.ironflock.com/dl).
 const CatalogPath = "flockos/manifest.json"
 
-// CatalogSubject is what the catalog is signed as (FlockOS ADR-0009): its own
+// CatalogSubject is what the catalog is signed as (IronFlockOS ADR-0009): its own
 // context, so no other signed document of the update trees can stand in for
 // it, and no catalog for one of them.
 var CatalogSubject = updatesig.Subject{Context: "flockos-manifest:v1", Line: CatalogPath}
@@ -22,13 +22,13 @@ var CatalogSubject = updatesig.Subject{Context: "flockos-manifest:v1", Line: Cat
 // FLOCKOS_CATALOG_PUBLIC_KEYS lists the keys the catalog may be signed with,
 // in the format of updatesig.AGENT_UPDATE_PUBLIC_KEYS: one standard base64
 // raw Ed25519 key per line, "#" starts a comment. A key of its own, not an
-// agent update key: only FlockOS release runs may sign with it.
+// agent update key: only IronFlockOS release runs may sign with it.
 //
 // The line below is the Cloud KMS key ironflock-release/flockos-catalog,
-// version 1 (FlockOS WP-2.6; pki/flockos-catalog.pub and pki/README.md in
-// IronFlock/flockos give its PEM form and how to check it against KMS).
+// version 1 (IronFlockOS WP-2.6; pki/flockos-catalog.pub and pki/README.md in
+// IronFlock/ironflockos give its PEM form and how to check it against KMS).
 // Rotate it as the agent update keys: a release that lists both keys reaches
-// the fleet before FlockOS signs with the new one.
+// the fleet before IronFlockOS signs with the new one.
 const FLOCKOS_CATALOG_PUBLIC_KEYS = `
 wFLa1T7iHYi20X8JVu/O6JUzBGmW2+tjo7QVMuxsmQg= # key f5e1308e, Cloud KMS ironflock-release/flockos-catalog v1
 `
@@ -43,7 +43,7 @@ var catalogKeys = func() ([]updatesig.PublicKey, error) {
 }
 
 // ErrNoCatalogKey: this agent trusts no catalog key yet.
-var ErrNoCatalogKey = errors.New("this agent trusts no FlockOS catalog key yet (FLOCKOS_CATALOG_PUBLIC_KEYS)")
+var ErrNoCatalogKey = errors.New("this agent trusts no IronFlockOS catalog key yet (FLOCKOS_CATALOG_PUBLIC_KEYS)")
 
 // Artifact is one published file.
 type Artifact struct {
@@ -68,7 +68,7 @@ type Image struct {
 	Bundle       *Bundle  `json:"bundle"`
 }
 
-// Release is one FlockOS version.
+// Release is one IronFlockOS version.
 type Release struct {
 	BuildID   string           `json:"build_id"`
 	BuildTime string           `json:"buildtime"`
@@ -196,7 +196,7 @@ func (o Offer) CheckAgent(agentVersion string) error {
 		return fmt.Errorf("min_agent %q: %w", o.Release.MinAgent, err)
 	}
 	if agent.LessThan(min) {
-		return fmt.Errorf("%w: FlockOS %s needs agent %s, this is %s", ErrAgentTooOld, o.Version, o.Release.MinAgent, agentVersion)
+		return fmt.Errorf("%w: IronFlockOS %s needs agent %s, this is %s", ErrAgentTooOld, o.Version, o.Release.MinAgent, agentVersion)
 	}
 	return nil
 }

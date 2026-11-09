@@ -18,19 +18,19 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
-// OS updates of FlockOS images (FlockOS WP-2.4): the signed catalog below the
+// OS updates of IronFlockOS images (IronFlockOS WP-2.4): the signed catalog below the
 // update base names the release of the device's channel; the bundle is
 // downloaded to osupdate.CacheDir, checked against the catalog, and installed
 // by RAUC, which checks its signature and compatible. Devices that do not run
-// FlockOS keep the legacy path (GetOSUpdate, InstallOSUpdate).
+// IronFlockOS keep the legacy path (GetOSUpdate, InstallOSUpdate).
 
-// ErrNotFlockOS: the device does not run a FlockOS image.
-var ErrNotFlockOS = errors.New("this device does not run FlockOS")
+// ErrNotFlockOS: the device does not run an IronFlockOS image.
+var ErrNotFlockOS = errors.New("this device does not run IronFlockOS")
 
 // ErrNoNewerRelease: the channel offers nothing newer than the running image.
-var ErrNoNewerRelease = errors.New("no newer FlockOS release for this device's channel")
+var ErrNoNewerRelease = errors.New("no newer IronFlockOS release for this device's channel")
 
-// osUpdateMu lets one FlockOS update operation run at a time: a second
+// osUpdateMu lets one IronFlockOS update operation run at a time: a second
 // download would remove the first one's partial file, and RAUC installs one
 // bundle at a time.
 var osUpdateMu sync.Mutex
@@ -60,7 +60,7 @@ var (
 	installRauc = raucInstallBundle
 )
 
-// RunsFlockOS reports whether the device runs a FlockOS image.
+// RunsFlockOS reports whether the device runs an IronFlockOS image.
 func RunsFlockOS() bool {
 	r, err := readRunning()
 	return err == nil && r.IsFlockOS()
@@ -88,7 +88,7 @@ func (sys *System) FlockOSOffer() (osupdate.Running, osupdate.Offer, error) {
 	if err != nil {
 		return running, osupdate.Offer{}, fmt.Errorf("refusing %s: %w", url, err)
 	}
-	log.Debug().Str("key_id", keyID).Str("issued_at", catalog.IssuedAt).Msg("FlockOS catalog signature verified")
+	log.Debug().Str("key_id", keyID).Str("issued_at", catalog.IssuedAt).Msg("IronFlockOS catalog signature verified")
 	offer, err := catalog.Offer(running, GetEnvironment(sys.config))
 	return running, offer, err
 }
@@ -121,7 +121,7 @@ func (sys *System) DownloadFlockOSUpdate(ctx context.Context, progress func(file
 		return "", err
 	}
 	if path := osupdate.Downloaded(offer.Bundle, cacheDir); path != "" {
-		log.Info().Msgf("FlockOS %s is downloaded already: %s", offer.Version, path)
+		log.Info().Msgf("IronFlockOS %s is downloaded already: %s", offer.Version, path)
 		return path, nil
 	}
 	// From the update base the catalog came from (an appliance's mirror, or
@@ -130,7 +130,7 @@ func (sys *System) DownloadFlockOSUpdate(ctx context.Context, progress func(file
 	if bundle.URL, err = osupdate.BundleURL(sys.updateBaseURL(), offer.Version, offer.Bundle); err != nil {
 		return "", err
 	}
-	log.Info().Msgf("downloading FlockOS %s (%s) from %s", offer.Version, offer.Channel, bundle.URL)
+	log.Info().Msgf("downloading IronFlockOS %s (%s) from %s", offer.Version, offer.Channel, bundle.URL)
 	return osupdate.Download(ctx, bundle, cacheDir, progress)
 }
 
@@ -147,9 +147,9 @@ func (sys *System) InstallFlockOSUpdate(progress func(operationName string, prog
 	}
 	path := osupdate.Downloaded(offer.Bundle, cacheDir)
 	if path == "" {
-		return fmt.Errorf("FlockOS %s is not downloaded: download_os_update first", offer.Version)
+		return fmt.Errorf("IronFlockOS %s is not downloaded: download_os_update first", offer.Version)
 	}
-	log.Info().Msgf("installing FlockOS %s from %s", offer.Version, path)
+	log.Info().Msgf("installing IronFlockOS %s from %s", offer.Version, path)
 	if err := installRauc(path, progress); err != nil {
 		return fmt.Errorf("RAUC: %w", err)
 	}
@@ -170,10 +170,10 @@ func raucCall(ctx context.Context, method string, args []interface{}, out ...int
 }
 
 // MarkFlockOSSlotGood marks the slot the device booted from good: the
-// health gate of an update (FlockOS master plan, section 3.5, step 6). The
+// health gate of an update (IronFlockOS master plan, section 3.5, step 6). The
 // agent calls it once it is connected to the platform and Docker runs; a
 // slot that never gets here is not marked, and the bootloader falls back to
-// the previous slot. Not FlockOS: nothing to do.
+// the previous slot. Not IronFlockOS: nothing to do.
 func MarkFlockOSSlotGood(ctx context.Context) error {
 	if !RunsFlockOS() {
 		return nil
@@ -244,7 +244,7 @@ func FlockOSSlots(ctx context.Context) (booted string, primary string, slots []S
 // slotReadTimeout bounds the read of one slot's os-release.
 const slotReadTimeout = 5 * time.Second
 
-// slotOSReleasePath is where a FlockOS image keeps its os-release (FlockOS
+// slotOSReleasePath is where an IronFlockOS image keeps its os-release (IronFlockOS
 // build/customize.sh); /etc/os-release links to it.
 const slotOSReleasePath = "/usr/lib/os-release"
 
@@ -313,7 +313,7 @@ func slotImage(ctx context.Context, slot *Slot, fsType, device string) {
 }
 
 // debugfsOSRelease reads a slot's os-release straight from its ext4 device
-// with debugfs (e2fsprogs, on every FlockOS image), read-only and without
+// with debugfs (e2fsprogs, on every IronFlockOS image), read-only and without
 // mounting it: a mounted slot would make RAUC refuse to install into it.
 func debugfsOSRelease(ctx context.Context, device string) ([]byte, error) {
 	ctx, cancel := context.WithTimeout(ctx, slotReadTimeout)
@@ -364,6 +364,6 @@ func MarkFlockOSSlotGoodNow() {
 	ctx, cancel := context.WithTimeout(context.Background(), markGoodTimeout)
 	defer cancel()
 	if err := MarkFlockOSSlotGood(ctx); err != nil {
-		log.Error().Err(err).Msg("could not mark the booted FlockOS slot good")
+		log.Error().Err(err).Msg("could not mark the booted IronFlockOS slot good")
 	}
 }

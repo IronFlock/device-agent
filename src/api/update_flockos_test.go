@@ -20,7 +20,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// fakeFlockOS replaces the system calls of the FlockOS handlers.
+// fakeFlockOS replaces the system calls of the IronFlockOS handlers.
 type fakeFlockOS struct {
 	mu          sync.Mutex
 	offerErr    error
@@ -144,7 +144,7 @@ func TestGetOSReleaseOnFlockOS(t *testing.T) {
 		require.NoError(t, err)
 		dict := res.Arguments[0].(common.Dict)
 		current := dict["currentRelease"].(common.Dict)
-		assert.Equal(t, "FlockOS", current["Name"])
+		assert.Equal(t, "IronFlockOS", current["Name"])
 		assert.Equal(t, "1.0.0", current["Version"])
 		assert.Equal(t, "2026-11-20T09:55:12Z", current["BuildTime"])
 		assert.Equal(t, "flockos-amd64-efi-base", current["ImageID"])
@@ -175,7 +175,7 @@ func TestGetOSReleaseOnFlockOS(t *testing.T) {
 }
 
 func TestOSReleaseReport(t *testing.T) {
-	t.Run("FlockOS: the running image and the slots, no release offered", func(t *testing.T) {
+	t.Run("IronFlockOS: the running image and the slots, no release offered", func(t *testing.T) {
 		useFakeFlockOS(t, true, &fakeFlockOS{offerErr: errors.New("must not be asked")})
 		report, ok := OSReleaseReport(context.Background())
 		require.True(t, ok)
@@ -290,7 +290,7 @@ func TestPerformOSUpdate(t *testing.T) {
 		assert.Equal(t, []string{"download", "install"}, f.done())
 	})
 
-	t.Run("refused off FlockOS", func(t *testing.T) {
+	t.Run("refused off IronFlockOS", func(t *testing.T) {
 		f := &fakeFlockOS{}
 		useFakeFlockOS(t, false, f)
 		ex, _ := flockOSExternal(t)

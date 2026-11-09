@@ -27,7 +27,7 @@ func TestReportFirmwareInventory(t *testing.T) {
 		},
 	}
 
-	t.Run("on FlockOS: what fwupd sees, without the GUIDs and the empty fields", func(t *testing.T) {
+	t.Run("on IronFlockOS: what fwupd sees, without the GUIDs and the empty fields", func(t *testing.T) {
 		useFakeFlockOS(t, true, &fakeFlockOS{})
 		budget := withFirmware(t, inventory, nil)
 		ex, _ := flockOSExternal(t)

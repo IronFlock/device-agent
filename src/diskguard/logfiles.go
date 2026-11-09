@@ -29,7 +29,7 @@ func isRotatedLog(name string) bool {
 
 // removeRotatedLogs deletes the rotated log archives under dir: regular files
 // matching rotatedLogPatterns, on dir's own filesystem only (the walk does
-// not descend into other mounts; on FlockOS /var/log/journal is /data's) and
+// not descend into other mounts; on IronFlockOS /var/log/journal is /data's) and
 // outside the journal, which journald manages. Active logs, symlinks and
 // everything else stay.
 func (g *Guard) removeRotatedLogs(dir string) {
