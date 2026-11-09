@@ -10,7 +10,7 @@ import (
 
 // bundleCandidates are the usual single-file CA bundles, in the order the
 // major distributions install them — Go's own list (crypto/x509
-// root_linux.go). FlockOS and Debian devices land on the first entry; the rest
+// root_linux.go). IronFlockOS and Debian devices land on the first entry; the rest
 // cover RPM, SUSE and Alpine hosts.
 var bundleCandidates = []string{
 	"/etc/ssl/certs/ca-certificates.crt",

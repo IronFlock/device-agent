@@ -584,7 +584,7 @@ func (docker *Docker) GetConfig() *config.Config {
 }
 
 // DataRootDir returns the daemon's data-root directory (default /var/lib/docker),
-// as reported by the daemon itself. On FlockOS devices the data-root is moved to
+// as reported by the daemon itself. On IronFlockOS devices the data-root is moved to
 // the apps partition (e.g. /apps/docker), so callers that watch disk usage must
 // not assume the default path.
 func (docker *Docker) DataRootDir(ctx context.Context) (string, error) {

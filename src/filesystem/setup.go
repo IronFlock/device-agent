@@ -14,7 +14,7 @@ import (
 // too). Only the agent and the Docker daemon, both root, use them on the host,
 // and a container sees its own bind mount whatever the dirs above it allow, so
 // the files inside can stay readable for a container that runs as any user.
-// The apps dir itself is left alone: on FlockOS it is also Docker's data-root.
+// The apps dir itself is left alone: on IronFlockOS it is also Docker's data-root.
 // On Windows Chmod only touches the read-only attribute; the installer's ACLs
 // protect the apps dir there.
 const privateAppsDirMode os.FileMode = 0700

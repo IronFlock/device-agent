@@ -237,7 +237,7 @@ func TestThresholds(t *testing.T) {
 		{"app space: 500 GiB", 500 * tGiB, true, 3 * tGiB, 1 * tGiB},
 		{"app space: 20 GiB", 20 * tGiB, true, 3 * tGiB, 1 * tGiB},
 		{"app space: 8 GiB", 8 * tGiB, true, 3 * tGiB, 1 * tGiB},
-		{"app space: 7 GiB FlockOS /data on a 16 GB SD card", 7 * tGiB, true, 3 * tGiB, 1 * tGiB},
+		{"app space: 7 GiB IronFlockOS /data on a 16 GB SD card", 7 * tGiB, true, 3 * tGiB, 1 * tGiB},
 		{"app space: smaller than the warn floor", 2 * tGiB, true, 3 * tGiB, 1 * tGiB},
 		// System filesystems: a share of their size, capped by the floors.
 		{"system: 40 GiB root reaches the caps", 40 * tGiB, false, 3 * tGiB, 1 * tGiB},
@@ -278,9 +278,9 @@ func TestMeasuredThresholds(t *testing.T) {
 		appSpace        bool
 		warn, emergency uint64
 	}{
-		{"FlockOS /data is app space", true, "/data", true, 3 * tGiB, 1 * tGiB},
-		{"FlockOS root slot without app roles is a system filesystem", true, "/", false, 644245094, 214748364},
-		{"FlockOS ESP is a system filesystem", true, "/boot/efi", false, 40265318, 13421772},
+		{"IronFlockOS /data is app space", true, "/data", true, 3 * tGiB, 1 * tGiB},
+		{"IronFlockOS root slot without app roles is a system filesystem", true, "/", false, 644245094, 214748364},
+		{"IronFlockOS ESP is a system filesystem", true, "/boot/efi", false, 40265318, 13421772},
 		{"single-disk host: / carries docker, so it is app space", false, "/", true, 3 * tGiB, 1 * tGiB},
 	}
 	for _, c := range cases {
@@ -296,7 +296,7 @@ func TestMeasuredThresholds(t *testing.T) {
 
 	t.Run("small app space keeps the absolute floors", func(t *testing.T) {
 		d := newDevice(t, true)
-		d.data.total = 7 * tGiB // FlockOS /data on a 16 GB SD card
+		d.data.total = 7 * tGiB // IronFlockOS /data on a 16 GB SD card
 		for _, c := range []struct {
 			free uint64
 			want Level
@@ -617,19 +617,19 @@ func TestCleanupSelection(t *testing.T) {
 		fill    func(d *testDevice)
 		want    want
 	}{
-		{"FlockOS: /data low", true, false,
+		{"IronFlockOS: /data low", true, false,
 			func(d *testDevice) { d.host.set(d.data, 2*tGiB) },
 			want{docker: true, cmds: []string{"journalctl --vacuum-size=100M"}}},
-		{"FlockOS: root slot low", true, false,
+		{"IronFlockOS: root slot low", true, false,
 			func(d *testDevice) { d.host.set(d.root, 400*tMiB) },
 			want{cmds: []string{"apt-get clean"}}},
-		{"FlockOS: root slot in emergency", true, false,
+		{"IronFlockOS: root slot in emergency", true, false,
 			func(d *testDevice) { d.host.set(d.root, 100*tMiB) },
 			want{cmds: []string{"apt-get clean"}, archives: true, coreDumps: true}},
-		{"FlockOS: ESP in emergency", true, false,
+		{"IronFlockOS: ESP in emergency", true, false,
 			func(d *testDevice) { d.host.set(d.esp, 5*tMiB) },
 			want{}},
-		{"FlockOS: root slot out of inodes", true, false,
+		{"IronFlockOS: root slot out of inodes", true, false,
 			func(d *testDevice) { d.root.inodesFree = 1000 },
 			want{cmds: []string{"apt-get clean"}, archives: true, coreDumps: true}},
 		{"single disk: root low", false, false,

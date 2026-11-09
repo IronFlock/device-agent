@@ -110,7 +110,7 @@ never opens an empty database next to a populated one:
 |---|---|---|
 | `ironflock` | `/opt/ironflock/device-agent`, or nothing | `/opt/ironflock/device-agent`, `device-agent.db`, `/var/log/ironflock/device-agent.log` |
 | `legacy` | `/opt/reagent` from ironflock-init < 1.4.0 (`reagent.service` linked into `/opt/reagent/reswarmify/services/`) | `/opt/reagent`, `reagent.db`, `/var/log/reagent.log` |
-| `legacy-image` | `/opt/reagent` from an OS image (FlockOS, ReswarmOS, Jetson, …) | as `legacy`, never moved |
+| `legacy-image` | `/opt/reagent` from an OS image (IronFlockOS, ReswarmOS, Jetson, …) | as `legacy`, never moved |
 
 In the current layout one systemd unit runs the agent, and the agent activates
 its own updates exactly as the Windows service does (below):
@@ -148,7 +148,7 @@ fix anything on it ([`src/selfupdate`](src/selfupdate)):
   in a row both end blocked; the device stays on the version that connects.
 
 **Moving legacy installs (agent 1.3.0).** Every legacy install moves: ironflock-init's,
-FlockOS, ReswarmOS, the Cubic image, Jetson, the installers of 2021–23,
+IronFlockOS, ReswarmOS, the Cubic image, Jetson, the installers of 2021–23,
 appliance hosts. The move restarts Docker and every app once, so like an
 update it starts only at the agent's start — a legacy agent tries once, 5
 minutes after it connected to IronFlock (1.3.0 itself arrives at a start or
@@ -169,7 +169,7 @@ planned per device ([`src/migrate/plan.go`](src/migrate/plan.go)):
   are stopped, disabled and masked; a real unit file is moved aside first.
   The new unit takes the legacy unit's `-config`, `-appsDir` and other flags.
 - The config's link into `/boot` becomes a 0600 file and the `/boot` copies
-  of the device secret are deleted — except on OS images (FlockOS, ReswarmOS,
+  of the device secret are deleted — except on OS images (IronFlockOS, ReswarmOS,
   Cubic), whose boot scripts relink the config from `/boot` and re-enable the
   legacy units: there the `/boot` files stay and the legacy units stay
   masked. An OS update brings the image's legacy layout back with its agent,
@@ -577,12 +577,12 @@ CI (above) is the primary path. The original local recipes still work for ad-hoc
 The _Reagent_ makes use of [WAMP](https://wamp-proto.org)
 and [Docker](https://www.docker.com) as its two key technologies.
 
-### FlockOS OS updates
+### IronFlockOS OS updates
 
-On a device that runs FlockOS (`ID=flockos` in os-release, with `IMAGE_ID` and
-`IMAGE_VERSION`), the OS update procedures use the FlockOS release catalog
-(`src/osupdate`; FlockOS ADR-0009, `docs/manifest.schema.json` in
-IronFlock/flockos). Other devices keep the ReswarmOS files
+On a device that runs IronFlockOS (`ID=flockos` in os-release, with `IMAGE_ID` and
+`IMAGE_VERSION`), the OS update procedures use the IronFlockOS release catalog
+(`src/osupdate`; IronFlockOS ADR-0009, `docs/manifest.schema.json` in
+IronFlock/ironflockos). Other devices keep the ReswarmOS files
 (`/etc/reswarmos-update`, `/etc/os-release-latest.json`).
 
 - **The catalog** is `<update base>/flockos/manifest.json`, the base being the
@@ -590,7 +590,7 @@ IronFlock/flockos). Other devices keep the ReswarmOS files
   signed as `flockos-manifest:v1` / `flockos/manifest.json`, with a key of its
   own (`FLOCKOS_CATALOG_PUBLIC_KEYS` in `src/osupdate/catalog.go`), not an agent
   update key: Cloud KMS `ironflock-release/flockos-catalog`, version 1 (key
-  `f5e1308e`; `pki/flockos-catalog.pub` in IronFlock/flockos).
+  `f5e1308e`; `pki/flockos-catalog.pub` in IronFlock/ironflockos).
 - **The release** offered is the one the device's channel names: its
   environment (`production`, `test`); a channel the catalog lacks follows
   `production`. It is installable when it is newer than the running image and
@@ -650,12 +650,12 @@ device into its disk-emergency mode while one is nearly full. On Linux:
   and `/var/lib/docker` when they are mounts of their own. There is one entry
   per device (`st_dev`). Read-only and pseudo filesystems (proc, sysfs, tmpfs
   and the like) are left out. Each entry names its roles: `root`, `docker`,
-  `agent`, `data`, `boot`, `logs`, `journal`. On FlockOS these are the ESP
+  `agent`, `data`, `boot`, `logs`, `journal`. On IronFlockOS these are the ESP
   `/boot/efi` (`boot`), the root slot `/` (`root`, `logs`) and `/data`
   (`data`, `journal`, `docker`, `agent`).
 - **Levels:** each filesystem is `ok`, `warn` or `emergency`.
   - **App space**, a filesystem with the role `docker`, `agent` or `data` (on
-    FlockOS `/data`, on a single-disk host `/`), is at `warn` below 3 GiB free
+    IronFlockOS `/data`, on a single-disk host `/`), is at `warn` below 3 GiB free
     and at `emergency` below 1 GiB, whatever its size. When the apps run out
     of room does not depend on how big the disk is. App space smaller than
     that is at `warn` or `emergency` from the start: there is too little room
@@ -709,7 +709,7 @@ device into its disk-emergency mode while one is nearly full. On Linux:
   (`daemon.json` `log-opts`) and the journal (`SystemMaxUse=200M`).
 - **Report:** the heartbeat's `stats` and `get_storage_data` carry
   `filesystems` and `disk_level`, the worst level. The platform warns users
-  from them. `storage_*` and `docker_apps_*` are unchanged. A FlockOS device:
+  from them. `storage_*` and `docker_apps_*` are unchanged. An IronFlockOS device:
 
   ```json
   "disk_level": "ok",

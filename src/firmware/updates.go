@@ -23,7 +23,7 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
-// Updates through fwupd (lane 3 of FlockOS ADR-0007). fwupd only flashes: its
+// Updates through fwupd (lane 3 of IronFlockOS ADR-0007). fwupd only flashes: its
 // client downloads the metadata and the firmware and hands them over as file
 // descriptors, so this package does what fwupdmgr does (libfwupd/fwupd-client.c
 // of fwupd 2.0). fwupd checks the signed metadata, and that the firmware
@@ -419,7 +419,7 @@ func fetchToFile(ctx context.Context, src source, limit int64, onBytes func(curr
 
 // Refresh brings fwupd's metadata up to date, for the enabled remotes last
 // fetched more than maxAge ago (0: all of them). fwupd checks the signature.
-// The FlockOS image has no fwupd-refresh timer: this is what replaces it.
+// The IronFlockOS image has no fwupd-refresh timer: this is what replaces it.
 // mirror is MirrorURL of the update base; LVFS itself is the fallback, so
 // that a device behind an appliance without the mirror keeps working.
 func Refresh(ctx context.Context, maxAge time.Duration, mirror string) error {

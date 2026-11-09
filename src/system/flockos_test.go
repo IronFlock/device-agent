@@ -22,7 +22,7 @@ import (
 // copy, which a device downloads only when the cloud is its update base.
 const cloudBundleURL = "https://cloud.example/dl/flockos/1.0.1/flockos-amd64-efi-base-1.0.1.raucb"
 
-// flockOSDevice sets the seams: a FlockOS device running version whose update
+// flockOSDevice sets the seams: an IronFlockOS device running version whose update
 // base is base, a catalog there whose test channel offers 1.0.1 with the
 // bundle at cloudBundleURL, the cache in a temporary directory, and RAUC
 // replaced by install.
@@ -98,7 +98,7 @@ func TestFlockOSOffer(t *testing.T) {
 		assert.True(t, offer.Newer)
 	})
 
-	t.Run("not FlockOS", func(t *testing.T) {
+	t.Run("not IronFlockOS", func(t *testing.T) {
 		sys := flockOSDevice(t, "1.0.0", "https://dl.example", nil, nil)
 		readRunning = func() (osupdate.Running, error) { return osupdate.Running{ID: "debian"}, nil }
 		_, _, err := sys.FlockOSOffer()
@@ -124,7 +124,7 @@ func TestFlockOSOffer(t *testing.T) {
 }
 
 func TestDownloadAndInstallFlockOSUpdate(t *testing.T) {
-	bundle := []byte("a bundle of FlockOS 1.0.1")
+	bundle := []byte("a bundle of IronFlockOS 1.0.1")
 
 	t.Run("download, then install the downloaded bundle", func(t *testing.T) {
 		var installed string
@@ -185,7 +185,7 @@ func TestMarkFlockOSSlotGoodSkipsOtherSystems(t *testing.T) {
 	old := readRunning
 	t.Cleanup(func() { readRunning = old })
 	readRunning = func() (osupdate.Running, error) { return osupdate.Running{ID: "debian"}, nil }
-	assert.NoError(t, MarkFlockOSSlotGood(context.Background()), "no RAUC is asked on a device that is not FlockOS")
+	assert.NoError(t, MarkFlockOSSlotGood(context.Background()), "no RAUC is asked on a device that is not IronFlockOS")
 }
 
 // slotReads sets the seams of slotImage: the running image is 1.1.0, and a
@@ -218,7 +218,7 @@ func slotReads(t *testing.T, images map[string]string) *[]string {
 	return &reads
 }
 
-const flashedOSRelease = `NAME="FlockOS"
+const flashedOSRelease = `NAME="IronFlockOS"
 ID=flockos
 IMAGE_ID=flockos-amd64-efi-base
 IMAGE_VERSION=1.0.0

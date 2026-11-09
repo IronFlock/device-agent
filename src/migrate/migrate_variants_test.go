@@ -17,7 +17,7 @@ var variants = map[string]func(t *testing.T, d *device){
 	// ironflock-init since 2024-03: newDevice as it is.
 	"ironflock-init": func(t *testing.T, d *device) {},
 
-	// FlockOS: an A/B image (RAUC); its flock-init.sh links and enables the
+	// IronFlockOS: an A/B image (RAUC); its flock-init.sh links and enables the
 	// units from /opt/reagent/ironflock/services at every boot; Docker's
 	// data-root is the /apps partition.
 	"flockos": func(t *testing.T, d *device) {

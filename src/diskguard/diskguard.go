@@ -13,7 +13,7 @@
 //     deduplicated by device, read-only and pseudo filesystems left out. Each
 //     carries the roles it serves (root, docker, agent, data, boot, logs,
 //     journal) and a level (ok, warn, emergency). App space (docker, agent or
-//     data: /data on FlockOS) has absolute floors, 3 GiB and 1 GiB whatever its
+//     data: /data on IronFlockOS) has absolute floors, 3 GiB and 1 GiB whatever its
 //     size, so when the apps run out of room never depends on the disk size;
 //     a system filesystem (a root slot without app data, the ESP, a separate
 //     /var/log) has floors relative to its size, so a 4 GiB root slot and a

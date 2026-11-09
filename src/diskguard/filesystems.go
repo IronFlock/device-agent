@@ -44,9 +44,9 @@ func worse(a, b Level) Level {
 // The roles a watched filesystem serves: why it is watched, and which cleanup
 // can free it.
 const (
-	RoleRoot    = "root"    // the root filesystem (/; on FlockOS the RAUC root slot)
-	RoleBoot    = "boot"    // the EFI system partition (/boot/efi; FlockOS keeps GRUB's A/B state there)
-	RoleData    = "data"    // FlockOS's data partition (/data)
+	RoleRoot    = "root"    // the root filesystem (/; on IronFlockOS the RAUC root slot)
+	RoleBoot    = "boot"    // the EFI system partition (/boot/efi; IronFlockOS keeps GRUB's A/B state there)
+	RoleData    = "data"    // IronFlockOS's data partition (/data)
 	RoleLogs    = "logs"    // /var/log
 	RoleJournal = "journal" // the persistent systemd journal (/var/log/journal)
 	RoleDocker  = "docker"  // Docker's data-root, and /var/lib/docker when it is a mount of its own
@@ -169,7 +169,7 @@ type candidate struct {
 // candidates lists the watched paths. Order matters: a filesystem is reported
 // under the mount point of the first candidate on it, so the real mount
 // points come before the paths that reach a filesystem through a bind mount
-// (/opt/ironflock on FlockOS, a bind of /data/ironflock).
+// (/opt/ironflock on IronFlockOS, a bind of /data/ironflock).
 func (g *Guard) candidates() []candidate {
 	p := g.paths
 	return []candidate{
@@ -263,7 +263,7 @@ func newFilesystem(r reading, role string) Filesystem {
 
 // thresholds returns a filesystem's warn and emergency floors in free bytes.
 //
-// App space (isAppSpace: on FlockOS /data, on a single-disk host the root
+// App space (isAppSpace: on IronFlockOS /data, on a single-disk host the root
 // filesystem) gets the absolute floors, WarnFreeBytes and EmergencyFreeBytes,
 // whatever its size: when the apps run out of room must not depend on how big
 // the disk is. App space smaller than a floor is at that level from the start;

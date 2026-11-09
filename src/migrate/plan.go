@@ -13,14 +13,14 @@ import (
 // journal) records how:
 //
 //   - the units: links into /opt/reagent (ironflock-init since 2024-03,
-//     FlockOS), real files in /etc/systemd/system (ReswarmOS, the Cubic
+//     IronFlockOS), real files in /etc/systemd/system (ReswarmOS, the Cubic
 //     installer, Jetson, the installers of 2021–23) or package files in
 //     /lib/systemd/system;
 //   - the data: moved with one rename (StrategyMove), or, where that cannot
 //     work — a mount at or below /opt/reagent, another filesystem than /opt,
 //     an OS image — left in place with /opt/ironflock/device-agent a link to
 //     it (StrategyLink);
-//   - OS images (RAUC slots: FlockOS, ReswarmOS, Cubic): their boot scripts
+//   - OS images (RAUC slots: IronFlockOS, ReswarmOS, Cubic): their boot scripts
 //     relink the config from /boot and re-enable the legacy units, so the
 //     /boot files stay and the legacy units stay masked. An OS update brings
 //     the image's legacy layout back with its own agent, which updates and
@@ -149,7 +149,7 @@ func parseExecStart(unitText string) legacyCommand {
 	return c
 }
 
-// isImage: an A/B OS image owns /opt/reagent and /etc (RAUC), or FlockOS's
+// isImage: an A/B OS image owns /opt/reagent and /etc (RAUC), or IronFlockOS's
 // boot script re-enables the legacy units.
 func isImage(e Env) bool {
 	return exists(e.p(raucConfig)) || isDirectory(e.p(layout.LegacyAgentDir+"/ironflock/services"))

@@ -25,11 +25,11 @@ import (
 // --- os-release ----------------------------------------------------------------
 
 func TestParseOSRelease(t *testing.T) {
-	fields := ParseOSRelease([]byte(`# FlockOS
-NAME="FlockOS"
+	fields := ParseOSRelease([]byte(`# IronFlockOS
+NAME="IronFlockOS"
 ID=flockos
 ID_LIKE=debian
-PRETTY_NAME="FlockOS 1.0.0 (amd64-efi, base)"
+PRETTY_NAME="IronFlockOS 1.0.0 (amd64-efi, base)"
 VERSION="v1.0.0-g1a2b3c4-20261120T095512"
 IMAGE_ID=flockos-amd64-efi-base
 IMAGE_VERSION=1.0.0
@@ -41,7 +41,7 @@ not a line
  =novalue
 `))
 	assert.Equal(t, "flockos", fields["ID"])
-	assert.Equal(t, "FlockOS 1.0.0 (amd64-efi, base)", fields["PRETTY_NAME"])
+	assert.Equal(t, "IronFlockOS 1.0.0 (amd64-efi, base)", fields["PRETTY_NAME"])
 	assert.Equal(t, "flockos-amd64-efi-base", fields["IMAGE_ID"])
 	assert.Equal(t, "single quoted", fields["QUOTED"])
 	assert.Equal(t, `a "quote" and a \ backslash`, fields["ESCAPED"])
@@ -160,7 +160,7 @@ func TestOpenCatalog(t *testing.T) {
 		assert.ErrorIs(t, err, ErrNoCatalogKey)
 	})
 
-	t.Run("the shipped key list is FlockOS's catalog key", func(t *testing.T) {
+	t.Run("the shipped key list is IronFlockOS's catalog key", func(t *testing.T) {
 		keys, err := catalogKeys()
 		require.NoError(t, err)
 		require.Len(t, keys, 1)

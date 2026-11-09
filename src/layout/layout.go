@@ -5,7 +5,7 @@
 //	/opt/ironflock/device-agent   current: written by ironflock-init >= 1.4.0, or
 //	                              moved there in place by `device-agent migrate-layout`
 //	/opt/reagent                  legacy: ironflock-init < 1.4.0, and OS images
-//	                              (FlockOS, ReswarmOS, cubic, the Jetson script)
+//	                              (IronFlockOS, ReswarmOS, cubic, the Jetson script)
 //
 // The legacy layout runs the agent from units that pass only -config and
 // -appsDir, so the built-in defaults have to follow the layout that is
@@ -41,7 +41,7 @@ const (
 	// units are links into /opt/reagent/reswarmify/services/, so
 	// migrate-layout can move it.
 	Legacy Kind = "legacy"
-	// LegacyImage is an /opt/reagent layout that an OS image owns (FlockOS,
+	// LegacyImage is an /opt/reagent layout that an OS image owns (IronFlockOS,
 	// ReswarmOS, cubic, Jetson) or that predates /opt/reagent/reswarmify.
 	// It stays as it is: an OS update or the image's own boot scripts would
 	// bring the old units back.
@@ -134,7 +134,7 @@ func Detect(root string) Paths {
 // IsIronflockInitInstall reports whether the /opt/reagent below root was laid
 // down by ironflock-init < 1.4.0: reagent.service is a link to the unit file in
 // /opt/reagent/reswarmify/services/ (images ship real unit files), the device
-// is enrolled, and it is not FlockOS (which re-enables its units at every
+// is enrolled, and it is not IronFlockOS (which re-enables its units at every
 // boot).
 func IsIronflockInitInstall(root string) bool {
 	if exists(join(root, legacyFlockOSMarker)) || isDir(join(root, legacyFlockOSUnits)) {

@@ -39,7 +39,7 @@ const SystemRestartAgent Topic = "system_restart_agent"
 
 const GetStorageData Topic = "get_storage_data"
 
-// The device's firmware through fwupd (FlockOS ADR-0007, lane 3).
+// The device's firmware through fwupd (IronFlockOS ADR-0007, lane 3).
 const GetFirmwareInventory Topic = "get_firmware_inventory"
 const RefreshFirmwareUpdates Topic = "refresh_firmware_updates"
 const InstallFirmwareUpdate Topic = "install_firmware_update"

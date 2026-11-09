@@ -196,11 +196,11 @@ func (agent *Agent) OnConnect(reconnect bool) error {
 	<-agent.daemonReady
 	log.Info().Msg("Docker Daemon is available")
 
-	// The health gate of a FlockOS update: connected to the platform and
+	// The health gate of an IronFlockOS update: connected to the platform and
 	// Docker runs, so the slot this device booted is good. A slot that never
 	// gets here stays unmarked and the bootloader falls back to the previous
 	// one. In the background, bounded, logged: it never holds up the rest of
-	// the connect. Not FlockOS: nothing to do. The report follows the mark, so
+	// the connect. Not IronFlockOS: nothing to do. The report follows the mark, so
 	// that the booted slot is reported as confirmed. The firmware inventory
 	// comes last, and not alongside: fwupd can take a while to answer, and two
 	// reports at once would race for the device's row, so one could be lost.
@@ -381,7 +381,7 @@ func NewAgent(generalConfig *config.Config) (agent *Agent) {
 		diskguard.New(nil, diskguard.Config{AgentDir: cliArgs.AgentDir})
 	} else {
 		diskguard.EnsurePreventionConfig()
-		// Watch the daemon's actual data-root: on FlockOS it lives on the apps
+		// Watch the daemon's actual data-root: on IronFlockOS it lives on the apps
 		// partition (e.g. /apps/docker), not the /var/lib/docker default.
 		var dataRoot string
 		infoCtx, cancelInfo := context.WithTimeout(context.Background(), 10*time.Second)

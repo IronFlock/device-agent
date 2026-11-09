@@ -47,7 +47,7 @@ func buildTime(buildID string) string {
 	return m[1] + "-" + m[2] + "-" + m[3] + "T" + m[4] + ":" + m[5] + ":" + m[6] + "Z"
 }
 
-// flockOSRelease is get_os_release on FlockOS: the running image, the release
+// flockOSRelease is get_os_release on IronFlockOS: the running image, the release
 // the device's channel offers, and RAUC's slots. The keys of the legacy
 // answer (Name, Version, BuildTime) stay; a part that cannot be read carries
 // its error instead of failing the whole answer.
@@ -58,7 +58,7 @@ func (ex *External) flockOSRelease(ctx context.Context) *messenger.InvokeResult 
 		latest["Error"] = err.Error()
 	} else {
 		latest = common.Dict{
-			"Name":            "FlockOS",
+			"Name":            "IronFlockOS",
 			"Version":         offer.Version,
 			"BuildTime":       offer.Release.BuildTime,
 			"BuildID":         offer.Release.BuildID,
@@ -80,7 +80,7 @@ func (ex *External) flockOSRelease(ctx context.Context) *messenger.InvokeResult 
 // flockOSCurrent is the running image as get_os_release names it.
 func flockOSCurrent(running osupdate.Running) common.Dict {
 	return common.Dict{
-		"Name":      "FlockOS",
+		"Name":      "IronFlockOS",
 		"Version":   running.ImageVersion,
 		"BuildTime": buildTime(running.BuildID),
 		"ImageID":   running.ImageID,
@@ -123,7 +123,7 @@ func (ex *External) DeviceReport() common.Dict {
 		"variant":       sysInfo.Variant,
 		"agent_version": release.GetVersion(),
 	}
-	// The FlockOS image the device runs: an appliance mirrors the OS updates
+	// The IronFlockOS image the device runs: an appliance mirrors the OS updates
 	// of the images its devices run. A small file read, no blocking.
 	if imageID, ok := osupdate.ImageIDReport(readRunning()); ok {
 		payload["os_image_id"] = imageID
@@ -131,7 +131,7 @@ func (ex *External) DeviceReport() common.Dict {
 	return payload
 }
 
-// ReportOSRelease tells the platform what this FlockOS device runs, which
+// ReportOSRelease tells the platform what this IronFlockOS device runs, which
 // Studio shows from the device list store, online or offline. Sent after a
 // connect, and after a failed install, which changes the slots without one.
 // Errors are logged, never returned: the report is for display only.
@@ -150,7 +150,7 @@ func (ex *External) ReportOSRelease() {
 }
 
 // OSReleaseReport is what the agent reports to the platform as os_release: on
-// FlockOS the running image and RAUC's slots as get_os_release names them. The
+// IronFlockOS the running image and RAUC's slots as get_os_release names them. The
 // release to update to is not part of it: Studio compares this with the
 // catalog itself. An empty Dict on any other OS, and ok false when the
 // os-release cannot be read (Windows), so that the report leaves the key out
@@ -168,7 +168,7 @@ func OSReleaseReport(ctx context.Context) (report common.Dict, ok bool) {
 	return report, true
 }
 
-// performOSUpdateHandler is perform_os_update on FlockOS: download, install
+// performOSUpdateHandler is perform_os_update on IronFlockOS: download, install
 // and reboot into the new slot behind one progress topic. The answer comes
 // before the reboot. Elsewhere it refuses: the legacy images update in two
 // calls.
@@ -207,7 +207,7 @@ func (ex *External) performOSUpdateHandler(ctx context.Context, response messeng
 	}
 
 	publish(common.Dict{"stage": "reboot"})
-	log.Info().Msgf("FlockOS update from %s installed; rebooting into the new slot", path)
+	log.Info().Msgf("IronFlockOS update from %s installed; rebooting into the new slot", path)
 	safe.Go(func() {
 		time.Sleep(rebootDelay)
 		if err := rebootSystem(ex.System); err != nil {

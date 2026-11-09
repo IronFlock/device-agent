@@ -345,7 +345,7 @@ func TestInitDirectoriesIdempotent(t *testing.T) {
 }
 
 // The dirs holding app secrets are private to the agent, also where an older
-// agent created them open; the apps dir (Docker's data-root on FlockOS) and
+// agent created them open; the apps dir (Docker's data-root on IronFlockOS) and
 // the shared dir are left as they are.
 func TestInitDirectoriesPrivateAppDirs(t *testing.T) {
 	if runtime.GOOS == "windows" {

@@ -22,9 +22,9 @@ const firmwareReportCallTimeout = 30 * time.Second
 // readFirmware is firmware.Read; the tests replace it.
 var readFirmware = firmware.Read
 
-// ReportFirmwareInventory tells the platform which firmware this FlockOS
+// ReportFirmwareInventory tells the platform which firmware this IronFlockOS
 // device runs, which Studio shows from the device list store, online or
-// offline. Sent after a connect. Not FlockOS: nothing to report. Errors are
+// offline. Sent after a connect. Not IronFlockOS: nothing to report. Errors are
 // logged, never returned: the report is for display only, and the platform
 // keeps what it knows.
 func (ex *External) ReportFirmwareInventory() {
