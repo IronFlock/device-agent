@@ -20,6 +20,13 @@ const QueryAppLogs Topic = "query_app_logs"
 // app. Bounded, time-windowed and severity-filtered.
 const QueryDeviceLogs Topic = "query_device_logs"
 
+// ListPlatformServices and QueryPlatformLogs read the appliance's own stack:
+// the state and the logs of its platform containers, and the host's journal.
+// Only the appliance's backend calls them, for an account holding MAINTAIN on
+// this device. They answer on an appliance host and refuse everywhere else.
+const ListPlatformServices Topic = "list_platform_services"
+const QueryPlatformLogs Topic = "query_platform_logs"
+
 const ListContainers Topic = "list_containers"
 
 const ListEthernetDevices Topic = "list_ethernet_devices"

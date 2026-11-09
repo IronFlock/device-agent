@@ -21,6 +21,13 @@ func (ex *External) getStorageDataHandler(ctx context.Context, response messenge
 		return nil, errdefs.InsufficientPrivileges(errors.New("insufficient privileges to get storage data"))
 	}
 
+	return &messenger.InvokeResult{
+		Arguments: []interface{}{ex.storageData()},
+	}, nil
+}
+
+// storageData is the host's CPU, memory and disk usage.
+func (ex *External) storageData() common.Dict {
 	stats := common.GetStats(filepath.Join(ex.Config.CommandLineArguments.AgentDir, "docker-apps"))
 
 	result := common.Dict{
@@ -40,7 +47,5 @@ func (ex *External) getStorageDataHandler(ctx context.Context, response messenge
 	// filesystems and disk_level, as on the heartbeat (see diskguard.StatsFields).
 	maps.Copy(result, diskguard.StatsFields())
 
-	return &messenger.InvokeResult{
-		Arguments: []interface{}{result},
-	}, nil
+	return result
 }

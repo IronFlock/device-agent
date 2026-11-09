@@ -98,6 +98,12 @@ func (ex *External) getTopicHandlerMap() map[topics.Topic]RegistrationHandler {
 		topics.Handshake:       backendOnly(ex.deviceHandshakeHandler),
 		topics.CheckHostPort:   backendOnly(ex.checkHostPortHandler),
 		topics.GetTunnelState:  backendOnly(ex.getTunnelState),
+
+		// Backend-only as well, and the handlers then check MAINTAIN as the
+		// account the backend names: the appliance's platform logs cover every
+		// project on it, so the backend must not be the only gate.
+		topics.ListPlatformServices: backendOnly(ex.listPlatformServicesHandler),
+		topics.QueryPlatformLogs:    backendOnly(ex.queryPlatformLogsHandler),
 	}
 }
 

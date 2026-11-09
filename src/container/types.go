@@ -21,6 +21,7 @@ type ContainerResult struct { // More fields can be added if needed, needs to be
 	ID       string
 	Names    []string
 	ImageID  string
+	Image    string
 	Labels   map[string]string
 	Status   string
 	State    string
@@ -68,6 +69,13 @@ type ContainerState struct {
 	Error      string
 	StartedAt  string
 	FinishedAt string
+
+	// Health is the healthcheck's verdict ("healthy", "unhealthy", "starting"),
+	// empty for a container without a healthcheck.
+	Health string
+
+	// RestartCount is how many times the daemon restarted this container.
+	RestartCount int
 }
 
 // Container generic interface for a Container API

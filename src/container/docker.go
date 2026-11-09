@@ -147,6 +147,7 @@ func (docker *Docker) ListContainers(ctx context.Context, options common.Dict) (
 			ID:      cont.ID,
 			Names:   cont.Names,
 			ImageID: cont.ImageID,
+			Image:   cont.Image,
 			Command: cont.Command,
 			Labels:  cont.Labels,
 			State:   cont.State,
@@ -924,18 +925,25 @@ func (docker *Docker) GetContainerState(ctx context.Context, containerName strin
 	}
 
 	state := res.State
+	health := ""
+	if state.Health != nil {
+		health = string(state.Health.Status)
+	}
+
 	return ContainerState{
-		Status:     state.Status,
-		Running:    state.Running,
-		Paused:     state.Paused,
-		Restarting: state.Restarting,
-		OOMKilled:  state.OOMKilled,
-		Dead:       state.Dead,
-		Pid:        state.Pid,
-		ExitCode:   state.ExitCode,
-		Error:      state.Error,
-		StartedAt:  state.StartedAt,
-		FinishedAt: state.FinishedAt,
+		Status:       state.Status,
+		Running:      state.Running,
+		Paused:       state.Paused,
+		Restarting:   state.Restarting,
+		OOMKilled:    state.OOMKilled,
+		Dead:         state.Dead,
+		Pid:          state.Pid,
+		ExitCode:     state.ExitCode,
+		Error:        state.Error,
+		StartedAt:    state.StartedAt,
+		FinishedAt:   state.FinishedAt,
+		Health:       health,
+		RestartCount: res.RestartCount,
 	}, nil
 }
 
