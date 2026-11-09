@@ -225,6 +225,16 @@ func (lm *LogManager) composeLogs(ctx context.Context, containerName string, que
 		return nil, time.Time{}, errNoComposeProject
 	}
 
+	return lm.mergeContainerLogs(ctx, containers, query)
+}
+
+// mergeContainerLogs reads the given containers and merges them into one
+// timeline, as composeLogs documents.
+func (lm *LogManager) mergeContainerLogs(
+	ctx context.Context,
+	containers []container.ContainerResult,
+	query container.LogQuery,
+) ([]string, time.Time, error) {
 	stamped := query
 	stamped.Timestamps = true
 

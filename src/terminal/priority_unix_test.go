@@ -40,6 +40,49 @@ func TestHostShellUsesAScopeWhereSystemdRunWorks(t *testing.T) {
 	assert.Equal(t, []string{"--scope", "--quiet", "--collect", "--slice=system.slice", "--", "bash"}, cmd.Args[1:])
 }
 
+func TestHostShellOpensInTheIronFlockFolder(t *testing.T) {
+	assert.Equal(t, "/opt/ironflock", hostShellStartDir)
+
+	for name, binDirHasSystemdRun := range map[string]bool{"plain bash": false, "scope": true} {
+		t.Run(name, func(t *testing.T) {
+			binDir := t.TempDir()
+			if binDirHasSystemdRun {
+				require.NoError(t, os.WriteFile(binDir+"/systemd-run", []byte("#!/bin/sh\nexit 0\n"), 0o755))
+			}
+			t.Setenv("PATH", binDir)
+			scopeProbe.once = sync.Once{}
+			scopeProbe.ok = false
+			t.Cleanup(func() { scopeProbe.once = sync.Once{}; scopeProbe.ok = false })
+
+			folder := t.TempDir()
+			original := hostShellStartDir
+			hostShellStartDir = folder
+			t.Cleanup(func() { hostShellStartDir = original })
+
+			assert.Equal(t, folder, hostShellCommand().Dir)
+		})
+	}
+}
+
+func TestHostShellOpensAnywhereWhenTheFolderCannotBeUsed(t *testing.T) {
+	file := t.TempDir() + "/a-file"
+	require.NoError(t, os.WriteFile(file, nil, 0o644))
+
+	assert.Empty(t, hostShellDir(t.TempDir()+"/missing"), "a host with the legacy layout has no such folder")
+	assert.Empty(t, hostShellDir(file), "not a folder")
+}
+
+func TestHostShellOpensAnywhereWhenTheFolderCannotBeEntered(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root can enter any folder")
+	}
+	folder := t.TempDir()
+	require.NoError(t, os.Chmod(folder, 0o600))
+	t.Cleanup(func() { _ = os.Chmod(folder, 0o755) })
+
+	assert.Empty(t, hostShellDir(folder))
+}
+
 // The reset only shows where the parent runs with raised values, which takes
 // root with CAP_SYS_NICE and CAP_SYS_RESOURCE: a Linux device or VM, or
 // `docker run --cap-add SYS_NICE --cap-add SYS_RESOURCE`. Elsewhere (CI's

@@ -17,6 +17,7 @@ import (
 	"reagent/common"
 	"reagent/config"
 	"reagent/container"
+	"reagent/crashrecovery"
 	"reagent/diskguard"
 	"reagent/errdefs"
 	"reagent/messenger/topics"
@@ -1069,6 +1070,10 @@ func (s *WampSession) UpdateRemoteDeviceStatus(status DeviceStatus) error {
 	// from a snapshot whose refresh is bounded, so a hung statfs cannot hold
 	// up the heartbeat.
 	maps.Copy(statsDict, diskguard.StatsFields())
+
+	// The host's last crash (last_crash; see crashrecovery.StatsFields): the
+	// host restarts by itself, so nobody would notice otherwise.
+	maps.Copy(statsDict, crashrecovery.StatsFields())
 
 	// Docker daemon health, probed live at send time so the payload is
 	// truthful even for outages nothing else has noticed yet (a hung daemon,
