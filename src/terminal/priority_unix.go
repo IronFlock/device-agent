@@ -10,6 +10,8 @@ import (
 	"sync"
 	"syscall"
 	"time"
+
+	"golang.org/x/sys/unix"
 )
 
 // The agent runs with a raised CPU weight, a nice value of -16 and a
@@ -41,15 +43,31 @@ func systemdScopeWorks() bool {
 	return scopeProbe.ok
 }
 
+// hostShellStartDir is where a device terminal opens. A variable for the tests.
+var hostShellStartDir = "/opt/ironflock"
+
+// hostShellDir returns dir if the shell can start there, or "" for the agent's
+// own directory. A directory the shell cannot enter would keep the terminal
+// from opening at all, and a host with the legacy layout does not have this one.
+func hostShellDir(dir string) string {
+	info, err := os.Stat(dir)
+	if err != nil || !info.IsDir() || unix.Access(dir, unix.X_OK) != nil {
+		return ""
+	}
+	return dir
+}
+
 // hostShellCommand is the shell of a device terminal. systemd-run --scope
 // execs the shell in place once the scope exists, so the pid the agent holds
-// is the shell's.
+// is the shell's, and the shell keeps the directory it is started in.
 func hostShellCommand() *exec.Cmd {
+	cmd := exec.Command("bash")
 	if systemdScopeWorks() {
 		args := append(append([]string{}, scopeArgs...), "bash")
-		return exec.Command("systemd-run", args...) //nolint:gosec // G204: fixed systemd-run invocation, fixed arguments
+		cmd = exec.Command("systemd-run", args...) //nolint:gosec // G204: fixed systemd-run invocation, fixed arguments
 	}
-	return exec.Command("bash")
+	cmd.Dir = hostShellDir(hostShellStartDir)
+	return cmd
 }
 
 // resetPriority gives the shell the values a login shell has. Processes its

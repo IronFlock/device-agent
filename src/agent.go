@@ -10,6 +10,7 @@ import (
 	"reagent/benchmark"
 	"reagent/config"
 	"reagent/container"
+	"reagent/crashrecovery"
 	"reagent/diskguard"
 	"reagent/filesystem"
 	"reagent/lifecycle"
@@ -381,6 +382,7 @@ func NewAgent(generalConfig *config.Config) (agent *Agent) {
 		diskguard.New(nil, diskguard.Config{AgentDir: cliArgs.AgentDir})
 	} else {
 		diskguard.EnsurePreventionConfig()
+		safe.Go(func() { crashrecovery.Run(cliArgs.AgentDir) })
 		// Watch the daemon's actual data-root: on IronFlockOS it lives on the apps
 		// partition (e.g. /apps/docker), not the /var/lib/docker default.
 		var dataRoot string
