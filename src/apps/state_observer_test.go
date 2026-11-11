@@ -35,6 +35,15 @@ import (
 func newObserverHarness(t *testing.T) (*StateObserver, *mocks.Container, *store.AppStore, *fakes.Messenger) {
 	t.Helper()
 
+	so, mockContainer, appStore, msg, _ := newObserverHarnessWithDB(t)
+	return so, mockContainer, appStore, msg
+}
+
+// newObserverHarnessWithDB is newObserverHarness that also hands back the
+// database, so a test can close it to make every local write fail.
+func newObserverHarnessWithDB(t *testing.T) (*StateObserver, *mocks.Container, *store.AppStore, *fakes.Messenger, *persistence.AppStateDatabase) {
+	t.Helper()
+
 	mockContainer := mocks.NewContainer(t)
 
 	cfg := builders.DefaultTestConfig()
@@ -48,7 +57,7 @@ func newObserverHarness(t *testing.T) (*StateObserver, *mocks.Container, *store.
 	appStore := store.NewAppStore(db, msg)
 	observer := NewObserver(mockContainer, &appStore, nil)
 
-	return &observer, mockContainer, &appStore, msg
+	return &observer, mockContainer, &appStore, msg, db
 }
 
 // observerSeedApp inserts an app row (non-compose) and returns the live
@@ -133,6 +142,40 @@ func TestObserverNotify(t *testing.T) {
 		fromDB, dberr := st.GetApp(1, common.PROD)
 		require.NoError(t, dberr)
 		assert.Equal(t, common.RUNNING, fromDB.CurrentState)
+	})
+
+	// The field case: a DEV build fails with "no space left on device", and
+	// the FAILED write to the agent's database fails on the same full disk.
+	// The platform must still learn FAILED; before, it kept showing BUILDING.
+	t.Run("reports to remote when the local write fails", func(t *testing.T) {
+		so, _, st, msg, db := newObserverHarnessWithDB(t)
+
+		app := observerSeedApp(t, st, "notify-disk-full", common.BUILDING, common.BUILT, common.DEV)
+		require.NoError(t, db.Close())
+
+		err := so.Notify(app, common.FAILED)
+		require.Error(t, err, "the local write error is still returned")
+
+		app.StateLock.Lock()
+		current := app.CurrentState
+		app.StateLock.Unlock()
+		assert.Equal(t, common.FAILED, current)
+
+		assert.Equal(t, []common.AppState{common.FAILED}, remoteAppStates(msg))
+	})
+
+	t.Run("returns both errors when local and remote fail", func(t *testing.T) {
+		so, _, st, msg, db := newObserverHarnessWithDB(t)
+
+		app := observerSeedApp(t, st, "notify-both-fail", common.BUILDING, common.BUILT, common.DEV)
+		require.NoError(t, db.Close())
+		remoteErr := errors.New("backend down")
+		msg.SetCallError(string(topics.SetActualAppOnDeviceState), remoteErr)
+
+		err := so.Notify(app, common.FAILED)
+		require.Error(t, err)
+		assert.ErrorIs(t, err, remoteErr)
+		assert.Contains(t, err.Error(), "database is closed")
 	})
 }
 
