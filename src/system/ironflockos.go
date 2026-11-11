@@ -5,8 +5,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io/fs"
 	"net/http"
 	"os/exec"
+	"path"
 	"reagent/filesystem"
 	"reagent/osupdate"
 	"reagent/release"
@@ -135,7 +137,9 @@ func (sys *System) DownloadIronFlockOSUpdate(ctx context.Context, progress func(
 }
 
 // InstallIronFlockOSUpdate installs the downloaded bundle of the offered
-// release into the other slot. RAUC's errors are returned.
+// release into the other slot. RAUC's errors are returned. After a successful
+// install the bundle is removed to free its space on /data; after a failed one
+// it stays, so that a retry does not download it again.
 func (sys *System) InstallIronFlockOSUpdate(progress func(operationName string, progressPercent uint64)) error {
 	if !osUpdateMu.TryLock() {
 		return ErrOSUpdateRunning
@@ -153,7 +157,42 @@ func (sys *System) InstallIronFlockOSUpdate(progress func(operationName string, 
 	if err := installRauc(path, progress); err != nil {
 		return fmt.Errorf("RAUC: %w", err)
 	}
+	// The install stands even when the bundle cannot be removed: an error
+	// here must not keep the device from rebooting into the new slot. The
+	// next download removes what is left.
+	if err := osupdate.Clean(cacheDir, ""); err != nil {
+		log.Warn().Err(err).Msgf("could not remove the installed IronFlockOS bundle from %s", cacheDir)
+	}
 	return nil
+}
+
+// RemoveLeftoverIronFlockOSBundles removes the bundles no install needs any
+// more: all but the one of the newer release the device's channel offers,
+// which a download may have fetched before the agent restarted. It is for the
+// bundles installs left behind before the agent removed them after the
+// install. It reads the catalog to tell which bundle is still needed and keeps
+// them all when it cannot; a download or install that is running is left
+// alone. Errors are logged, never returned. Not IronFlockOS: nothing to do.
+func (sys *System) RemoveLeftoverIronFlockOSBundles() {
+	if !RunsIronFlockOS() {
+		return
+	}
+	_, offer, err := sys.IronFlockOSOffer()
+	if err != nil {
+		log.Info().Err(err).Msg("keeping downloaded IronFlockOS bundles: the catalog cannot tell which are still needed")
+		return
+	}
+	keep := ""
+	if offer.Newer {
+		keep = path.Base(offer.Bundle.URL)
+	}
+	if !osUpdateMu.TryLock() {
+		return
+	}
+	defer osUpdateMu.Unlock()
+	if err := osupdate.Clean(cacheDir, keep); err != nil && !errors.Is(err, fs.ErrNotExist) {
+		log.Warn().Err(err).Msgf("could not remove leftover IronFlockOS bundles from %s", cacheDir)
+	}
 }
 
 // --- RAUC: the health gate and the slots ------------------------------------

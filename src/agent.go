@@ -157,6 +157,10 @@ func (agent *Agent) OnConnect(reconnect bool) error {
 	if !reconnect {
 		safe.Go(agent.External.WatchFirmwareUpdates)
 
+		// Once per start, after the connect: it reads the catalog. In the
+		// background, logged, bounded by the catalog fetch's timeouts.
+		safe.Go(agent.System.RemoveLeftoverIronFlockOSBundles)
+
 		// Before frpc starts: Windows cannot replace a running frpc.exe.
 		err = acquireFrpcWithin(agent.System.DownloadFrpIfNotExists, frpcAcquireWait)
 		if err != nil {

@@ -68,7 +68,7 @@ func Download(ctx context.Context, b Bundle, dir string, progress func(filesyste
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return "", err
 	}
-	if err := clean(dir); err != nil {
+	if err := Clean(dir, ""); err != nil {
 		return "", err
 	}
 	dest := filepath.Join(dir, name)
@@ -174,13 +174,19 @@ func Downloaded(b Bundle, dir string) string {
 	return dest
 }
 
-// clean removes bundles and partial downloads from dir.
-func clean(dir string) error {
+// Clean removes bundles and partial downloads from dir, but the bundle named
+// keep ("" keeps none): before a download, after RAUC has installed a bundle,
+// which it no longer needs then, and at the agent's start, which keeps the
+// bundle of the release still to install.
+func Clean(dir, keep string) error {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		return err
 	}
 	for _, e := range entries {
+		if e.Name() == keep {
+			continue
+		}
 		if strings.HasSuffix(e.Name(), ".raucb") || strings.HasSuffix(e.Name(), ".raucb.part") {
 			if err := os.Remove(filepath.Join(dir, e.Name())); err != nil {
 				return err
