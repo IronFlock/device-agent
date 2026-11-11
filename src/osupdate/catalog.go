@@ -12,14 +12,14 @@ import (
 
 // CatalogPath is the catalog below the update base (the .flock's update_url
 // or the cloud's instance-registry.ironflock.com/dl).
-const CatalogPath = "flockos/manifest.json"
+const CatalogPath = "ironflockos/manifest.json"
 
 // CatalogSubject is what the catalog is signed as (IronFlockOS ADR-0009): its own
 // context, so no other signed document of the update trees can stand in for
 // it, and no catalog for one of them.
-var CatalogSubject = updatesig.Subject{Context: "flockos-manifest:v1", Line: CatalogPath}
+var CatalogSubject = updatesig.Subject{Context: "ironflockos-manifest:v1", Line: CatalogPath}
 
-// FLOCKOS_CATALOG_PUBLIC_KEYS lists the keys the catalog may be signed with,
+// IRONFLOCKOS_CATALOG_PUBLIC_KEYS lists the keys the catalog may be signed with,
 // in the format of updatesig.AGENT_UPDATE_PUBLIC_KEYS: one standard base64
 // raw Ed25519 key per line, "#" starts a comment. A key of its own, not an
 // agent update key: only IronFlockOS release runs may sign with it.
@@ -29,13 +29,13 @@ var CatalogSubject = updatesig.Subject{Context: "flockos-manifest:v1", Line: Cat
 // IronFlock/ironflockos give its PEM form and how to check it against KMS).
 // Rotate it as the agent update keys: a release that lists both keys reaches
 // the fleet before IronFlockOS signs with the new one.
-const FLOCKOS_CATALOG_PUBLIC_KEYS = `
+const IRONFLOCKOS_CATALOG_PUBLIC_KEYS = `
 wFLa1T7iHYi20X8JVu/O6JUzBGmW2+tjo7QVMuxsmQg= # key f5e1308e, Cloud KMS ironflock-release/flockos-catalog v1
 `
 
 // catalogKeys returns the trusted keys; tests replace it.
 var catalogKeys = func() ([]updatesig.PublicKey, error) {
-	keys, err := updatesig.ParsePublicKeys(FLOCKOS_CATALOG_PUBLIC_KEYS)
+	keys, err := updatesig.ParsePublicKeys(IRONFLOCKOS_CATALOG_PUBLIC_KEYS)
 	if errors.Is(err, updatesig.ErrNoTrustedKeys) {
 		return nil, nil
 	}
@@ -43,7 +43,7 @@ var catalogKeys = func() ([]updatesig.PublicKey, error) {
 }
 
 // ErrNoCatalogKey: this agent trusts no catalog key yet.
-var ErrNoCatalogKey = errors.New("this agent trusts no IronFlockOS catalog key yet (FLOCKOS_CATALOG_PUBLIC_KEYS)")
+var ErrNoCatalogKey = errors.New("this agent trusts no IronFlockOS catalog key yet (IRONFLOCKOS_CATALOG_PUBLIC_KEYS)")
 
 // Artifact is one published file.
 type Artifact struct {
@@ -76,7 +76,7 @@ type Release struct {
 	Images    map[string]Image `json:"images"`
 }
 
-// Catalog is the payload of dl/flockos/manifest.json, schema 1. FlockFlasher's
+// Catalog is the payload of dl/ironflockos/manifest.json, schema 1. FlockFlasher's
 // boards view is not read here.
 type Catalog struct {
 	Schema   int                `json:"schema"`

@@ -28,7 +28,7 @@ var readFirmware = firmware.Read
 // logged, never returned: the report is for display only, and the platform
 // keeps what it knows.
 func (ex *External) ReportFirmwareInventory() {
-	if !runsFlockOS() {
+	if !runsIronFlockOS() {
 		return
 	}
 	if _, err := ex.reportFirmware(); err != nil {

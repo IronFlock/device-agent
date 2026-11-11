@@ -122,7 +122,7 @@ func TestConfigureSkipsIronFlockOS(t *testing.T) {
 	f := newFake(t)
 	f.put("/dev/watchdog0", "")
 	f.readOS = func() (osupdate.Running, error) {
-		return osupdate.Running{ID: "flockos", ImageID: "flockos-amd64-efi-base", ImageVersion: "0.13.0"}, nil
+		return osupdate.Running{ID: "ironflockos", ImageID: "ironflockos-amd64-efi-base", ImageVersion: "0.13.0"}, nil
 	}
 	f.configure()
 	if f.exists(sysctlFile) || f.exists(watchdogDropIn) || len(f.calls) != 0 {

@@ -78,12 +78,12 @@ const (
 
 // Files that identify a legacy install made by ironflock-init < 1.4.0.
 const (
-	LegacyUnitLink      = "/etc/systemd/system/reagent.service"
-	LegacyUnitFile      = LegacyAgentDir + "/reswarmify/services/reagent.service"
-	LegacyManagerLink   = "/etc/systemd/system/reagent-manager.service"
-	LegacyEnrolled      = LegacyAgentDir + "/reswarm-mode"
-	legacyFlockOSMarker = LegacyAgentDir + "/flock-mode"
-	legacyFlockOSUnits  = LegacyAgentDir + "/ironflock/services"
+	LegacyUnitLink          = "/etc/systemd/system/reagent.service"
+	LegacyUnitFile          = LegacyAgentDir + "/reswarmify/services/reagent.service"
+	LegacyManagerLink       = "/etc/systemd/system/reagent-manager.service"
+	LegacyEnrolled          = LegacyAgentDir + "/reswarm-mode"
+	legacyIronFlockOSMarker = LegacyAgentDir + "/flock-mode"
+	legacyIronFlockOSUnits  = LegacyAgentDir + "/ironflock/services"
 )
 
 // CurrentPaths returns the Linux defaults of the current layout.
@@ -137,7 +137,7 @@ func Detect(root string) Paths {
 // is enrolled, and it is not IronFlockOS (which re-enables its units at every
 // boot).
 func IsIronflockInitInstall(root string) bool {
-	if exists(join(root, legacyFlockOSMarker)) || isDir(join(root, legacyFlockOSUnits)) {
+	if exists(join(root, legacyIronFlockOSMarker)) || isDir(join(root, legacyIronFlockOSUnits)) {
 		return false
 	}
 	if !exists(join(root, LegacyEnrolled)) || !isRegular(join(root, LegacyUnitFile)) {

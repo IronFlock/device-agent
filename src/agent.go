@@ -206,7 +206,7 @@ func (agent *Agent) OnConnect(reconnect bool) error {
 	// comes last, and not alongside: fwupd can take a while to answer, and two
 	// reports at once would race for the device's row, so one could be lost.
 	safe.Go(func() {
-		system.MarkFlockOSSlotGoodNow()
+		system.MarkIronFlockOSSlotGoodNow()
 		agent.External.ReportOSRelease()
 		agent.External.CheckFirmwareUpdates()
 	})

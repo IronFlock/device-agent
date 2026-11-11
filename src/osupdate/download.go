@@ -20,15 +20,15 @@ import (
 
 // CacheDir holds the one bundle a device downloads: on IronFlockOS a directory
 // of /data, so a download survives a reboot and never fills a root slot.
-const CacheDir = "/var/cache/flockos"
+const CacheDir = "/var/cache/ironflockos"
 
 // stallTimeout gives up a download that delivers no byte for this long.
 var stallTimeout = 60 * time.Second
 
 // BundleURL is where a device downloads the bundle of version: below its own
-// update base, at <base>/flockos/<version>/<file>, where <file> is the last
+// update base, at <base>/ironflockos/<version>/<file>, where <file> is the last
 // path segment of the catalog's url. The catalog's urls name the cloud copy
-// (instance-registry.ironflock.com/dl/flockos/<version>/<file>), and the
+// (instance-registry.ironflock.com/dl/ironflockos/<version>/<file>), and the
 // catalog is signed, so no mirror can rewrite them; a device behind an
 // appliance reaches only the appliance, whose mirror serves the same tree
 // next to the catalog it read. On the cloud the two urls are the same. Size
@@ -50,7 +50,7 @@ func BundleURL(base, version string, b Bundle) (string, error) {
 	if !strings.HasSuffix(name, ".raucb") || name == ".raucb" || strings.ContainsAny(name, `\`) {
 		return "", fmt.Errorf("bundle url %q does not name a .raucb file", b.URL)
 	}
-	return base + "/flockos/" + version + "/" + name, nil
+	return base + "/ironflockos/" + version + "/" + name, nil
 }
 
 // Download fetches the bundle into dir: streamed to <name>.part, checked for

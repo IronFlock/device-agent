@@ -133,7 +133,7 @@ func (h host) configure() {
 		log.Warn().Err(err).Msg("crashrecovery: cannot tell which OS this is; leaving its settings alone")
 		return
 	}
-	if running.IsFlockOS() {
+	if running.IsIronFlockOS() {
 		return
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), commandTimeout)

@@ -25,8 +25,8 @@ func (ex *External) getOSReleaseHandler(ctx context.Context, response messenger.
 		return nil, errdefs.InsufficientPrivileges(errors.New("insufficient privileges to get os release data"))
 	}
 
-	if runsFlockOS() {
-		return ex.flockOSRelease(ctx), nil
+	if runsIronFlockOS() {
+		return ex.ironFlockOSRelease(ctx), nil
 	}
 
 	// current release information
@@ -113,12 +113,12 @@ func (ex *External) downloadOSUpdateHandler(ctx context.Context, response messen
 		_ = ex.LogMessenger.Publish(topics.Topic(topic), []interface{}{progress}, nil, nil)
 	}
 
-	if runsFlockOS() {
+	if runsIronFlockOS() {
 		// Not the call's context: a call that times out on the platform side
 		// must not stop a download halfway. Progress goes to the topic.
 		dctx, cancel := context.WithTimeout(context.Background(), osDownloadTimeout)
 		defer cancel()
-		path, err := downloadFlockOS(ex.System, dctx, progressCallback)
+		path, err := downloadIronFlockOS(ex.System, dctx, progressCallback)
 		if err != nil {
 			return nil, err
 		}
@@ -156,8 +156,8 @@ func (ex *External) installOSUpdateHandler(ctx context.Context, response messeng
 		_ = ex.LogMessenger.Publish(topics.Topic(topic), []interface{}{progress}, nil, nil)
 	}
 
-	if runsFlockOS() {
-		if err := installFlockOS(ex.System, progressCallback); err != nil {
+	if runsIronFlockOS() {
+		if err := installIronFlockOS(ex.System, progressCallback); err != nil {
 			// RAUC marked the slot bad when it started, and nothing reconnects.
 			safe.Go(ex.ReportOSRelease)
 			return nil, err

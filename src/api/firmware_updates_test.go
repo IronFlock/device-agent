@@ -148,28 +148,28 @@ func TestCheckFirmwareUpdates(t *testing.T) {
 	inventory := firmware.Inventory{Devices: []firmware.Device{{ID: "a", Name: "SSD"}}}
 
 	t.Run("old metadata is fetched, then the report goes out", func(t *testing.T) {
-		useFakeFlockOS(t, true, &fakeFlockOS{})
+		useFakeIronFlockOS(t, true, &fakeIronFlockOS{})
 		withFirmware(t, inventory, nil)
 		ages := fakeRefresh(t, nil)
-		ex, _ := flockOSExternal(t)
+		ex, _ := ironFlockOSExternal(t)
 		ex.CheckFirmwareUpdates()
 		assert.Equal(t, []time.Duration{firmwareMetadataMaxAge}, *ages)
 		assert.Len(t, reports(ex), 1)
 	})
 
 	t.Run("no network still reports what fwupd has", func(t *testing.T) {
-		useFakeFlockOS(t, true, &fakeFlockOS{})
+		useFakeIronFlockOS(t, true, &fakeIronFlockOS{})
 		withFirmware(t, inventory, nil)
 		fakeRefresh(t, errors.New("no route to host"))
-		ex, _ := flockOSExternal(t)
+		ex, _ := ironFlockOSExternal(t)
 		ex.CheckFirmwareUpdates()
 		assert.Len(t, reports(ex), 1)
 	})
 
 	t.Run("another OS does nothing", func(t *testing.T) {
-		useFakeFlockOS(t, false, &fakeFlockOS{})
+		useFakeIronFlockOS(t, false, &fakeIronFlockOS{})
 		ages := fakeRefresh(t, nil)
-		ex, _ := flockOSExternal(t)
+		ex, _ := ironFlockOSExternal(t)
 		ex.CheckFirmwareUpdates()
 		assert.Empty(t, *ages)
 		assert.Empty(t, reports(ex))
@@ -184,7 +184,7 @@ func TestFirmwareGoesThroughTheUpdateBase(t *testing.T) {
 	}
 
 	t.Run("a check reads the mirror and announces what is on offer", func(t *testing.T) {
-		useFakeFlockOS(t, true, &fakeFlockOS{})
+		useFakeIronFlockOS(t, true, &fakeIronFlockOS{})
 		withFirmware(t, inventory, nil)
 		var refreshed, announced []string
 		oldRefresh, oldAnnounce := refreshFirmware, announceFirmware
@@ -197,7 +197,7 @@ func TestFirmwareGoesThroughTheUpdateBase(t *testing.T) {
 			announced = append(announced, mirror)
 			assert.Len(t, inv.Devices, 1)
 		}
-		ex, _ := flockOSExternal(t)
+		ex, _ := ironFlockOSExternal(t)
 		useBase(ex)
 		ex.CheckFirmwareUpdates()
 		assert.Equal(t, []string{base + "/lvfs"}, refreshed)
@@ -205,7 +205,7 @@ func TestFirmwareGoesThroughTheUpdateBase(t *testing.T) {
 	})
 
 	t.Run("an install reads the mirror", func(t *testing.T) {
-		useFakeFlockOS(t, true, &fakeFlockOS{})
+		useFakeIronFlockOS(t, true, &fakeIronFlockOS{})
 		withFirmware(t, inventory, nil)
 		var mirrors []string
 		old := installFirmware
@@ -214,7 +214,7 @@ func TestFirmwareGoesThroughTheUpdateBase(t *testing.T) {
 			mirrors = append(mirrors, mirror)
 			return firmware.Result{Version: "2"}, nil
 		}
-		ex, _ := flockOSExternal(t)
+		ex, _ := ironFlockOSExternal(t)
 		useBase(ex)
 		_, err := ex.installFirmwareUpdateHandler(context.Background(), installArgs("a", "2"))
 		require.NoError(t, err)
@@ -229,10 +229,10 @@ func TestRefreshFirmwareUpdatesHandler(t *testing.T) {
 	}}
 
 	t.Run("fetches now and says how many", func(t *testing.T) {
-		useFakeFlockOS(t, true, &fakeFlockOS{})
+		useFakeIronFlockOS(t, true, &fakeIronFlockOS{})
 		withFirmware(t, inventory, nil)
 		ages := fakeRefresh(t, nil)
-		ex, _ := flockOSExternal(t)
+		ex, _ := ironFlockOSExternal(t)
 		res, err := ex.refreshFirmwareUpdatesHandler(context.Background(), messenger.Result{Details: systemDetails()})
 		require.NoError(t, err)
 		assert.Equal(t, common.Dict{"updates": 1}, res.Arguments[0])
@@ -241,18 +241,18 @@ func TestRefreshFirmwareUpdatesHandler(t *testing.T) {
 	})
 
 	t.Run("a failed refresh is the answer", func(t *testing.T) {
-		useFakeFlockOS(t, true, &fakeFlockOS{})
+		useFakeIronFlockOS(t, true, &fakeIronFlockOS{})
 		withFirmware(t, inventory, nil)
 		fakeRefresh(t, errors.New("no route to host"))
-		ex, _ := flockOSExternal(t)
+		ex, _ := ironFlockOSExternal(t)
 		_, err := ex.refreshFirmwareUpdatesHandler(context.Background(), messenger.Result{Details: systemDetails()})
 		require.Error(t, err)
 	})
 
 	t.Run("refused without MAINTAIN", func(t *testing.T) {
-		useFakeFlockOS(t, true, &fakeFlockOS{})
+		useFakeIronFlockOS(t, true, &fakeIronFlockOS{})
 		ages := fakeRefresh(t, nil)
-		ex, _ := flockOSExternal(t)
+		ex, _ := ironFlockOSExternal(t)
 		details, m := grantPrivilege(false)
 		ex.Privilege = newPrivilege(testConfig(), m)
 		_, err := ex.refreshFirmwareUpdatesHandler(context.Background(), messenger.Result{Details: details})
@@ -262,11 +262,11 @@ func TestRefreshFirmwareUpdatesHandler(t *testing.T) {
 	})
 
 	t.Run("not on another OS", func(t *testing.T) {
-		useFakeFlockOS(t, false, &fakeFlockOS{})
+		useFakeIronFlockOS(t, false, &fakeIronFlockOS{})
 		ages := fakeRefresh(t, nil)
-		ex, _ := flockOSExternal(t)
+		ex, _ := ironFlockOSExternal(t)
 		_, err := ex.refreshFirmwareUpdatesHandler(context.Background(), messenger.Result{Details: systemDetails()})
-		require.ErrorIs(t, err, system.ErrNotFlockOS)
+		require.ErrorIs(t, err, system.ErrNotIronFlockOS)
 		assert.Empty(t, *ages)
 	})
 }
@@ -275,11 +275,11 @@ func TestInstallFirmwareUpdateHandler(t *testing.T) {
 	inventory := firmware.Inventory{Devices: []firmware.Device{{ID: "a", Name: "SSD"}}}
 
 	t.Run("installs, follows and reports, and leaves the restart to the caller", func(t *testing.T) {
-		f := &fakeFlockOS{}
-		useFakeFlockOS(t, true, f)
+		f := &fakeIronFlockOS{}
+		useFakeIronFlockOS(t, true, f)
 		withFirmware(t, inventory, nil)
 		installs := fakeInstall(t, firmware.Result{Version: "2", NeedsReboot: true}, nil)
-		ex, logs := flockOSExternal(t)
+		ex, logs := ironFlockOSExternal(t)
 
 		res, err := ex.installFirmwareUpdateHandler(context.Background(), installArgs("a", "2"))
 		require.NoError(t, err)
@@ -303,10 +303,10 @@ func TestInstallFirmwareUpdateHandler(t *testing.T) {
 	})
 
 	t.Run("a dropped connection does not abort the flash", func(t *testing.T) {
-		useFakeFlockOS(t, true, &fakeFlockOS{})
+		useFakeIronFlockOS(t, true, &fakeIronFlockOS{})
 		withFirmware(t, inventory, nil)
 		installs := fakeInstall(t, firmware.Result{Version: "2"}, nil)
-		ex, _ := flockOSExternal(t)
+		ex, _ := ironFlockOSExternal(t)
 		ctx, cancel := context.WithCancel(context.Background())
 		cancel()
 		_, err := ex.installFirmwareUpdateHandler(ctx, installArgs("a", "2"))
@@ -315,10 +315,10 @@ func TestInstallFirmwareUpdateHandler(t *testing.T) {
 	})
 
 	t.Run("a failure is the answer, and is reported", func(t *testing.T) {
-		useFakeFlockOS(t, true, &fakeFlockOS{})
+		useFakeIronFlockOS(t, true, &fakeIronFlockOS{})
 		withFirmware(t, inventory, nil)
 		fakeInstall(t, firmware.Result{}, errors.New("fwupd Install: no space"))
-		ex, _ := flockOSExternal(t)
+		ex, _ := ironFlockOSExternal(t)
 		_, err := ex.installFirmwareUpdateHandler(context.Background(), installArgs("a", "2"))
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "no space")
@@ -326,19 +326,19 @@ func TestInstallFirmwareUpdateHandler(t *testing.T) {
 	})
 
 	t.Run("refused while another update runs", func(t *testing.T) {
-		useFakeFlockOS(t, true, &fakeFlockOS{})
+		useFakeIronFlockOS(t, true, &fakeIronFlockOS{})
 		installs := fakeInstall(t, firmware.Result{}, nil)
 		unlock, ok := system.TryLockUpdate()
 		require.True(t, ok)
 		defer unlock()
-		ex, _ := flockOSExternal(t)
+		ex, _ := ironFlockOSExternal(t)
 		_, err := ex.installFirmwareUpdateHandler(context.Background(), installArgs("a", "2"))
 		require.ErrorIs(t, err, system.ErrUpdateRunning)
 		assert.Empty(t, *installs)
 	})
 
 	t.Run("an install holds off an OS update, and lets go afterwards", func(t *testing.T) {
-		useFakeFlockOS(t, true, &fakeFlockOS{})
+		useFakeIronFlockOS(t, true, &fakeIronFlockOS{})
 		withFirmware(t, inventory, nil)
 		old := installFirmware
 		t.Cleanup(func() { installFirmware = old })
@@ -351,7 +351,7 @@ func TestInstallFirmwareUpdateHandler(t *testing.T) {
 			lockedDuring = !ok
 			return firmware.Result{Version: "2"}, nil
 		}
-		ex, _ := flockOSExternal(t)
+		ex, _ := ironFlockOSExternal(t)
 		_, err := ex.installFirmwareUpdateHandler(context.Background(), installArgs("a", "2"))
 		require.NoError(t, err)
 		assert.True(t, lockedDuring)
@@ -365,9 +365,9 @@ func TestInstallFirmwareUpdateHandler(t *testing.T) {
 		"no device id": installArgs("", "2"),
 	} {
 		t.Run("refused with "+name, func(t *testing.T) {
-			useFakeFlockOS(t, true, &fakeFlockOS{})
+			useFakeIronFlockOS(t, true, &fakeIronFlockOS{})
 			installs := fakeInstall(t, firmware.Result{}, nil)
-			ex, _ := flockOSExternal(t)
+			ex, _ := ironFlockOSExternal(t)
 			_, err := ex.installFirmwareUpdateHandler(context.Background(), args)
 			require.Error(t, err)
 			assert.Empty(t, *installs)
@@ -375,9 +375,9 @@ func TestInstallFirmwareUpdateHandler(t *testing.T) {
 	}
 
 	t.Run("refused without MAINTAIN", func(t *testing.T) {
-		useFakeFlockOS(t, true, &fakeFlockOS{})
+		useFakeIronFlockOS(t, true, &fakeIronFlockOS{})
 		installs := fakeInstall(t, firmware.Result{}, nil)
-		ex, _ := flockOSExternal(t)
+		ex, _ := ironFlockOSExternal(t)
 		details, m := grantPrivilege(false)
 		ex.Privilege = newPrivilege(testConfig(), m)
 		args := installArgs("a", "2")
@@ -389,11 +389,11 @@ func TestInstallFirmwareUpdateHandler(t *testing.T) {
 	})
 
 	t.Run("not on another OS", func(t *testing.T) {
-		useFakeFlockOS(t, false, &fakeFlockOS{})
+		useFakeIronFlockOS(t, false, &fakeIronFlockOS{})
 		installs := fakeInstall(t, firmware.Result{}, nil)
-		ex, _ := flockOSExternal(t)
+		ex, _ := ironFlockOSExternal(t)
 		_, err := ex.installFirmwareUpdateHandler(context.Background(), installArgs("a", "2"))
-		require.ErrorIs(t, err, system.ErrNotFlockOS)
+		require.ErrorIs(t, err, system.ErrNotIronFlockOS)
 		assert.Empty(t, *installs)
 	})
 }

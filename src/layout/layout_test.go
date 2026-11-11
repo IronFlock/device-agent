@@ -70,11 +70,11 @@ func TestImageLayoutsStay(t *testing.T) {
 	cases := map[string]func(t *testing.T, root string){
 		"IronFlockOS marker": func(t *testing.T, root string) {
 			legacyInstall(t, root)
-			require.NoError(t, os.WriteFile(filepath.Join(root, legacyFlockOSMarker), nil, 0o644))
+			require.NoError(t, os.WriteFile(filepath.Join(root, legacyIronFlockOSMarker), nil, 0o644))
 		},
 		"IronFlockOS units": func(t *testing.T, root string) {
 			legacyInstall(t, root)
-			require.NoError(t, os.MkdirAll(filepath.Join(root, legacyFlockOSUnits), 0o755))
+			require.NoError(t, os.MkdirAll(filepath.Join(root, legacyIronFlockOSUnits), 0o755))
 		},
 		"real unit file (ReswarmOS, cubic, Jetson)": func(t *testing.T, root string) {
 			legacyInstall(t, root)

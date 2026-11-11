@@ -28,9 +28,9 @@ func TestReportFirmwareInventory(t *testing.T) {
 	}
 
 	t.Run("on IronFlockOS: what fwupd sees, without the GUIDs and the empty fields", func(t *testing.T) {
-		useFakeFlockOS(t, true, &fakeFlockOS{})
+		useFakeIronFlockOS(t, true, &fakeIronFlockOS{})
 		budget := withFirmware(t, inventory, nil)
-		ex, _ := flockOSExternal(t)
+		ex, _ := ironFlockOSExternal(t)
 
 		ex.ReportFirmwareInventory()
 
@@ -54,9 +54,9 @@ func TestReportFirmwareInventory(t *testing.T) {
 	})
 
 	t.Run("a device without firmware to list still reports", func(t *testing.T) {
-		useFakeFlockOS(t, true, &fakeFlockOS{})
+		useFakeIronFlockOS(t, true, &fakeIronFlockOS{})
 		withFirmware(t, firmware.Inventory{FwupdVersion: "2.0.20"}, nil)
-		ex, _ := flockOSExternal(t)
+		ex, _ := ironFlockOSExternal(t)
 
 		ex.ReportFirmwareInventory()
 
@@ -67,9 +67,9 @@ func TestReportFirmwareInventory(t *testing.T) {
 	})
 
 	t.Run("another OS reports nothing and does not ask fwupd", func(t *testing.T) {
-		useFakeFlockOS(t, false, &fakeFlockOS{})
+		useFakeIronFlockOS(t, false, &fakeIronFlockOS{})
 		budget := withFirmware(t, inventory, nil)
-		ex, _ := flockOSExternal(t)
+		ex, _ := ironFlockOSExternal(t)
 
 		ex.ReportFirmwareInventory()
 
@@ -78,9 +78,9 @@ func TestReportFirmwareInventory(t *testing.T) {
 	})
 
 	t.Run("a failed read reports nothing, so the platform keeps what it knows", func(t *testing.T) {
-		useFakeFlockOS(t, true, &fakeFlockOS{})
+		useFakeIronFlockOS(t, true, &fakeIronFlockOS{})
 		withFirmware(t, firmware.Inventory{}, errors.New("fwupd GetDevices: timeout"))
-		ex, _ := flockOSExternal(t)
+		ex, _ := ironFlockOSExternal(t)
 
 		ex.ReportFirmwareInventory()
 

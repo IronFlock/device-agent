@@ -65,7 +65,7 @@ var ErrNotOffered = errors.New("fwupd does not offer this firmware version for t
 var (
 	// TempDir holds the downloads until fwupd has read them. On /data: a
 	// firmware file can be larger than the tmpfs is.
-	TempDir = "/var/cache/flockos"
+	TempDir = "/var/cache/ironflockos"
 
 	// httpClient follows https only, and is bounded by each call's context.
 	httpClient = &http.Client{CheckRedirect: func(req *http.Request, via []*http.Request) error {

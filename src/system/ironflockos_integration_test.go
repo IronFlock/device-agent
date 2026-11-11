@@ -14,10 +14,10 @@ import (
 // The real RAUC on the system bus (an IronFlockOS device, or a container running
 // rauc service): its slots decode, and on IronFlockOS the booted slot is marked
 // good.
-func TestFlockOSSlotsAgainstRAUC(t *testing.T) {
+func TestIronFlockOSSlotsAgainstRAUC(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
-	booted, primary, slots, err := FlockOSSlots(ctx)
+	booted, primary, slots, err := IronFlockOSSlots(ctx)
 	if err != nil {
 		t.Skipf("no RAUC to ask: %v", err)
 	}
@@ -25,9 +25,9 @@ func TestFlockOSSlotsAgainstRAUC(t *testing.T) {
 	require.NotEmpty(t, slots)
 	assert.NotEmpty(t, booted)
 	assert.NotEmpty(t, primary)
-	if RunsFlockOS() {
-		require.NoError(t, MarkFlockOSSlotGood(ctx))
-		_, _, after, err := FlockOSSlots(ctx)
+	if RunsIronFlockOS() {
+		require.NoError(t, MarkIronFlockOSSlotGood(ctx))
+		_, _, after, err := IronFlockOSSlots(ctx)
 		require.NoError(t, err)
 		for _, s := range after {
 			if s.Name == booted {

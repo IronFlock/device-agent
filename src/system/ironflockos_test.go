@@ -20,13 +20,13 @@ import (
 
 // cloudBundleURL is where the signed catalog says the bundle is: the cloud
 // copy, which a device downloads only when the cloud is its update base.
-const cloudBundleURL = "https://cloud.example/dl/flockos/1.0.1/flockos-amd64-efi-base-1.0.1.raucb"
+const cloudBundleURL = "https://cloud.example/dl/ironflockos/1.0.1/ironflockos-amd64-efi-base-1.0.1.raucb"
 
-// flockOSDevice sets the seams: an IronFlockOS device running version whose update
+// ironFlockOSDevice sets the seams: an IronFlockOS device running version whose update
 // base is base, a catalog there whose test channel offers 1.0.1 with the
 // bundle at cloudBundleURL, the cache in a temporary directory, and RAUC
 // replaced by install.
-func flockOSDevice(t *testing.T, version, base string, bundle []byte, install func(string, func(string, uint64)) error) *System {
+func ironFlockOSDevice(t *testing.T, version, base string, bundle []byte, install func(string, func(string, uint64)) error) *System {
 	t.Helper()
 	sum := sha256.Sum256(bundle)
 	catalog := osupdate.Catalog{
@@ -35,9 +35,9 @@ func flockOSDevice(t *testing.T, version, base string, bundle []byte, install fu
 		Releases: map[string]osupdate.Release{
 			"1.0.0": {Images: map[string]osupdate.Image{}},
 			"1.0.1": {BuildID: "20261130T141003Z-g5d6e7f8", MinAgent: "0.0.1", Images: map[string]osupdate.Image{
-				"flockos-amd64-efi-base": {Bundle: &osupdate.Bundle{
+				"ironflockos-amd64-efi-base": {Bundle: &osupdate.Bundle{
 					Artifact:   osupdate.Artifact{URL: cloudBundleURL, SHA256: hex.EncodeToString(sum[:]), Size: int64(len(bundle))},
-					Compatible: "flockos-amd64-efi-base",
+					Compatible: "ironflockos-amd64-efi-base",
 				}},
 			}},
 		},
@@ -53,10 +53,10 @@ func flockOSDevice(t *testing.T, version, base string, bundle []byte, install fu
 		readRunning, openCatalog, fetchSmallC, cacheDir, installRauc = old.read, old.open, old.fetch, old.cache, old.install
 	})
 	readRunning = func() (osupdate.Running, error) {
-		return osupdate.Running{ID: "flockos", ImageID: "flockos-amd64-efi-base", ImageVersion: version}, nil
+		return osupdate.Running{ID: "ironflockos", ImageID: "ironflockos-amd64-efi-base", ImageVersion: version}, nil
 	}
 	fetchSmallC = func(url string) ([]byte, int, error) {
-		if url != base+"/flockos/manifest.json" {
+		if url != base+"/ironflockos/manifest.json" {
 			return nil, http.StatusNotFound, nil
 		}
 		return []byte("signed catalog"), http.StatusOK, nil
@@ -73,11 +73,11 @@ func flockOSDevice(t *testing.T, version, base string, bundle []byte, install fu
 }
 
 // serve is an update base (an appliance's mirror) that serves the bundle at
-// <base>/flockos/1.0.1/<file> and nothing else.
+// <base>/ironflockos/1.0.1/<file> and nothing else.
 func serve(t *testing.T, body []byte) string {
 	t.Helper()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/flockos/1.0.1/flockos-amd64-efi-base-1.0.1.raucb" {
+		if r.URL.Path != "/ironflockos/1.0.1/ironflockos-amd64-efi-base-1.0.1.raucb" {
 			http.NotFound(w, r)
 			return
 		}
@@ -87,10 +87,10 @@ func serve(t *testing.T, body []byte) string {
 	return srv.URL
 }
 
-func TestFlockOSOffer(t *testing.T) {
+func TestIronFlockOSOffer(t *testing.T) {
 	t.Run("the device's channel offers its release", func(t *testing.T) {
-		sys := flockOSDevice(t, "1.0.0", "https://dl.example", []byte("x"), nil)
-		running, offer, err := sys.FlockOSOffer()
+		sys := ironFlockOSDevice(t, "1.0.0", "https://dl.example", []byte("x"), nil)
+		running, offer, err := sys.IronFlockOSOffer()
 		require.NoError(t, err)
 		assert.Equal(t, "1.0.0", running.ImageVersion)
 		assert.Equal(t, "test", offer.Channel)
@@ -99,93 +99,93 @@ func TestFlockOSOffer(t *testing.T) {
 	})
 
 	t.Run("not IronFlockOS", func(t *testing.T) {
-		sys := flockOSDevice(t, "1.0.0", "https://dl.example", nil, nil)
+		sys := ironFlockOSDevice(t, "1.0.0", "https://dl.example", nil, nil)
 		readRunning = func() (osupdate.Running, error) { return osupdate.Running{ID: "debian"}, nil }
-		_, _, err := sys.FlockOSOffer()
-		assert.ErrorIs(t, err, ErrNotFlockOS)
-		assert.False(t, RunsFlockOS())
+		_, _, err := sys.IronFlockOSOffer()
+		assert.ErrorIs(t, err, ErrNotIronFlockOS)
+		assert.False(t, RunsIronFlockOS())
 	})
 
 	t.Run("a catalog that does not verify is refused", func(t *testing.T) {
-		sys := flockOSDevice(t, "1.0.0", "https://dl.example", nil, nil)
+		sys := ironFlockOSDevice(t, "1.0.0", "https://dl.example", nil, nil)
 		fetchSmallC = func(string) ([]byte, int, error) { return []byte("forged"), http.StatusOK, nil }
-		_, _, err := sys.FlockOSOffer()
+		_, _, err := sys.IronFlockOSOffer()
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "bad signature")
 	})
 
 	t.Run("no catalog at the update base", func(t *testing.T) {
-		sys := flockOSDevice(t, "1.0.0", "https://dl.example", nil, nil)
+		sys := ironFlockOSDevice(t, "1.0.0", "https://dl.example", nil, nil)
 		sys.config.ReswarmConfig.UpdateURL = "https://elsewhere.example"
-		_, _, err := sys.FlockOSOffer()
+		_, _, err := sys.IronFlockOSOffer()
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "404")
 	})
 }
 
-func TestDownloadAndInstallFlockOSUpdate(t *testing.T) {
+func TestDownloadAndInstallIronFlockOSUpdate(t *testing.T) {
 	bundle := []byte("a bundle of IronFlockOS 1.0.1")
 
 	t.Run("download, then install the downloaded bundle", func(t *testing.T) {
 		var installed string
-		sys := flockOSDevice(t, "1.0.0", serve(t, bundle), bundle, func(path string, _ func(string, uint64)) error {
+		sys := ironFlockOSDevice(t, "1.0.0", serve(t, bundle), bundle, func(path string, _ func(string, uint64)) error {
 			installed = path
 			return nil
 		})
 		var progress []filesystem.DownloadProgress
-		path, err := sys.DownloadFlockOSUpdate(context.Background(), func(p filesystem.DownloadProgress) { progress = append(progress, p) })
+		path, err := sys.DownloadIronFlockOSUpdate(context.Background(), func(p filesystem.DownloadProgress) { progress = append(progress, p) })
 		require.NoError(t, err)
 		assert.NotEmpty(t, progress)
 
-		again, err := sys.DownloadFlockOSUpdate(context.Background(), nil)
+		again, err := sys.DownloadIronFlockOSUpdate(context.Background(), nil)
 		require.NoError(t, err)
 		assert.Equal(t, path, again, "a downloaded bundle is not fetched again")
 
-		require.NoError(t, sys.InstallFlockOSUpdate(nil))
+		require.NoError(t, sys.InstallIronFlockOSUpdate(nil))
 		assert.Equal(t, path, installed)
 	})
 
 	t.Run("RAUC's error is returned, not swallowed", func(t *testing.T) {
-		sys := flockOSDevice(t, "1.0.0", serve(t, bundle), bundle, func(string, func(string, uint64)) error {
+		sys := ironFlockOSDevice(t, "1.0.0", serve(t, bundle), bundle, func(string, func(string, uint64)) error {
 			return errors.New("Installation error: Compatible mismatch")
 		})
-		_, err := sys.DownloadFlockOSUpdate(context.Background(), nil)
+		_, err := sys.DownloadIronFlockOSUpdate(context.Background(), nil)
 		require.NoError(t, err)
-		err = sys.InstallFlockOSUpdate(nil)
+		err = sys.InstallIronFlockOSUpdate(nil)
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "Compatible mismatch")
 	})
 
 	t.Run("install before download is refused", func(t *testing.T) {
 		called := false
-		sys := flockOSDevice(t, "1.0.0", serve(t, bundle), bundle, func(string, func(string, uint64)) error { called = true; return nil })
-		err := sys.InstallFlockOSUpdate(nil)
+		sys := ironFlockOSDevice(t, "1.0.0", serve(t, bundle), bundle, func(string, func(string, uint64)) error { called = true; return nil })
+		err := sys.InstallIronFlockOSUpdate(nil)
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "download_os_update first")
 		assert.False(t, called)
 	})
 
 	t.Run("nothing newer: nothing is downloaded", func(t *testing.T) {
-		sys := flockOSDevice(t, "1.0.1", serve(t, bundle), bundle, nil)
-		_, err := sys.DownloadFlockOSUpdate(context.Background(), nil)
+		sys := ironFlockOSDevice(t, "1.0.1", serve(t, bundle), bundle, nil)
+		_, err := sys.DownloadIronFlockOSUpdate(context.Background(), nil)
 		assert.ErrorIs(t, err, ErrNoNewerRelease)
 	})
 
 	t.Run("one OS update at a time", func(t *testing.T) {
-		sys := flockOSDevice(t, "1.0.0", serve(t, bundle), bundle, nil)
+		sys := ironFlockOSDevice(t, "1.0.0", serve(t, bundle), bundle, nil)
 		osUpdateMu.Lock()
 		defer osUpdateMu.Unlock()
-		_, err := sys.DownloadFlockOSUpdate(context.Background(), nil)
+		_, err := sys.DownloadIronFlockOSUpdate(context.Background(), nil)
 		assert.ErrorIs(t, err, ErrOSUpdateRunning)
-		assert.ErrorIs(t, sys.InstallFlockOSUpdate(nil), ErrOSUpdateRunning)
+		assert.ErrorIs(t, sys.InstallIronFlockOSUpdate(nil), ErrOSUpdateRunning)
 	})
 }
 
-func TestMarkFlockOSSlotGoodSkipsOtherSystems(t *testing.T) {
+func TestMarkIronFlockOSSlotGoodSkipsOtherSystems(t *testing.T) {
 	old := readRunning
 	t.Cleanup(func() { readRunning = old })
 	readRunning = func() (osupdate.Running, error) { return osupdate.Running{ID: "debian"}, nil }
-	assert.NoError(t, MarkFlockOSSlotGood(context.Background()), "no RAUC is asked on a device that is not IronFlockOS")
+	assert.NoError(t, MarkIronFlockOSSlotGood(context.Background()), "no RAUC is asked on a device that is not IronFlockOS")
 }
 
 // slotReads sets the seams of slotImage: the running image is 1.1.0, and a
@@ -204,7 +204,7 @@ func slotReads(t *testing.T, images map[string]string) *[]string {
 	slotImages.m = map[string]slotImageEntry{}
 	slotImages.Unlock()
 	readRunning = func() (osupdate.Running, error) {
-		return osupdate.Running{ID: "flockos", ImageID: "flockos-amd64-efi-base", ImageVersion: "1.1.0", BuildID: "20261201T000000Z-gaaaaaaa"}, nil
+		return osupdate.Running{ID: "ironflockos", ImageID: "ironflockos-amd64-efi-base", ImageVersion: "1.1.0", BuildID: "20261201T000000Z-gaaaaaaa"}, nil
 	}
 	var reads []string
 	readSlotOSRelease = func(_ context.Context, device string) ([]byte, error) {
@@ -219,8 +219,8 @@ func slotReads(t *testing.T, images map[string]string) *[]string {
 }
 
 const flashedOSRelease = `NAME="IronFlockOS"
-ID=flockos
-IMAGE_ID=flockos-amd64-efi-base
+ID=ironflockos
+IMAGE_ID=ironflockos-amd64-efi-base
 IMAGE_VERSION=1.0.0
 BUILD_ID=20261107T122204Z-gef21459
 `

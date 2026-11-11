@@ -579,18 +579,19 @@ and [Docker](https://www.docker.com) as its two key technologies.
 
 ### IronFlockOS OS updates
 
-On a device that runs IronFlockOS (`ID=flockos` in os-release, with `IMAGE_ID` and
-`IMAGE_VERSION`), the OS update procedures use the IronFlockOS release catalog
-(`src/osupdate`; IronFlockOS ADR-0009, `docs/manifest.schema.json` in
-IronFlock/ironflockos). Other devices keep the ReswarmOS files
-(`/etc/reswarmos-update`, `/etc/os-release-latest.json`).
+On a device that runs IronFlockOS (`ID=ironflockos` in os-release, with
+`IMAGE_ID` and `IMAGE_VERSION`), the OS update procedures use the IronFlockOS
+release catalog (`src/osupdate`; IronFlockOS ADR-0009,
+`docs/manifest.schema.json` in IronFlock/ironflockos). Other devices keep the
+ReswarmOS files (`/etc/reswarmos-update`, `/etc/os-release-latest.json`).
 
-- **The catalog** is `<update base>/flockos/manifest.json`, the base being the
-  `.flock`'s `update_url` or the cloud's `/dl`. It is an `updatesig` envelope
-  signed as `flockos-manifest:v1` / `flockos/manifest.json`, with a key of its
-  own (`FLOCKOS_CATALOG_PUBLIC_KEYS` in `src/osupdate/catalog.go`), not an agent
-  update key: Cloud KMS `ironflock-release/flockos-catalog`, version 1 (key
-  `f5e1308e`; `pki/flockos-catalog.pub` in IronFlock/ironflockos).
+- **The catalog** is `<update base>/ironflockos/manifest.json`, the base being
+  the `.flock`'s `update_url` or the cloud's `/dl`. It is an `updatesig`
+  envelope signed as `ironflockos-manifest:v1` / `ironflockos/manifest.json`,
+  with a key of its own (`IRONFLOCKOS_CATALOG_PUBLIC_KEYS` in
+  `src/osupdate/catalog.go`), not an agent update key: Cloud KMS
+  `ironflock-release/flockos-catalog`, version 1 (key `f5e1308e`;
+  `pki/flockos-catalog.pub` in IronFlock/ironflockos).
 - **The release** offered is the one the device's channel names: its
   environment (`production`, `test`); a channel the catalog lacks follows
   `production`. It is installable when it is newer than the running image and
@@ -607,9 +608,9 @@ IronFlock/ironflockos). Other devices keep the ReswarmOS files
     `BUILD_ID` of its os-release): the running one for the booted slot, read
     with `debugfs` for another root slot, without mounting it; empty for a
     slot that holds no image.
-- **`download_os_update`** streams the bundle to `/var/cache/flockos`, on
+- **`download_os_update`** streams the bundle to `/var/cache/ironflockos`, on
   `/data`. It downloads it from the same update base as the catalog,
-  `<update base>/flockos/<version>/<file>` (`<file>` is the last part of the
+  `<update base>/ironflockos/<version>/<file>` (`<file>` is the last part of the
   bundle's `url` in the catalog, which names the cloud's copy): on the cloud
   that is the same file, behind an IronFlock appliance its OS mirror. It checks
   the size and SHA-256 the catalog names, publishes progress on
