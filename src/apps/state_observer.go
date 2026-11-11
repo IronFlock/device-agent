@@ -151,14 +151,29 @@ func (so *StateObserver) NotifyRemote(app *common.App, achievedState common.AppS
 	return so.AppStore.UpdateRemoteAppState(ctx, app, achievedState)
 }
 
-// Notify is used by the StateMachine to notify the observer that the app state has changed
+// Notify is used by the StateMachine to notify the observer that the app state has changed.
+//
+// The cloud is told even when the local write fails. NotifyLocal has already
+// moved the in-memory state, which is what the agent acts on, and the usual
+// reason the write fails is a full disk: the disk that just failed the app's
+// build or pull. Returning before the report left the platform showing the
+// previous state (BUILDING after a build that failed with "no space left on
+// device") until the agent reconnected or restarted, because nothing sends a
+// FAILED state again.
+//
+// A single failure is returned unchanged (errdefs matches error types by
+// direct type assertion); only when both steps fail are the errors joined.
 func (so *StateObserver) Notify(app *common.App, achievedState common.AppState) error {
-	err := so.NotifyLocal(app, achievedState)
-	if err != nil {
-		return err
-	}
+	localErr := so.NotifyLocal(app, achievedState)
+	remoteErr := so.NotifyRemote(app, achievedState)
 
-	return so.NotifyRemote(app, achievedState)
+	if localErr == nil {
+		return remoteErr
+	}
+	if remoteErr == nil {
+		return localErr
+	}
+	return errors.Join(localErr, remoteErr)
 }
 
 func (so *StateObserver) addComposeObserver(stage common.Stage, appKey uint64, appName string) (bool, error) {
