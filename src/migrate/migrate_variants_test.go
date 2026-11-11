@@ -20,7 +20,7 @@ var variants = map[string]func(t *testing.T, d *device){
 	// IronFlockOS: an A/B image (RAUC); its flock-init.sh links and enables the
 	// units from /opt/reagent/ironflock/services at every boot; Docker's
 	// data-root is the /apps partition.
-	"flockos": func(t *testing.T, d *device) {
+	"ironflockos": func(t *testing.T, d *device) {
 		require.NoError(t, os.RemoveAll(d.p("/opt/reagent/reswarmify")))
 		for _, unit := range []string{legacyAgentUnit, legacyManagerUnit} {
 			require.NoError(t, os.Remove(d.p("/etc/systemd/system/"+unit)))
@@ -167,7 +167,7 @@ func TestThePlanPerKind(t *testing.T) {
 		extra    string
 	}{
 		"ironflock-init":             {StrategyMove, false, "/apps", "-debug"},
-		"flockos":                    {StrategyLink, true, "/apps", "-debug"},
+		"ironflockos":                {StrategyLink, true, "/apps", "-debug"},
 		"reswarmos":                  {StrategyLink, true, "/apps", "-debug"},
 		"jetson":                     {StrategyMove, false, "/apps", "-debug"},
 		"appliance host":             {StrategyMove, false, "/apps", "-debug"},
@@ -192,7 +192,7 @@ func TestThePlanPerKind(t *testing.T) {
 // On an OS image the boot scripts relink the config from /boot and enable
 // the legacy units again: the /boot files stay, the units stay masked.
 func TestOnAnImageTheBootFilesStay(t *testing.T) {
-	for _, name := range []string{"flockos", "reswarmos"} {
+	for _, name := range []string{"ironflockos", "reswarmos"} {
 		t.Run(name, func(t *testing.T) {
 			d := variantDevice(t, name)
 			e := d.env()
@@ -209,8 +209,8 @@ func TestOnAnImageTheBootFilesStay(t *testing.T) {
 			assert.NotZero(t, info.Mode()&os.ModeSymlink, "the config stays the image's link")
 		})
 	}
-	t.Run("flockos keeps its boot scripts", func(t *testing.T) {
-		d := variantDevice(t, "flockos")
+	t.Run("ironflockos keeps its boot scripts", func(t *testing.T) {
+		d := variantDevice(t, "ironflockos")
 		e := d.env()
 		d.stage(e)
 		require.NoError(t, Run(e))

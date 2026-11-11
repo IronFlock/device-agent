@@ -1,6 +1,6 @@
 // Package osupdate is the device side of IronFlockOS updates (IronFlockOS master
 // plan, section 3.5; WP-2.4): which image the device runs (os-release), the
-// signed release catalog the release pipeline publishes (dl/flockos/
+// signed release catalog the release pipeline publishes (dl/ironflockos/
 // manifest.json, IronFlockOS ADR-0009 and docs/manifest.schema.json), and the
 // download of an update bundle. RAUC installs the bundle and checks its
 // signature and compatible itself (system.InstallBundle).
@@ -17,17 +17,17 @@ import (
 
 // Running is the image this device runs, from its os-release.
 type Running struct {
-	ID           string // ID: flockos on IronFlockOS
-	ImageID      string // IMAGE_ID: flockos-<target>-<variant>[-rt], the RAUC compatible
+	ID           string // ID: ironflockos on IronFlockOS
+	ImageID      string // IMAGE_ID: ironflockos-<target>-<variant>[-rt], the RAUC compatible
 	ImageVersion string // IMAGE_VERSION: the IronFlockOS version
 	BuildID      string // BUILD_ID: <UTC build time>Z-g<commit>
 	PrettyName   string
 }
 
-// IsFlockOS reports whether the device runs an IronFlockOS image that RAUC
-// updates: ID flockos with an image id and version.
-func (r Running) IsFlockOS() bool {
-	return r.ID == "flockos" && r.ImageID != "" && r.ImageVersion != ""
+// IsIronFlockOS reports whether the device runs an IronFlockOS image that RAUC
+// updates: ID ironflockos with an image id and version.
+func (r Running) IsIronFlockOS() bool {
+	return r.ID == "ironflockos" && r.ImageID != "" && r.ImageVersion != ""
 }
 
 // ImageIDReport is what the agent reports to the platform as os_image_id
@@ -39,7 +39,7 @@ func ImageIDReport(r Running, err error) (id string, ok bool) {
 	if err != nil {
 		return "", false
 	}
-	if !r.IsFlockOS() {
+	if !r.IsIronFlockOS() {
 		return "", true
 	}
 	return r.ImageID, true

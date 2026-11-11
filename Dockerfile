@@ -1,6 +1,6 @@
 # Builder for `just build-all-docker`: cross-compiles the agent (with frpc
 # built from source by the frp/ module) for every target in `targets`.
-FROM golang:1.27.3-alpine
+FROM golang:1.27.4-alpine
 
 RUN apk add --no-cache bash git findutils build-base
 

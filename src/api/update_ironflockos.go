@@ -26,14 +26,14 @@ const slotStatusTimeout = 10 * time.Second
 
 // Seams for the tests.
 var (
-	runsFlockOS     = system.RunsFlockOS
-	flockOSOffer    = (*system.System).FlockOSOffer
-	downloadFlockOS = (*system.System).DownloadFlockOSUpdate
-	installFlockOS  = (*system.System).InstallFlockOSUpdate
-	rebootSystem    = (*system.System).Reboot
-	flockOSSlots    = system.FlockOSSlots
-	readRunning     = osupdate.ReadRunning
-	rebootDelay     = 2 * time.Second
+	runsIronFlockOS     = system.RunsIronFlockOS
+	ironFlockOSOffer    = (*system.System).IronFlockOSOffer
+	downloadIronFlockOS = (*system.System).DownloadIronFlockOSUpdate
+	installIronFlockOS  = (*system.System).InstallIronFlockOSUpdate
+	rebootSystem        = (*system.System).Reboot
+	ironFlockOSSlots    = system.IronFlockOSSlots
+	readRunning         = osupdate.ReadRunning
+	rebootDelay         = 2 * time.Second
 )
 
 var buildIDTime = regexp.MustCompile(`^(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})(\d{2})Z`)
@@ -47,12 +47,12 @@ func buildTime(buildID string) string {
 	return m[1] + "-" + m[2] + "-" + m[3] + "T" + m[4] + ":" + m[5] + ":" + m[6] + "Z"
 }
 
-// flockOSRelease is get_os_release on IronFlockOS: the running image, the release
+// ironFlockOSRelease is get_os_release on IronFlockOS: the running image, the release
 // the device's channel offers, and RAUC's slots. The keys of the legacy
 // answer (Name, Version, BuildTime) stay; a part that cannot be read carries
 // its error instead of failing the whole answer.
-func (ex *External) flockOSRelease(ctx context.Context) *messenger.InvokeResult {
-	running, offer, err := flockOSOffer(ex.System)
+func (ex *External) ironFlockOSRelease(ctx context.Context) *messenger.InvokeResult {
+	running, offer, err := ironFlockOSOffer(ex.System)
 	latest := common.Dict{}
 	if err != nil {
 		latest["Error"] = err.Error()
@@ -72,13 +72,13 @@ func (ex *External) flockOSRelease(ctx context.Context) *messenger.InvokeResult 
 			}
 		}
 	}
-	result := common.Dict{"currentRelease": flockOSCurrent(running), "latestRelease": latest}
-	addFlockOSSlots(ctx, result)
+	result := common.Dict{"currentRelease": ironFlockOSCurrent(running), "latestRelease": latest}
+	addIronFlockOSSlots(ctx, result)
 	return &messenger.InvokeResult{Arguments: []interface{}{result}}
 }
 
-// flockOSCurrent is the running image as get_os_release names it.
-func flockOSCurrent(running osupdate.Running) common.Dict {
+// ironFlockOSCurrent is the running image as get_os_release names it.
+func ironFlockOSCurrent(running osupdate.Running) common.Dict {
 	return common.Dict{
 		"Name":      "IronFlockOS",
 		"Version":   running.ImageVersion,
@@ -88,11 +88,11 @@ func flockOSCurrent(running osupdate.Running) common.Dict {
 	}
 }
 
-// addFlockOSSlots adds RAUC's slots to an answer, or why they cannot be read.
-func addFlockOSSlots(ctx context.Context, result common.Dict) {
+// addIronFlockOSSlots adds RAUC's slots to an answer, or why they cannot be read.
+func addIronFlockOSSlots(ctx context.Context, result common.Dict) {
 	sctx, cancel := context.WithTimeout(ctx, slotStatusTimeout)
 	defer cancel()
-	booted, primary, slots, err := flockOSSlots(sctx)
+	booted, primary, slots, err := ironFlockOSSlots(sctx)
 	if err != nil {
 		result["slotsError"] = err.Error()
 		return
@@ -160,11 +160,11 @@ func OSReleaseReport(ctx context.Context) (report common.Dict, ok bool) {
 	if err != nil {
 		return nil, false
 	}
-	if !running.IsFlockOS() {
+	if !running.IsIronFlockOS() {
 		return common.Dict{}, true
 	}
-	report = common.Dict{"currentRelease": flockOSCurrent(running)}
-	addFlockOSSlots(ctx, report)
+	report = common.Dict{"currentRelease": ironFlockOSCurrent(running)}
+	addIronFlockOSSlots(ctx, report)
 	return report, true
 }
 
@@ -180,8 +180,8 @@ func (ex *External) performOSUpdateHandler(ctx context.Context, response messeng
 	if !privileged {
 		return nil, errdefs.InsufficientPrivileges(errors.New("insufficient privileges to update the operating system"))
 	}
-	if !runsFlockOS() {
-		return nil, system.ErrNotFlockOS
+	if !runsIronFlockOS() {
+		return nil, system.ErrNotIronFlockOS
 	}
 
 	topic := topics.Topic(common.BuildPerformOSUpdateProgress(ex.Config.ReswarmConfig.SerialNumber))
@@ -191,13 +191,13 @@ func (ex *External) performOSUpdateHandler(ctx context.Context, response messeng
 
 	dctx, cancel := context.WithTimeout(context.Background(), osDownloadTimeout)
 	defer cancel()
-	path, err := downloadFlockOS(ex.System, dctx, func(dp filesystem.DownloadProgress) {
+	path, err := downloadIronFlockOS(ex.System, dctx, func(dp filesystem.DownloadProgress) {
 		publish(common.Dict{"stage": "download", "increment": dp.Increment, "currentBytes": dp.CurrentBytes, "fileSize": dp.TotalFileSize})
 	})
 	if err != nil {
 		return nil, err
 	}
-	err = installFlockOS(ex.System, func(operation string, percent uint64) {
+	err = installIronFlockOS(ex.System, func(operation string, percent uint64) {
 		publish(common.Dict{"stage": "install", "operationName": operation, "progressPercent": percent})
 	})
 	if err != nil {

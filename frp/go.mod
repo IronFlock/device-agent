@@ -7,7 +7,7 @@
 // Bump: go get github.com/fatedier/frp@vX.Y.Z golang.org/x/net@latest golang.org/x/crypto@latest && go mod tidy
 module device-agent/frp
 
-go 1.27.3
+go 1.27.4
 
 tool (
 	github.com/fatedier/frp/cmd/frpc

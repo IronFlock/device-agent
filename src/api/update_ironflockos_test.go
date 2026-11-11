@@ -20,8 +20,8 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// fakeFlockOS replaces the system calls of the IronFlockOS handlers.
-type fakeFlockOS struct {
+// fakeIronFlockOS replaces the system calls of the IronFlockOS handlers.
+type fakeIronFlockOS struct {
 	mu          sync.Mutex
 	offerErr    error
 	downloadErr error
@@ -32,7 +32,7 @@ type fakeFlockOS struct {
 	rebooted    chan struct{}
 }
 
-func useFakeFlockOS(t *testing.T, flockOS bool, f *fakeFlockOS) {
+func useFakeIronFlockOS(t *testing.T, ironFlockOS bool, f *fakeIronFlockOS) {
 	t.Helper()
 	f.rebooted = make(chan struct{}, 1)
 	old := struct {
@@ -44,39 +44,39 @@ func useFakeFlockOS(t *testing.T, flockOS bool, f *fakeFlockOS) {
 		slots    func(context.Context) (string, string, []system.Slot, error)
 		running  func() (osupdate.Running, error)
 		delay    time.Duration
-	}{runsFlockOS, flockOSOffer, downloadFlockOS, installFlockOS, rebootSystem, flockOSSlots, readRunning, rebootDelay}
+	}{runsIronFlockOS, ironFlockOSOffer, downloadIronFlockOS, installIronFlockOS, rebootSystem, ironFlockOSSlots, readRunning, rebootDelay}
 	t.Cleanup(func() {
-		runsFlockOS, flockOSOffer, downloadFlockOS, installFlockOS = old.runs, old.offer, old.download, old.install
-		rebootSystem, flockOSSlots, readRunning, rebootDelay = old.reboot, old.slots, old.running, old.delay
+		runsIronFlockOS, ironFlockOSOffer, downloadIronFlockOS, installIronFlockOS = old.runs, old.offer, old.download, old.install
+		rebootSystem, ironFlockOSSlots, readRunning, rebootDelay = old.reboot, old.slots, old.running, old.delay
 	})
 	rebootDelay = 0
-	runsFlockOS = func() bool { return flockOS }
+	runsIronFlockOS = func() bool { return ironFlockOS }
 	readRunning = func() (osupdate.Running, error) {
 		if f.runningErr != nil {
 			return osupdate.Running{}, f.runningErr
 		}
-		if !flockOS {
+		if !ironFlockOS {
 			return osupdate.Running{ID: "debian"}, nil
 		}
-		return osupdate.Running{ID: "flockos", ImageID: "flockos-amd64-efi-base", ImageVersion: "1.0.0", BuildID: "20261120T095512Z-g1a2b3c4"}, nil
+		return osupdate.Running{ID: "ironflockos", ImageID: "ironflockos-amd64-efi-base", ImageVersion: "1.0.0", BuildID: "20261120T095512Z-g1a2b3c4"}, nil
 	}
-	flockOSOffer = func(*system.System) (osupdate.Running, osupdate.Offer, error) {
-		running := osupdate.Running{ID: "flockos", ImageID: "flockos-amd64-efi-base", ImageVersion: "1.0.0", BuildID: "20261120T095512Z-g1a2b3c4"}
+	ironFlockOSOffer = func(*system.System) (osupdate.Running, osupdate.Offer, error) {
+		running := osupdate.Running{ID: "ironflockos", ImageID: "ironflockos-amd64-efi-base", ImageVersion: "1.0.0", BuildID: "20261120T095512Z-g1a2b3c4"}
 		if f.offerErr != nil {
 			return running, osupdate.Offer{}, f.offerErr
 		}
 		return running, osupdate.Offer{Channel: "test", Version: "1.0.1", Newer: true,
 			Release: osupdate.Release{BuildID: "20261130T141003Z-g5d6e7f8", BuildTime: "2026-11-30T14:10:03Z"}}, nil
 	}
-	downloadFlockOS = func(_ *system.System, _ context.Context, p func(filesystem.DownloadProgress)) (string, error) {
+	downloadIronFlockOS = func(_ *system.System, _ context.Context, p func(filesystem.DownloadProgress)) (string, error) {
 		f.step("download")
 		if f.downloadErr != nil {
 			return "", f.downloadErr
 		}
 		p(filesystem.DownloadProgress{Increment: 10, CurrentBytes: 10, TotalFileSize: 10})
-		return "/var/cache/flockos/flockos-amd64-efi-base-1.0.1.raucb", nil
+		return "/var/cache/ironflockos/ironflockos-amd64-efi-base-1.0.1.raucb", nil
 	}
-	installFlockOS = func(_ *system.System, p func(string, uint64)) error {
+	installIronFlockOS = func(_ *system.System, p func(string, uint64)) error {
 		f.step("install")
 		if f.installErr != nil {
 			return f.installErr
@@ -89,7 +89,7 @@ func useFakeFlockOS(t *testing.T, flockOS bool, f *fakeFlockOS) {
 		f.rebooted <- struct{}{}
 		return nil
 	}
-	flockOSSlots = func(context.Context) (string, string, []system.Slot, error) {
+	ironFlockOSSlots = func(context.Context) (string, string, []system.Slot, error) {
 		if f.slotsErr != nil {
 			return "", "", nil, f.slotsErr
 		}
@@ -100,19 +100,19 @@ func useFakeFlockOS(t *testing.T, flockOS bool, f *fakeFlockOS) {
 	}
 }
 
-func (f *fakeFlockOS) step(s string) {
+func (f *fakeIronFlockOS) step(s string) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.steps = append(f.steps, s)
 }
 
-func (f *fakeFlockOS) done() []string {
+func (f *fakeIronFlockOS) done() []string {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return append([]string(nil), f.steps...)
 }
 
-func flockOSExternal(t *testing.T) (*External, *fakes.Messenger) {
+func ironFlockOSExternal(t *testing.T) (*External, *fakes.Messenger) {
 	t.Helper()
 	logs := fakes.NewMessenger()
 	cfg := testConfig()
@@ -136,10 +136,10 @@ func TestBuildTime(t *testing.T) {
 	assert.Equal(t, "", buildTime("v1.0.0"))
 }
 
-func TestGetOSReleaseOnFlockOS(t *testing.T) {
+func TestGetOSReleaseOnIronFlockOS(t *testing.T) {
 	t.Run("current, latest and the slots", func(t *testing.T) {
-		useFakeFlockOS(t, true, &fakeFlockOS{})
-		ex, _ := flockOSExternal(t)
+		useFakeIronFlockOS(t, true, &fakeIronFlockOS{})
+		ex, _ := ironFlockOSExternal(t)
 		res, err := ex.getOSReleaseHandler(context.Background(), messenger.Result{Details: systemDetails()})
 		require.NoError(t, err)
 		dict := res.Arguments[0].(common.Dict)
@@ -147,7 +147,7 @@ func TestGetOSReleaseOnFlockOS(t *testing.T) {
 		assert.Equal(t, "IronFlockOS", current["Name"])
 		assert.Equal(t, "1.0.0", current["Version"])
 		assert.Equal(t, "2026-11-20T09:55:12Z", current["BuildTime"])
-		assert.Equal(t, "flockos-amd64-efi-base", current["ImageID"])
+		assert.Equal(t, "ironflockos-amd64-efi-base", current["ImageID"])
 		latest := dict["latestRelease"].(common.Dict)
 		assert.Equal(t, "1.0.1", latest["Version"])
 		assert.Equal(t, "test", latest["Channel"])
@@ -163,8 +163,8 @@ func TestGetOSReleaseOnFlockOS(t *testing.T) {
 	})
 
 	t.Run("a catalog or RAUC that fails leaves its error, not a failed call", func(t *testing.T) {
-		useFakeFlockOS(t, true, &fakeFlockOS{offerErr: errors.New("refusing the catalog"), slotsErr: errors.New("no RAUC")})
-		ex, _ := flockOSExternal(t)
+		useFakeIronFlockOS(t, true, &fakeIronFlockOS{offerErr: errors.New("refusing the catalog"), slotsErr: errors.New("no RAUC")})
+		ex, _ := ironFlockOSExternal(t)
 		res, err := ex.getOSReleaseHandler(context.Background(), messenger.Result{Details: systemDetails()})
 		require.NoError(t, err)
 		dict := res.Arguments[0].(common.Dict)
@@ -176,18 +176,18 @@ func TestGetOSReleaseOnFlockOS(t *testing.T) {
 
 func TestOSReleaseReport(t *testing.T) {
 	t.Run("IronFlockOS: the running image and the slots, no release offered", func(t *testing.T) {
-		useFakeFlockOS(t, true, &fakeFlockOS{offerErr: errors.New("must not be asked")})
+		useFakeIronFlockOS(t, true, &fakeIronFlockOS{offerErr: errors.New("must not be asked")})
 		report, ok := OSReleaseReport(context.Background())
 		require.True(t, ok)
 		assert.Equal(t, "1.0.0", report["currentRelease"].(common.Dict)["Version"])
-		assert.Equal(t, "flockos-amd64-efi-base", report["currentRelease"].(common.Dict)["ImageID"])
+		assert.Equal(t, "ironflockos-amd64-efi-base", report["currentRelease"].(common.Dict)["ImageID"])
 		assert.Equal(t, "rootfs.0", report["slots"].(common.Dict)["booted"])
 		require.Len(t, report["slots"].(common.Dict)["slots"], 2)
 		assert.NotContains(t, report, "latestRelease")
 	})
 
 	t.Run("RAUC that fails leaves its error beside the running image", func(t *testing.T) {
-		useFakeFlockOS(t, true, &fakeFlockOS{slotsErr: errors.New("no RAUC")})
+		useFakeIronFlockOS(t, true, &fakeIronFlockOS{slotsErr: errors.New("no RAUC")})
 		report, ok := OSReleaseReport(context.Background())
 		require.True(t, ok)
 		assert.Equal(t, "1.0.0", report["currentRelease"].(common.Dict)["Version"])
@@ -196,14 +196,14 @@ func TestOSReleaseReport(t *testing.T) {
 	})
 
 	t.Run("another OS reports nothing to show, which clears what was known", func(t *testing.T) {
-		useFakeFlockOS(t, false, &fakeFlockOS{})
+		useFakeIronFlockOS(t, false, &fakeIronFlockOS{})
 		report, ok := OSReleaseReport(context.Background())
 		require.True(t, ok)
 		assert.Empty(t, report)
 	})
 
 	t.Run("no os-release (Windows) leaves the report out", func(t *testing.T) {
-		useFakeFlockOS(t, true, &fakeFlockOS{runningErr: errors.New("no such file")})
+		useFakeIronFlockOS(t, true, &fakeIronFlockOS{runningErr: errors.New("no such file")})
 		_, ok := OSReleaseReport(context.Background())
 		assert.False(t, ok)
 	})
@@ -211,8 +211,8 @@ func TestOSReleaseReport(t *testing.T) {
 
 func TestFailedInstallReportsTheSlots(t *testing.T) {
 	t.Run("perform_os_update", func(t *testing.T) {
-		useFakeFlockOS(t, true, &fakeFlockOS{installErr: errors.New("RAUC: signature verification failed")})
-		ex, _ := flockOSExternal(t)
+		useFakeIronFlockOS(t, true, &fakeIronFlockOS{installErr: errors.New("RAUC: signature verification failed")})
+		ex, _ := ironFlockOSExternal(t)
 		_, err := ex.performOSUpdateHandler(context.Background(), messenger.Result{Details: systemDetails()})
 		require.Error(t, err)
 		report := reportedOSRelease(t, ex)
@@ -220,16 +220,16 @@ func TestFailedInstallReportsTheSlots(t *testing.T) {
 	})
 
 	t.Run("install_os_update", func(t *testing.T) {
-		useFakeFlockOS(t, true, &fakeFlockOS{installErr: errors.New("RAUC: Compatible mismatch")})
-		ex, _ := flockOSExternal(t)
+		useFakeIronFlockOS(t, true, &fakeIronFlockOS{installErr: errors.New("RAUC: Compatible mismatch")})
+		ex, _ := ironFlockOSExternal(t)
 		_, err := ex.installOSUpdateHandler(context.Background(), messenger.Result{Details: systemDetails()})
 		require.Error(t, err)
 		reportedOSRelease(t, ex)
 	})
 
 	t.Run("a failed download changes no slot and reports nothing", func(t *testing.T) {
-		useFakeFlockOS(t, true, &fakeFlockOS{downloadErr: errors.New("no network")})
-		ex, _ := flockOSExternal(t)
+		useFakeIronFlockOS(t, true, &fakeIronFlockOS{downloadErr: errors.New("no network")})
+		ex, _ := ironFlockOSExternal(t)
 		_, err := ex.performOSUpdateHandler(context.Background(), messenger.Result{Details: systemDetails()})
 		require.Error(t, err)
 		time.Sleep(20 * time.Millisecond)
@@ -237,19 +237,19 @@ func TestFailedInstallReportsTheSlots(t *testing.T) {
 	})
 }
 
-func TestDownloadAndInstallOnFlockOS(t *testing.T) {
+func TestDownloadAndInstallOnIronFlockOS(t *testing.T) {
 	t.Run("download returns the bundle's path, with progress", func(t *testing.T) {
-		useFakeFlockOS(t, true, &fakeFlockOS{})
-		ex, logs := flockOSExternal(t)
+		useFakeIronFlockOS(t, true, &fakeIronFlockOS{})
+		ex, logs := ironFlockOSExternal(t)
 		res, err := ex.downloadOSUpdateHandler(context.Background(), messenger.Result{Details: systemDetails()})
 		require.NoError(t, err)
-		assert.Equal(t, "/var/cache/flockos/flockos-amd64-efi-base-1.0.1.raucb", res.Arguments[0].(common.Dict)["path"])
+		assert.Equal(t, "/var/cache/ironflockos/ironflockos-amd64-efi-base-1.0.1.raucb", res.Arguments[0].(common.Dict)["path"])
 		assert.Equal(t, 1, logs.GetPublishCount())
 	})
 
 	t.Run("RAUC's error reaches the caller", func(t *testing.T) {
-		useFakeFlockOS(t, true, &fakeFlockOS{installErr: errors.New("RAUC: Compatible mismatch")})
-		ex, _ := flockOSExternal(t)
+		useFakeIronFlockOS(t, true, &fakeIronFlockOS{installErr: errors.New("RAUC: Compatible mismatch")})
+		ex, _ := ironFlockOSExternal(t)
 		_, err := ex.installOSUpdateHandler(context.Background(), messenger.Result{Details: systemDetails()})
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "Compatible mismatch")
@@ -259,9 +259,9 @@ func TestDownloadAndInstallOnFlockOS(t *testing.T) {
 
 func TestPerformOSUpdate(t *testing.T) {
 	t.Run("download, install, then reboot after the answer", func(t *testing.T) {
-		f := &fakeFlockOS{}
-		useFakeFlockOS(t, true, f)
-		ex, logs := flockOSExternal(t)
+		f := &fakeIronFlockOS{}
+		useFakeIronFlockOS(t, true, f)
+		ex, logs := ironFlockOSExternal(t)
 		res, err := ex.performOSUpdateHandler(context.Background(), messenger.Result{Details: systemDetails()})
 		require.NoError(t, err)
 		assert.Equal(t, true, res.Arguments[0].(common.Dict)["rebooting"])
@@ -280,9 +280,9 @@ func TestPerformOSUpdate(t *testing.T) {
 	})
 
 	t.Run("a failed install does not reboot", func(t *testing.T) {
-		f := &fakeFlockOS{installErr: errors.New("RAUC: signature")}
-		useFakeFlockOS(t, true, f)
-		ex, _ := flockOSExternal(t)
+		f := &fakeIronFlockOS{installErr: errors.New("RAUC: signature")}
+		useFakeIronFlockOS(t, true, f)
+		ex, _ := ironFlockOSExternal(t)
 		_, err := ex.performOSUpdateHandler(context.Background(), messenger.Result{Details: systemDetails()})
 		require.Error(t, err)
 		reportedOSRelease(t, ex)
@@ -291,19 +291,19 @@ func TestPerformOSUpdate(t *testing.T) {
 	})
 
 	t.Run("refused off IronFlockOS", func(t *testing.T) {
-		f := &fakeFlockOS{}
-		useFakeFlockOS(t, false, f)
-		ex, _ := flockOSExternal(t)
+		f := &fakeIronFlockOS{}
+		useFakeIronFlockOS(t, false, f)
+		ex, _ := ironFlockOSExternal(t)
 		_, err := ex.performOSUpdateHandler(context.Background(), messenger.Result{Details: systemDetails()})
-		assert.ErrorIs(t, err, system.ErrNotFlockOS)
+		assert.ErrorIs(t, err, system.ErrNotIronFlockOS)
 		assert.Empty(t, f.done())
 	})
 
 	t.Run("refused without MAINTAIN", func(t *testing.T) {
-		f := &fakeFlockOS{}
-		useFakeFlockOS(t, true, f)
+		f := &fakeIronFlockOS{}
+		useFakeIronFlockOS(t, true, f)
 		details, m := grantPrivilege(false)
-		ex, _ := flockOSExternal(t)
+		ex, _ := ironFlockOSExternal(t)
 		ex.Privilege = newPrivilege(testConfig(), m)
 		_, err := ex.performOSUpdateHandler(context.Background(), messenger.Result{Details: details})
 		require.Error(t, err)

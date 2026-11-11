@@ -97,13 +97,13 @@ type testDevice struct {
 	recovers chan struct{}
 }
 
-// newDevice builds a guard on a fake host. flockOS: a 256 MiB ESP at
+// newDevice builds a guard on a fake host. ironFlockOS: a 256 MiB ESP at
 // /boot/efi, a 4 GiB root slot holding /var/log and apt's cache, and a
 // 500 GiB /data holding the journal, Docker's data-root and the agent's folder
 // (the latter two through the /opt/ironflock bind mount). Otherwise a
 // single-disk Linux host: a 64 GiB root holding all of it, with a /boot/efi
 // directory that is no mount. Everything starts healthy.
-func newDevice(t *testing.T, flockOS bool) *testDevice {
+func newDevice(t *testing.T, ironFlockOS bool) *testDevice {
 	t.Helper()
 	t.Cleanup(func() { setEmergency(false) })
 
@@ -130,7 +130,7 @@ func newDevice(t *testing.T, flockOS bool) *testDevice {
 		recovers: make(chan struct{}, 10),
 	}
 	d.host = &fakeHost{paths: map[string]*fakeFS{}, mounts: map[string]string{}, block: map[string]chan struct{}{}, statCalls: map[string]int{}}
-	if flockOS {
+	if ironFlockOS {
 		d.root = &fakeFS{key: "8:2", mount: "/", total: 4 * tGiB, free: 2 * tGiB, inodes: 262144, inodesFree: 200000}
 		d.data = &fakeFS{key: "8:4", mount: "/data", total: 500 * tGiB, free: 400 * tGiB, inodes: 32 << 20, inodesFree: 30 << 20}
 		d.esp = &fakeFS{key: "8:1", mount: "/boot/efi", total: 256 * tMiB, free: 240 * tMiB}
@@ -273,7 +273,7 @@ func TestThresholds(t *testing.T) {
 func TestMeasuredThresholds(t *testing.T) {
 	cases := []struct {
 		name            string
-		flockOS         bool
+		ironFlockOS     bool
 		mount           string
 		appSpace        bool
 		warn, emergency uint64
@@ -285,7 +285,7 @@ func TestMeasuredThresholds(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			d := newDevice(t, c.flockOS)
+			d := newDevice(t, c.ironFlockOS)
 			f := d.byMount(t, d.g.measure(), c.mount)
 			if f.isAppSpace() != c.appSpace || f.WarnFree != c.warn || f.EmergencyFree != c.emergency {
 				t.Errorf("%s %v: app space %v, floors (%d, %d); want %v, (%d, %d)",
@@ -362,7 +362,7 @@ func TestLevel(t *testing.T) {
 	}
 }
 
-func TestMeasureFlockOS(t *testing.T) {
+func TestMeasureIronFlockOS(t *testing.T) {
 	d := newDevice(t, true)
 	fss := d.g.measure()
 
@@ -407,7 +407,7 @@ func TestMeasureSingleDiskHost(t *testing.T) {
 func TestMeasureDedupesByDevice(t *testing.T) {
 	d := newDevice(t, true)
 	// Docker's data-root and the agent's folder read /data's device under
-	// the bind mount's name: folded into /data (see TestMeasureFlockOS). A
+	// the bind mount's name: folded into /data (see TestMeasureIronFlockOS). A
 	// separate disk at a path below /data is a filesystem of its own.
 	ssd := &fakeFS{key: "259:1", mount: "/data/ssd", total: 1000 * tGiB, free: 900 * tGiB}
 	d.host.paths[d.g.cfg.AgentDir] = ssd
@@ -611,11 +611,11 @@ func TestCleanupSelection(t *testing.T) {
 		coreDumps bool
 	}
 	cases := []struct {
-		name    string
-		flockOS bool
-		noApt   bool
-		fill    func(d *testDevice)
-		want    want
+		name        string
+		ironFlockOS bool
+		noApt       bool
+		fill        func(d *testDevice)
+		want        want
 	}{
 		{"IronFlockOS: /data low", true, false,
 			func(d *testDevice) { d.host.set(d.data, 2*tGiB) },
@@ -644,7 +644,7 @@ func TestCleanupSelection(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			d := newDevice(t, c.flockOS)
+			d := newDevice(t, c.ironFlockOS)
 			d.writeLogs(t)
 			if c.noApt {
 				d.g.lookPath = func(string) (string, error) { return "", fs.ErrNotExist }

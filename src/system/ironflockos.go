@@ -24,8 +24,8 @@ import (
 // by RAUC, which checks its signature and compatible. Devices that do not run
 // IronFlockOS keep the legacy path (GetOSUpdate, InstallOSUpdate).
 
-// ErrNotFlockOS: the device does not run an IronFlockOS image.
-var ErrNotFlockOS = errors.New("this device does not run IronFlockOS")
+// ErrNotIronFlockOS: the device does not run an IronFlockOS image.
+var ErrNotIronFlockOS = errors.New("this device does not run IronFlockOS")
 
 // ErrNoNewerRelease: the channel offers nothing newer than the running image.
 var ErrNoNewerRelease = errors.New("no newer IronFlockOS release for this device's channel")
@@ -60,21 +60,21 @@ var (
 	installRauc = raucInstallBundle
 )
 
-// RunsFlockOS reports whether the device runs an IronFlockOS image.
-func RunsFlockOS() bool {
+// RunsIronFlockOS reports whether the device runs an IronFlockOS image.
+func RunsIronFlockOS() bool {
 	r, err := readRunning()
-	return err == nil && r.IsFlockOS()
+	return err == nil && r.IsIronFlockOS()
 }
 
-// FlockOSOffer reads the running image and the catalog, and returns the
+// IronFlockOSOffer reads the running image and the catalog, and returns the
 // release the device's channel offers for it.
-func (sys *System) FlockOSOffer() (osupdate.Running, osupdate.Offer, error) {
+func (sys *System) IronFlockOSOffer() (osupdate.Running, osupdate.Offer, error) {
 	running, err := readRunning()
 	if err != nil {
 		return osupdate.Running{}, osupdate.Offer{}, err
 	}
-	if !running.IsFlockOS() {
-		return running, osupdate.Offer{}, ErrNotFlockOS
+	if !running.IsIronFlockOS() {
+		return running, osupdate.Offer{}, ErrNotIronFlockOS
 	}
 	url := sys.updateBaseURL() + "/" + osupdate.CatalogPath
 	data, status, err := fetchSmallC(url)
@@ -93,10 +93,10 @@ func (sys *System) FlockOSOffer() (osupdate.Running, osupdate.Offer, error) {
 	return running, offer, err
 }
 
-// offerToInstall is FlockOSOffer for an update: a newer release this agent
+// offerToInstall is IronFlockOSOffer for an update: a newer release this agent
 // may install.
 func (sys *System) offerToInstall() (osupdate.Offer, error) {
-	running, offer, err := sys.FlockOSOffer()
+	running, offer, err := sys.IronFlockOSOffer()
 	if err != nil {
 		return osupdate.Offer{}, err
 	}
@@ -109,9 +109,9 @@ func (sys *System) offerToInstall() (osupdate.Offer, error) {
 	return offer, nil
 }
 
-// DownloadFlockOSUpdate downloads the bundle of the offered release, or
+// DownloadIronFlockOSUpdate downloads the bundle of the offered release, or
 // returns the one already downloaded.
-func (sys *System) DownloadFlockOSUpdate(ctx context.Context, progress func(filesystem.DownloadProgress)) (string, error) {
+func (sys *System) DownloadIronFlockOSUpdate(ctx context.Context, progress func(filesystem.DownloadProgress)) (string, error) {
 	if !osUpdateMu.TryLock() {
 		return "", ErrOSUpdateRunning
 	}
@@ -134,9 +134,9 @@ func (sys *System) DownloadFlockOSUpdate(ctx context.Context, progress func(file
 	return osupdate.Download(ctx, bundle, cacheDir, progress)
 }
 
-// InstallFlockOSUpdate installs the downloaded bundle of the offered
+// InstallIronFlockOSUpdate installs the downloaded bundle of the offered
 // release into the other slot. RAUC's errors are returned.
-func (sys *System) InstallFlockOSUpdate(progress func(operationName string, progressPercent uint64)) error {
+func (sys *System) InstallIronFlockOSUpdate(progress func(operationName string, progressPercent uint64)) error {
 	if !osUpdateMu.TryLock() {
 		return ErrOSUpdateRunning
 	}
@@ -169,13 +169,13 @@ func raucCall(ctx context.Context, method string, args []interface{}, out ...int
 	return conn.Object(raucDBusInterface, raucDBusObjectPath).CallWithContext(ctx, method, 0, args...).Store(out...)
 }
 
-// MarkFlockOSSlotGood marks the slot the device booted from good: the
+// MarkIronFlockOSSlotGood marks the slot the device booted from good: the
 // health gate of an update (IronFlockOS master plan, section 3.5, step 6). The
 // agent calls it once it is connected to the platform and Docker runs; a
 // slot that never gets here is not marked, and the bootloader falls back to
 // the previous slot. Not IronFlockOS: nothing to do.
-func MarkFlockOSSlotGood(ctx context.Context) error {
-	if !RunsFlockOS() {
+func MarkIronFlockOSSlotGood(ctx context.Context) error {
+	if !RunsIronFlockOS() {
 		return nil
 	}
 	var slot, message string
@@ -203,10 +203,10 @@ type Slot struct {
 	BuildID      string
 }
 
-// FlockOSSlots returns RAUC's slots and the names of the slot booted and
+// IronFlockOSSlots returns RAUC's slots and the names of the slot booted and
 // of the primary (the next boot), e.g. rootfs.0 and rootfs.1; primary is ""
 // when the bootloader backend cannot tell.
-func FlockOSSlots(ctx context.Context) (booted string, primary string, slots []Slot, err error) {
+func IronFlockOSSlots(ctx context.Context) (booted string, primary string, slots []Slot, err error) {
 	var raw []struct {
 		Name   string
 		Status map[string]dbus.Variant
@@ -302,7 +302,7 @@ func slotImage(ctx context.Context, slot *Slot, fsType, device string) {
 		}}
 		// An empty slot (a file system without the file, or none) has
 		// nothing to remember: it is read again next time.
-		if !entry.running.IsFlockOS() {
+		if !entry.running.IsIronFlockOS() {
 			return
 		}
 		slotImages.Lock()
@@ -358,12 +358,12 @@ func variantString(m map[string]dbus.Variant, key string) string {
 // markGoodTimeout bounds the health gate's RAUC call.
 const markGoodTimeout = 30 * time.Second
 
-// MarkFlockOSSlotGoodNow is MarkFlockOSSlotGood with its own deadline, for
+// MarkIronFlockOSSlotGoodNow is MarkIronFlockOSSlotGood with its own deadline, for
 // the agent's connect handler: errors are logged, never returned.
-func MarkFlockOSSlotGoodNow() {
+func MarkIronFlockOSSlotGoodNow() {
 	ctx, cancel := context.WithTimeout(context.Background(), markGoodTimeout)
 	defer cancel()
-	if err := MarkFlockOSSlotGood(ctx); err != nil {
+	if err := MarkIronFlockOSSlotGood(ctx); err != nil {
 		log.Error().Err(err).Msg("could not mark the booted IronFlockOS slot good")
 	}
 }

@@ -160,7 +160,7 @@ func (ex *External) announceOffered(inventory firmware.Inventory) {
 // and announces what is on offer. A failed refresh is logged and the report
 // goes out with what fwupd has.
 func (ex *External) CheckFirmwareUpdates() {
-	if !runsFlockOS() {
+	if !runsIronFlockOS() {
 		return
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), firmwareRefreshTimeout)
@@ -177,7 +177,7 @@ func (ex *External) CheckFirmwareUpdates() {
 
 // WatchFirmwareUpdates checks once a day, for devices that stay connected.
 func (ex *External) WatchFirmwareUpdates() {
-	if !runsFlockOS() {
+	if !runsIronFlockOS() {
 		return
 	}
 	ticker := time.NewTicker(firmwareCheckInterval)
@@ -208,8 +208,8 @@ func (ex *External) refreshFirmwareUpdatesHandler(ctx context.Context, response 
 	if !privileged {
 		return nil, errdefs.InsufficientPrivileges(errors.New("insufficient privileges to check for firmware updates"))
 	}
-	if !runsFlockOS() {
-		return nil, system.ErrNotFlockOS
+	if !runsIronFlockOS() {
+		return nil, system.ErrNotIronFlockOS
 	}
 	refreshCtx, cancel := context.WithTimeout(ctx, firmwareRefreshTimeout)
 	defer cancel()
@@ -247,8 +247,8 @@ func (ex *External) installFirmwareUpdateHandler(ctx context.Context, response m
 	if !privileged {
 		return nil, errdefs.InsufficientPrivileges(errors.New("insufficient privileges to install firmware"))
 	}
-	if !runsFlockOS() {
-		return nil, system.ErrNotFlockOS
+	if !runsIronFlockOS() {
+		return nil, system.ErrNotIronFlockOS
 	}
 	args, err := firstArgDict(response.Arguments)
 	if err != nil {
