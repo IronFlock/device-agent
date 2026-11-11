@@ -164,7 +164,7 @@ func TestOpenCatalog(t *testing.T) {
 		keys, err := catalogKeys()
 		require.NoError(t, err)
 		require.Len(t, keys, 1)
-		assert.Equal(t, "f5e1308e", keys[0].ID)
+		assert.Equal(t, "036ef3bd", keys[0].ID)
 		// a catalog of another key is still refused
 		_, _, err = OpenCatalog(s.seal(t, CatalogSubject, payloadOf(t, testCatalog())))
 		assert.Error(t, err)

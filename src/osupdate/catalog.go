@@ -24,13 +24,13 @@ var CatalogSubject = updatesig.Subject{Context: "ironflockos-manifest:v1", Line:
 // raw Ed25519 key per line, "#" starts a comment. A key of its own, not an
 // agent update key: only IronFlockOS release runs may sign with it.
 //
-// The line below is the Cloud KMS key ironflock-release/flockos-catalog,
-// version 1 (IronFlockOS WP-2.6; pki/flockos-catalog.pub and pki/README.md in
-// IronFlock/ironflockos give its PEM form and how to check it against KMS).
+// The line below is the Cloud KMS key ironflock-release/ironflockos-catalog,
+// version 1 (IronFlockOS WP-2.6; pki/ironflockos-catalog.pub and pki/README.md
+// in IronFlock/ironflockos give its PEM form and how to check it against KMS).
 // Rotate it as the agent update keys: a release that lists both keys reaches
 // the fleet before IronFlockOS signs with the new one.
 const IRONFLOCKOS_CATALOG_PUBLIC_KEYS = `
-wFLa1T7iHYi20X8JVu/O6JUzBGmW2+tjo7QVMuxsmQg= # key f5e1308e, Cloud KMS ironflock-release/flockos-catalog v1
++OG0Ylau0tkCKEDT+WGc9RYHOa9VCSxiOGBBTp7IEQc= # key 036ef3bd, Cloud KMS ironflock-release/ironflockos-catalog v1
 `
 
 // catalogKeys returns the trusted keys; tests replace it.

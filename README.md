@@ -590,8 +590,8 @@ ReswarmOS files (`/etc/reswarmos-update`, `/etc/os-release-latest.json`).
   envelope signed as `ironflockos-manifest:v1` / `ironflockos/manifest.json`,
   with a key of its own (`IRONFLOCKOS_CATALOG_PUBLIC_KEYS` in
   `src/osupdate/catalog.go`), not an agent update key: Cloud KMS
-  `ironflock-release/flockos-catalog`, version 1 (key `f5e1308e`;
-  `pki/flockos-catalog.pub` in IronFlock/ironflockos).
+  `ironflock-release/ironflockos-catalog`, version 1 (key `036ef3bd`;
+  `pki/ironflockos-catalog.pub` in IronFlock/ironflockos).
 - **The release** offered is the one the device's channel names: its
   environment (`production`, `test`); a channel the catalog lacks follows
   `production`. It is installable when it is newer than the running image and
