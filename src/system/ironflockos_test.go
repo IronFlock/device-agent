@@ -7,6 +7,8 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -143,17 +145,33 @@ func TestDownloadAndInstallIronFlockOSUpdate(t *testing.T) {
 
 		require.NoError(t, sys.InstallIronFlockOSUpdate(nil))
 		assert.Equal(t, path, installed)
+		assert.NoFileExists(t, path, "an installed bundle is removed")
+		left, err := os.ReadDir(cacheDir)
+		require.NoError(t, err)
+		assert.Empty(t, left)
 	})
 
-	t.Run("RAUC's error is returned, not swallowed", func(t *testing.T) {
+	t.Run("RAUC's error is returned, not swallowed, and the bundle stays", func(t *testing.T) {
 		sys := ironFlockOSDevice(t, "1.0.0", serve(t, bundle), bundle, func(string, func(string, uint64)) error {
 			return errors.New("Installation error: Compatible mismatch")
 		})
-		_, err := sys.DownloadIronFlockOSUpdate(context.Background(), nil)
+		path, err := sys.DownloadIronFlockOSUpdate(context.Background(), nil)
 		require.NoError(t, err)
 		err = sys.InstallIronFlockOSUpdate(nil)
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "Compatible mismatch")
+		assert.FileExists(t, path, "a retry installs the bundle without downloading it again")
+	})
+
+	t.Run("a bundle that cannot be removed does not fail the install", func(t *testing.T) {
+		sys := ironFlockOSDevice(t, "1.0.0", serve(t, bundle), bundle, nil)
+		_, err := sys.DownloadIronFlockOSUpdate(context.Background(), nil)
+		require.NoError(t, err)
+		installRauc = func(string, func(string, uint64)) error {
+			// The cache is gone by the time the install ends.
+			return os.RemoveAll(cacheDir)
+		}
+		assert.NoError(t, sys.InstallIronFlockOSUpdate(nil))
 	})
 
 	t.Run("install before download is refused", func(t *testing.T) {
@@ -178,6 +196,73 @@ func TestDownloadAndInstallIronFlockOSUpdate(t *testing.T) {
 		_, err := sys.DownloadIronFlockOSUpdate(context.Background(), nil)
 		assert.ErrorIs(t, err, ErrOSUpdateRunning)
 		assert.ErrorIs(t, sys.InstallIronFlockOSUpdate(nil), ErrOSUpdateRunning)
+	})
+}
+
+func TestRemoveLeftoverIronFlockOSBundles(t *testing.T) {
+	const offered = "ironflockos-amd64-efi-base-1.0.1.raucb"
+	const older = "ironflockos-amd64-efi-base-1.0.0.raucb"
+	// cache fills the cache with the bundles named, and returns what is left
+	// in it after the cleanup ran.
+	cache := func(t *testing.T, names ...string) func() []string {
+		t.Helper()
+		for _, n := range names {
+			require.NoError(t, os.WriteFile(filepath.Join(cacheDir, n), []byte("x"), 0o600))
+		}
+		return func() []string {
+			entries, err := os.ReadDir(cacheDir)
+			require.NoError(t, err)
+			left := []string{}
+			for _, e := range entries {
+				left = append(left, e.Name())
+			}
+			return left
+		}
+	}
+
+	t.Run("nothing newer offered: every bundle is removed", func(t *testing.T) {
+		sys := ironFlockOSDevice(t, "1.0.1", "https://dl.example", []byte("a bundle"), nil)
+		left := cache(t, offered, older, older+".part", "notes.txt")
+		sys.RemoveLeftoverIronFlockOSBundles()
+		assert.Equal(t, []string{"notes.txt"}, left(), "only bundles and partial downloads are removed")
+	})
+
+	t.Run("a newer release offered: its bundle stays for the install", func(t *testing.T) {
+		sys := ironFlockOSDevice(t, "1.0.0", "https://dl.example", []byte("a bundle"), nil)
+		left := cache(t, offered, older)
+		sys.RemoveLeftoverIronFlockOSBundles()
+		assert.Equal(t, []string{offered}, left())
+	})
+
+	t.Run("no catalog: every bundle stays", func(t *testing.T) {
+		sys := ironFlockOSDevice(t, "1.0.1", "https://dl.example", []byte("a bundle"), nil)
+		sys.config.ReswarmConfig.UpdateURL = "https://elsewhere.example"
+		left := cache(t, offered, older)
+		sys.RemoveLeftoverIronFlockOSBundles()
+		assert.ElementsMatch(t, []string{offered, older}, left())
+	})
+
+	t.Run("an update running: its files stay", func(t *testing.T) {
+		sys := ironFlockOSDevice(t, "1.0.1", "https://dl.example", []byte("a bundle"), nil)
+		left := cache(t, offered+".part")
+		osUpdateMu.Lock()
+		sys.RemoveLeftoverIronFlockOSBundles()
+		osUpdateMu.Unlock()
+		assert.Equal(t, []string{offered + ".part"}, left())
+	})
+
+	t.Run("no cache yet: nothing to do", func(t *testing.T) {
+		sys := ironFlockOSDevice(t, "1.0.1", "https://dl.example", []byte("a bundle"), nil)
+		cacheDir = filepath.Join(cacheDir, "missing")
+		assert.NotPanics(t, sys.RemoveLeftoverIronFlockOSBundles)
+	})
+
+	t.Run("not IronFlockOS: the cache is not touched", func(t *testing.T) {
+		sys := ironFlockOSDevice(t, "1.0.1", "https://dl.example", []byte("a bundle"), nil)
+		readRunning = func() (osupdate.Running, error) { return osupdate.Running{ID: "debian"}, nil }
+		left := cache(t, offered)
+		sys.RemoveLeftoverIronFlockOSBundles()
+		assert.Equal(t, []string{offered}, left())
 	})
 }
 

@@ -628,7 +628,12 @@ ReswarmOS files (`/etc/reswarmos-update`, `/etc/os-release-latest.json`).
 - **`install_os_update`** has RAUC install the downloaded bundle into the other
   slot, with progress on `install_os_update_progress`. RAUC checks the bundle's
   signature and compatible. Its errors are returned (they used to be logged
-  only).
+  only). After a successful install the bundle is removed from
+  `/var/cache/ironflockos`; after a failed one it stays, so that a retry does
+  not download it again. At its first connect after a start, the agent removes
+  every bundle left there but the one of a newer release its channel offers
+  (downloaded, not installed yet); when it cannot read the catalog, it keeps
+  them all.
 - **`perform_os_update`** chains download, install and a reboot behind
   `perform_os_update_progress` (`stage`: `download`, `install`, `reboot`), and
   answers before the reboot.
