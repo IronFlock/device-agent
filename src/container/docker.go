@@ -323,6 +323,7 @@ func (docker *Docker) GetImages(ctx context.Context, fullImageName string) ([]Im
 			Labels:      image.Labels,
 			Size:        image.Size,
 			RepoTags:    image.RepoTags,
+			RepoDigests: image.RepoDigests,
 		})
 	}
 
@@ -360,6 +361,7 @@ func (docker *Docker) GetImage(ctx context.Context, fullImageName string, tag st
 		Labels:      image.Labels,
 		Size:        image.Size,
 		RepoTags:    image.RepoTags,
+		RepoDigests: image.RepoDigests,
 	}, nil
 }
 
@@ -494,6 +496,7 @@ func (docker *Docker) ListImages(ctx context.Context, options map[string]interfa
 			Labels:      image.Labels,
 			Size:        image.Size,
 			RepoTags:    image.RepoTags,
+			RepoDigests: image.RepoDigests,
 		}
 		imageResults = append(imageResults, imageResult)
 	}

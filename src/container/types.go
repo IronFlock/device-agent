@@ -44,6 +44,9 @@ type ImageResult struct {
 	Labels      map[string]string `json:"labels,omitempty"`
 	Size        int64             `json:"size,omitempty"`
 	RepoTags    []string          `json:"repoTags,omitempty"`
+	// RepoDigests names the image by manifest digest ("repo@sha256:…"):
+	// what a release pins an image to (x-image-digest).
+	RepoDigests []string `json:"repoDigests,omitempty"`
 }
 
 type TtyDimension struct {

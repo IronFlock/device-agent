@@ -36,6 +36,9 @@ func (sm *StateMachine) pullComposeImages(ctx context.Context, payload common.Tr
 		return composeTransitionErr(ctx, err)
 	}
 
+	// Images pinned by digest arrive untagged; see tagPinnedImages.
+	sm.tagPinnedImages(dockerComposePath)
+
 	return nil
 }
 

@@ -254,7 +254,10 @@ func (so *StateObserver) addObserver(stage common.Stage, appKey uint64, appName 
 
 // composeServicesWithMissingImages returns the (sorted) names of the compose
 // services whose image does not exist locally, matching loosely against the
-// RepoTags of the given image list. Services without an image field are
+// RepoTags of the given image list. A service its release pins to a digest
+// (x-image-digest) is present only when an image holds that very digest
+// (pinnedImagePresent): a tag of the same name proves nothing about the
+// content. Services without an image field are
 // skipped. The boot reconciler treats an empty result as "all images present";
 // the install path (runProdComposeApp) uses the result both to decide whether
 // a real DOWNLOADING phase is needed and to pull only what is actually missing,
@@ -277,6 +280,13 @@ func composeServicesWithMissingImages(dockerCompose map[string]interface{}, imag
 		}
 
 		imageName := fmt.Sprint(service["image"])
+
+		if digest, pinned := service[composeImageDigestField].(string); pinned {
+			if !pinnedImagePresent(imageName, digest, images) {
+				missing = append(missing, serviceName)
+			}
+			continue
+		}
 
 		foundImage := false
 		for _, image := range images {
