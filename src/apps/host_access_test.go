@@ -106,11 +106,13 @@ func TestBuildDefaultEnvironmentVariablesDeviceURL(t *testing.T) {
 
 	env := buildDefaultEnvironmentVariables(cfg, common.TransitionPayload{}, common.PROD, app, "")
 	assert.Contains(t, env, "RESWARM_URL=https://studio.ironflock.com")
+	assert.Contains(t, env, "STUDIO_URL=https://studio.ironflock.com")
 	assert.Contains(t, env, "DEVICE_URL=https://studio.ironflock.com/alice/projects/plant/settings/devices/press-1")
 
 	cfg.ReswarmConfig.ReswarmBaseURL = ""
 	for _, e := range buildDefaultEnvironmentVariables(cfg, common.TransitionPayload{}, common.PROD, app, "") {
 		assert.NotContains(t, e, "DEVICE_URL=", "no Studio address, no device link")
+		assert.NotContains(t, e, "STUDIO_URL=", "never blanked")
 	}
 }
 

@@ -297,6 +297,13 @@ jobs:
       - uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4.4.0
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
 
+      # A pull request or manual run builds both images and pushes nothing, so
+      # an image build that fails stops the pull request and not the release
+      # run after the merge.
+      - name: Build multi-arch agent images (dry run, no push)
+        if: needs.verify.outputs.mode == 'dry-run'
+        run: just build-docker-image-amd64 build-docker-image-arm64
+
       - name: Build + push multi-arch agent images
         if: needs.verify.outputs.mode == 'release'
         run: just push-docker-image

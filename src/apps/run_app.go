@@ -883,6 +883,9 @@ func buildDefaultEnvironmentVariables(config *config.Config, payload common.Tran
 	if config.ReswarmConfig.ReswarmBaseURL != "" {
 		deviceURL := fmt.Sprintf("%s/%s/projects/%s/settings/devices/%s", config.ReswarmConfig.ReswarmBaseURL, config.ReswarmConfig.SwarmOwnerName, config.ReswarmConfig.SwarmName, config.ReswarmConfig.Name)
 		environmentVariables = append(environmentVariables, fmt.Sprintf("RESWARM_URL=%s", config.ReswarmConfig.ReswarmBaseURL))
+		// The same Studio base URL under a name without the legacy brand, for apps that
+		// link back to Studio (a board, the device page) on cloud and appliance.
+		environmentVariables = append(environmentVariables, fmt.Sprintf("STUDIO_URL=%s", config.ReswarmConfig.ReswarmBaseURL))
 		environmentVariables = append(environmentVariables, fmt.Sprintf("DEVICE_URL=%s", deviceURL))
 	}
 
