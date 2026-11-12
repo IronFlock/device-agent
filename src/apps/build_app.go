@@ -180,6 +180,14 @@ func (sm *StateMachine) SetupComposeFiles(payload common.TransitionPayload, app 
 		log.Debug().Msgf("resolved %d store image reference(s) of %s onto %s", resolved, app.AppName, config.ReswarmConfig.DockerRegistryURL)
 	}
 
+	// An installed release runs exactly the images it was released with — see
+	// pinComposeImages. A DEV build makes its own images and pins nothing.
+	if isProd {
+		if _, err := pinComposeImages(dockerCompose); err != nil {
+			return "", err
+		}
+	}
+
 	services, ok := (dockerCompose["services"]).(map[string]interface{})
 	if !ok {
 		return "", errors.New("failed to infer services")
