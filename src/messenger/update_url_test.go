@@ -144,6 +144,35 @@ func TestUpdateRemoteDeviceStatus_HandsOffUpdateURL(t *testing.T) {
 		assert.True(t, os.IsNotExist(err))
 	})
 
+	t.Run("saves the Studio's base URL to the .flock when it is new", func(t *testing.T) {
+		cfg := testConfig()
+		cfg.ReswarmConfig.ReswarmBaseURL = "" // as after a start: the .flock named none yet
+		flock := filepath.Join(t.TempDir(), "device.flock")
+		cfg.CommandLineArguments.ConfigFileLocation = flock
+		session, client := newHeartbeatSession(t, cfg)
+		client.SetCallResult(heartbeatResult(map[string]any{"reswarmBaseURL": "https://appliance.example"}))
+
+		require.NoError(t, session.UpdateRemoteDeviceStatus(CONNECTED))
+
+		assert.Equal(t, "https://appliance.example", cfg.ReswarmConfig.ReswarmBaseURL)
+		assert.Equal(t, "https://appliance.example", readFlock(t, flock).ReswarmBaseURL,
+			"the agent's next start has it before it is connected")
+	})
+
+	t.Run("does not rewrite the .flock for the Studio it already names", func(t *testing.T) {
+		cfg := testConfig()
+		cfg.ReswarmConfig.ReswarmBaseURL = "https://appliance.example"
+		flock := filepath.Join(t.TempDir(), "device.flock")
+		cfg.CommandLineArguments.ConfigFileLocation = flock
+		session, client := newHeartbeatSession(t, cfg)
+		client.SetCallResult(heartbeatResult(map[string]any{"reswarmBaseURL": "https://appliance.example"}))
+
+		require.NoError(t, session.UpdateRemoteDeviceStatus(CONNECTED))
+
+		_, err := os.Stat(flock)
+		assert.True(t, os.IsNotExist(err), "no write when nothing changed")
+	})
+
 	t.Run("absent reswarmBaseURL does not poison the cached base with <nil>", func(t *testing.T) {
 		cfg := testConfig()
 		cfg.CommandLineArguments.ConfigFileLocation = filepath.Join(t.TempDir(), "device.flock")

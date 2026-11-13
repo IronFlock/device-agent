@@ -874,18 +874,24 @@ func buildDefaultEnvironmentVariables(config *config.Config, payload common.Tran
 		)
 	}
 
-	if payload.InstanceKey > 0 {
+	// The platform the device belongs to, as the backend last named it. From
+	// the .flock, not from the payload or the session: the agent starts apps
+	// from its stored state before it is connected, and those containers need
+	// the same values.
+	studioURL, instanceKey := config.Platform()
+
+	if instanceKey > 0 {
 		// Instance devices: apps compose the cloud-forwarded route
 		// https://i<INSTANCE_KEY>-<deviceKey>-<appName>-<port>.<cloud edge>.
-		environmentVariables = append(environmentVariables, fmt.Sprintf("INSTANCE_KEY=%d", payload.InstanceKey))
+		environmentVariables = append(environmentVariables, fmt.Sprintf("INSTANCE_KEY=%d", instanceKey))
 	}
 
-	if config.ReswarmConfig.ReswarmBaseURL != "" {
-		deviceURL := fmt.Sprintf("%s/%s/projects/%s/settings/devices/%s", config.ReswarmConfig.ReswarmBaseURL, config.ReswarmConfig.SwarmOwnerName, config.ReswarmConfig.SwarmName, config.ReswarmConfig.Name)
-		environmentVariables = append(environmentVariables, fmt.Sprintf("RESWARM_URL=%s", config.ReswarmConfig.ReswarmBaseURL))
+	if studioURL != "" {
+		deviceURL := fmt.Sprintf("%s/%s/projects/%s/settings/devices/%s", studioURL, config.ReswarmConfig.SwarmOwnerName, config.ReswarmConfig.SwarmName, config.ReswarmConfig.Name)
+		environmentVariables = append(environmentVariables, fmt.Sprintf("RESWARM_URL=%s", studioURL))
 		// The same Studio base URL under a name without the legacy brand, for apps that
 		// link back to Studio (a board, the device page) on cloud and appliance.
-		environmentVariables = append(environmentVariables, fmt.Sprintf("STUDIO_URL=%s", config.ReswarmConfig.ReswarmBaseURL))
+		environmentVariables = append(environmentVariables, fmt.Sprintf("STUDIO_URL=%s", studioURL))
 		environmentVariables = append(environmentVariables, fmt.Sprintf("DEVICE_URL=%s", deviceURL))
 	}
 

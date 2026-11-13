@@ -1,11 +1,13 @@
 package apps
 
 import (
+	"path/filepath"
 	"reagent/common"
 	"reagent/config"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestAppEndpointURL(t *testing.T) {
@@ -91,8 +93,54 @@ func TestBuildDefaultEnvironmentVariablesTunnelRouting(t *testing.T) {
 		assert.NotContains(t, env, "INSTANCE_KEY=", "cloud devices must not get an instance key")
 	}
 
-	instanceEnv := buildDefaultEnvironmentVariables(cfg, common.TransitionPayload{InstanceKey: 5}, common.PROD, app, "")
+	cfg.ReswarmConfig.InstanceKey = 5
+	instanceEnv := buildDefaultEnvironmentVariables(cfg, common.TransitionPayload{}, common.PROD, app, "")
 	assert.Contains(t, instanceEnv, "INSTANCE_KEY=5")
+}
+
+// The agent starts apps from its stored state before it is connected: at its
+// own start, and whenever it corrects an app by itself. Such a payload comes
+// from the requested-state row and the session has told the agent nothing yet,
+// so what the backend said about the platform has to come from the .flock.
+// Field case 2026-11-13: containers created at an agent start had no
+// RESWARM_URL/STUDIO_URL/DEVICE_URL, and on an appliance no INSTANCE_KEY, so
+// the SDK composed the appliance's tunnel URL where the cloud's was needed.
+func TestBuildDefaultEnvironmentVariablesAfterRestart(t *testing.T) {
+	flock := filepath.Join(t.TempDir(), "device.flock")
+	app := &common.App{AppKey: 7, AppName: "kiosk"}
+
+	// A session of the agent: the heartbeat names the Studio, an app-state
+	// push the appliance's instance key, and both are saved.
+	running := &config.Config{
+		CommandLineArguments: &config.CommandLineArguments{ConfigFileLocation: flock},
+		ReswarmConfig: &config.ReswarmConfig{
+			Environment: "production", DeviceKey: 4, ApplianceDomain: "appliance.example",
+			DeviceEndpointURL: "wss://ws.appliance.example/ws",
+			SwarmOwnerName:    "alice", SwarmName: "plant", Name: "press-1",
+		},
+	}
+	require.True(t, running.Learn(func(cfg *config.ReswarmConfig) bool {
+		cfg.ReswarmBaseURL = "https://appliance.example"
+		cfg.InstanceKey = 11
+		return true
+	}))
+	require.NoError(t, running.Persist())
+
+	// The agent's next start: nothing but the .flock, and a payload built
+	// from the requested-state row.
+	reloaded, err := config.LoadReswarmConfig(flock)
+	require.NoError(t, err)
+	restarted := &config.Config{
+		CommandLineArguments: &config.CommandLineArguments{ConfigFileLocation: flock},
+		ReswarmConfig:        reloaded,
+	}
+
+	env := buildDefaultEnvironmentVariables(restarted, common.TransitionPayload{}, common.PROD, app, "")
+	assert.Contains(t, env, "INSTANCE_KEY=11")
+	assert.Contains(t, env, "TUNNEL_DOMAIN=appliance.example")
+	assert.Contains(t, env, "STUDIO_URL=https://appliance.example")
+	assert.Contains(t, env, "RESWARM_URL=https://appliance.example")
+	assert.Contains(t, env, "DEVICE_URL=https://appliance.example/alice/projects/plant/settings/devices/press-1")
 }
 
 // DEVICE_URL is the device's page in Studio, under /<user>/projects/ (Studio

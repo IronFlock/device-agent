@@ -2,8 +2,10 @@ package config_test
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 
 	"reagent/config"
@@ -221,12 +223,133 @@ func TestSaveReswarmConfig_RoundTrip(t *testing.T) {
 	assert.Equal(t, original.Secret, reloaded.Secret)
 	assert.Equal(t, original.DeviceEndpointURL, reloaded.DeviceEndpointURL)
 
-	// ReswarmBaseURL is tagged json:"-" and must never be serialized.
-	_, present := asMap["ReswarmBaseURL"]
-	assert.False(t, present)
-	_, presentSnake := asMap["reswarm_base_url"]
-	assert.False(t, presentSnake)
-	assert.Empty(t, reloaded.ReswarmBaseURL)
+	// What the backend said about the platform is saved: the Studio's base
+	// URL as studio_url, the appliance's instance key as instance_key.
+	assert.Equal(t, original.ReswarmBaseURL, asMap["studio_url"])
+	assert.Equal(t, original.ReswarmBaseURL, reloaded.ReswarmBaseURL)
+	_, hasInstanceKey := asMap["instance_key"]
+	assert.False(t, hasInstanceKey, "a cloud device's .flock names no instance key")
+	assert.Zero(t, reloaded.InstanceKey)
+}
+
+// A .flock from before the platform values were saved, and one of a device
+// that has learned none yet, load without them; and such a device's saved
+// .flock has no new key, so nothing in it is new to the agent version a failed
+// update rolls back to. (That version ignores keys it does not know.)
+func TestReswarmConfig_PlatformValuesAreOptional(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "old.flock")
+	require.NoError(t, os.WriteFile(path, sampleReswarmJSON(t), 0o600))
+
+	loaded, err := config.LoadReswarmConfig(path)
+	require.NoError(t, err)
+	assert.Empty(t, loaded.ReswarmBaseURL)
+	assert.Zero(t, loaded.InstanceKey)
+
+	require.NoError(t, config.SaveReswarmConfig(path, loaded))
+	raw, err := os.ReadFile(path)
+	require.NoError(t, err)
+	var saved map[string]interface{}
+	require.NoError(t, json.Unmarshal(raw, &saved))
+	assert.NotContains(t, saved, "studio_url")
+	assert.NotContains(t, saved, "instance_key")
+}
+
+func flockConfig(t *testing.T, path string) *config.Config {
+	t.Helper()
+	return &config.Config{
+		CommandLineArguments: &config.CommandLineArguments{ConfigFileLocation: path},
+		ReswarmConfig: &config.ReswarmConfig{
+			Name: "press-1", DeviceKey: 4, DeviceEndpointURL: "wss://ws.appliance.example/ws",
+		},
+	}
+}
+
+// What the backend tells the agent while it runs is in force at once, and on
+// disk after Persist, where the agent's next start finds it.
+func TestConfig_LearnPersistPlatform(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "device.flock")
+	cfg := flockConfig(t, path)
+
+	studioURL, instanceKey := cfg.Platform()
+	assert.Empty(t, studioURL)
+	assert.Zero(t, instanceKey)
+
+	assert.False(t, cfg.Learn(func(*config.ReswarmConfig) bool { return false }), "nothing changed")
+	_, err := os.Stat(path)
+	assert.True(t, os.IsNotExist(err), "Learn never writes the .flock")
+
+	assert.True(t, cfg.Learn(func(rc *config.ReswarmConfig) bool {
+		rc.ReswarmBaseURL = "https://appliance.example"
+		rc.InstanceKey = 11
+		return true
+	}))
+	studioURL, instanceKey = cfg.Platform()
+	assert.Equal(t, "https://appliance.example", studioURL)
+	assert.Equal(t, uint64(11), instanceKey)
+
+	require.NoError(t, cfg.Persist())
+	reloaded, err := config.LoadReswarmConfig(path)
+	require.NoError(t, err)
+	assert.Equal(t, "https://appliance.example", reloaded.ReswarmBaseURL)
+	assert.Equal(t, uint64(11), reloaded.InstanceKey)
+	assert.Equal(t, "press-1", reloaded.Name, "the rest of the .flock is saved with it")
+}
+
+// Without a path there is nothing to save to: an error, and no file anywhere.
+func TestConfig_PersistWithoutPath(t *testing.T) {
+	t.Chdir(t.TempDir())
+	for name, cliArgs := range map[string]*config.CommandLineArguments{
+		"no arguments": nil,
+		"no path":      {},
+	} {
+		t.Run(name, func(t *testing.T) {
+			cfg := &config.Config{CommandLineArguments: cliArgs, ReswarmConfig: &config.ReswarmConfig{}}
+			require.Error(t, cfg.Persist())
+			entries, err := os.ReadDir(".")
+			require.NoError(t, err)
+			assert.Empty(t, entries)
+		})
+	}
+}
+
+// The heartbeat, an app-state push and the save after a connect change and
+// save the .flock from different goroutines while apps start. Whatever the
+// order, the file ends with the values in force, and (under -race) nothing
+// reads a value while another goroutine writes it.
+func TestConfig_ConcurrentLearnPersistPlatform(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "device.flock")
+	cfg := flockConfig(t, path)
+
+	const writers = 8
+	var wg sync.WaitGroup
+	for i := 1; i <= writers; i++ {
+		wg.Add(2)
+		go func() {
+			defer wg.Done()
+			if cfg.Learn(func(rc *config.ReswarmConfig) bool {
+				rc.InstanceKey = uint64(i)
+				rc.ReswarmBaseURL = fmt.Sprintf("https://appliance-%d.example", i)
+				return true
+			}) {
+				assert.NoError(t, cfg.Persist())
+			}
+		}()
+		go func() {
+			defer wg.Done()
+			studioURL, instanceKey := cfg.Platform()
+			if instanceKey != 0 {
+				assert.Equal(t, fmt.Sprintf("https://appliance-%d.example", instanceKey), studioURL,
+					"both values come from one change")
+			}
+		}()
+	}
+	wg.Wait()
+
+	studioURL, instanceKey := cfg.Platform()
+	reloaded, err := config.LoadReswarmConfig(path)
+	require.NoError(t, err)
+	assert.Equal(t, instanceKey, reloaded.InstanceKey, "the last save wrote the values in force")
+	assert.Equal(t, studioURL, reloaded.ReswarmBaseURL)
 }
 
 func TestSaveReswarmConfig_OverwritesExisting(t *testing.T) {

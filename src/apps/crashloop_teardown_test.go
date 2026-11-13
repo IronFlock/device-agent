@@ -352,14 +352,13 @@ func TestCrashLoopWakeKeepsBackoffWhenMemoryDivergesFromRow(t *testing.T) {
 
 // The requested-state row never persists push-only fields; a crashloop retry
 // rebuilt from the row must carry them over from the captured payload, or the
-// app loses its third-party registry credentials, instance identity, and
-// credential epoch on every retry.
+// app loses its third-party registry credentials and credential epoch on
+// every retry.
 func TestCarryPushOnlyFields(t *testing.T) {
 	captured := amPayload(84, "pushfields", common.RUNNING, common.PROD)
 	captured.DockerCredentials = map[string]common.DockerCredential{
 		"registry.example.com": {Username: "u", Password: "p"},
 	}
-	captured.InstanceKey = 42
 	captured.AppCredEpoch = 3
 	captured.DeviceToAppKey = 7
 
@@ -368,7 +367,6 @@ func TestCarryPushOnlyFields(t *testing.T) {
 	carryPushOnlyFields(&fromRow, captured)
 
 	assert.Equal(t, captured.DockerCredentials, fromRow.DockerCredentials)
-	assert.Equal(t, uint64(42), fromRow.InstanceKey)
 	assert.Equal(t, uint64(3), fromRow.AppCredEpoch)
 	assert.Equal(t, uint64(7), fromRow.DeviceToAppKey)
 }
