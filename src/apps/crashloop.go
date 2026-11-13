@@ -225,12 +225,12 @@ func (clm *AppManager) hasActiveCrashLoop(appKey uint64, stage common.Stage) boo
 // carryPushOnlyFields copies the payload fields that exist only on live cloud
 // pushes — the requested-state row does not persist them — from the captured
 // crashloop payload onto a row-built one. Without this a retry would lose the
-// app's third-party registry credentials (docker_credentials), its instance
-// identity (INSTANCE_KEY), and its credential epoch, degrading every restart
-// the crashloop drives.
+// app's third-party registry credentials (docker_credentials) and its
+// credential epoch, degrading every restart the crashloop drives. (The
+// instance key is no such field any more: it is in the .flock, see
+// config.Platform.)
 func carryPushOnlyFields(rowPayload *common.TransitionPayload, captured common.TransitionPayload) {
 	rowPayload.DockerCredentials = captured.DockerCredentials
-	rowPayload.InstanceKey = captured.InstanceKey
 	rowPayload.AppCredEpoch = captured.AppCredEpoch
 	rowPayload.DeviceToAppKey = captured.DeviceToAppKey
 }

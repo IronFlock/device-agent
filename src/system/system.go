@@ -807,7 +807,9 @@ func (system *System) UpdateDeviceMetadata() (swarmChanged bool, err error) {
 	system.config.ReswarmConfig.SwarmOwnerName = swarmOwnerName
 	system.config.ReswarmConfig.SwarmKey = int(swarmKey)
 
-	err = config.SaveReswarmConfig(system.config.CommandLineArguments.ConfigFileLocation, system.config.ReswarmConfig)
+	// Persist, not SaveReswarmConfig: the heartbeat and an app-state push save
+	// the .flock too, and one save at a time keeps the newest values on disk.
+	err = system.config.Persist()
 
 	return swarmChanged, err
 }

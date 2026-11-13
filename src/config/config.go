@@ -2,9 +2,11 @@ package config
 
 import (
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"regexp"
+	"sync"
 
 	"github.com/rs/zerolog/log"
 
@@ -60,8 +62,21 @@ type ReswarmConfig struct {
 	// self-updates. Appliance-managed agents carry the appliance's own /dl
 	// base here; the cloud backend hands out instance-registry.ironflock.com/dl
 	// (new .flock files and every heartbeat). Empty: DefaultUpdateBaseURL.
-	UpdateURL      string `json:"update_url,omitempty"`
-	ReswarmBaseURL string `json:"-"`
+	UpdateURL string `json:"update_url,omitempty"`
+	// ReswarmBaseURL is the base URL of the Studio of the platform the device
+	// belongs to (ironflock.com, or its appliance), which apps get as
+	// STUDIO_URL. The backend names it in every heartbeat reply.
+	ReswarmBaseURL string `json:"studio_url,omitempty"`
+	// InstanceKey is the cloud-assigned key of the appliance the device
+	// belongs to, which apps get as INSTANCE_KEY; 0 on a cloud device. An
+	// appliance's backend names it in every app-state push.
+	//
+	// Both are saved (Config.Learn, Config.Persist), because the agent starts
+	// apps from its stored state before it is connected. With the values in
+	// memory only, a container created then got neither variable, and an app
+	// on an appliance composed the appliance's tunnel URL instead of the
+	// cloud's.
+	InstanceKey uint64 `json:"instance_key,omitempty"`
 }
 
 type CommandLineArguments struct {
@@ -221,11 +236,65 @@ var retiredDeviceEndpoint = regexp.MustCompile(`devices.*\.(com|io):8080`)
 // new file, never a truncated one — the .flock usually lives on the FAT /boot
 // partition of a device that can lose power at any moment (a car's AutoPi).
 func SaveReswarmConfig(path string, reswarmConfig *ReswarmConfig) error {
-	data, err := json.MarshalIndent(reswarmConfig, "", " ") //nolint:gosec // G117: writes the device .flock, whose purpose is to hold the device secret (0600 by default)
+	data, err := marshalFlock(reswarmConfig)
 	if err != nil {
 		return err
 	}
+	return writeFlock(path, data)
+}
 
+func marshalFlock(reswarmConfig *ReswarmConfig) ([]byte, error) {
+	return json.MarshalIndent(reswarmConfig, "", " ") //nolint:gosec // G117: writes the device .flock, whose purpose is to hold the device secret (0600 by default)
+}
+
+// learnedMu guards the values of the .flock that the backend sets while the
+// agent runs (Learn): the heartbeat and an app-state push set them from
+// different goroutines, and every app start reads them (Platform). saveMu lets
+// one save run at a time; each save writes the values as they are when it
+// runs, so the last one writes the newest. They are package variables, not
+// fields, because Config is returned and copied by value.
+var (
+	learnedMu sync.Mutex
+	saveMu    sync.Mutex
+)
+
+// Learn applies what the backend told the agent to the .flock's values in
+// memory, and reports whether apply changed any; the caller then calls
+// Persist. It never waits for the disk.
+func (c *Config) Learn(apply func(*ReswarmConfig) (changed bool)) bool {
+	learnedMu.Lock()
+	defer learnedMu.Unlock()
+	return apply(c.ReswarmConfig)
+}
+
+// Persist saves the .flock as it is now. A failed save costs only the
+// persistence: the values stay in memory, and the save after the next connect
+// (system.UpdateDeviceMetadata) writes them too.
+func (c *Config) Persist() error {
+	if c.CommandLineArguments == nil || c.CommandLineArguments.ConfigFileLocation == "" {
+		return errors.New("the .flock has no path to save it to")
+	}
+	saveMu.Lock()
+	defer saveMu.Unlock()
+	learnedMu.Lock()
+	data, err := marshalFlock(c.ReswarmConfig)
+	learnedMu.Unlock()
+	if err != nil {
+		return err
+	}
+	return writeFlock(c.CommandLineArguments.ConfigFileLocation, data)
+}
+
+// Platform returns what an app gets to know about the platform its device
+// belongs to: the base URL of its Studio ("" while unknown), and the key of
+// the appliance (0 on a cloud device).
+func (c *Config) Platform() (studioURL string, instanceKey uint64) {
+	learnedMu.Lock()
+	defer learnedMu.Unlock()
+	return c.ReswarmConfig.ReswarmBaseURL, c.ReswarmConfig.InstanceKey
+}
+
+func writeFlock(path string, data []byte) error {
 	target := path
 	if resolved, err := filepath.EvalSymlinks(path); err == nil {
 		target = resolved

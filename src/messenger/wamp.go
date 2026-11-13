@@ -1126,22 +1126,31 @@ func (s *WampSession) UpdateRemoteDeviceStatus(status DeviceStatus) error {
 		return nil
 	}
 
-	// Type-asserted, not fmt.Sprint-ed: an absent key would otherwise cache
-	// the literal "<nil>" as the base URL.
-	if reswarmBaseURL, ok := args["reswarmBaseURL"].(string); ok && reswarmBaseURL != "" {
-		s.agentConfig.ReswarmConfig.ReswarmBaseURL = reswarmBaseURL
-	}
-
-	// Appliance backends hand off the effective OTA base on every heartbeat
-	// (see applyHandedOffUpdateURL for who takes it and who does not). Persist
-	// it so the next start still uses the local mirror; a failed write costs
-	// only the persistence, never the heartbeat, and is retried on the next
-	// start because the on-disk value then still differs.
-	if changed, url := applyHandedOffUpdateURL(s.agentConfig.ReswarmConfig, args["agentUpdateURL"]); changed {
-		log.Info().Msgf("agent update base handed off by backend: %s", url)
-		cfgPath := s.agentConfig.CommandLineArguments.ConfigFileLocation
-		if err := config.SaveReswarmConfig(cfgPath, s.agentConfig.ReswarmConfig); err != nil {
-			log.Warn().Err(err).Msgf("failed to persist handed-off agent update base to %s", cfgPath)
+	// Every heartbeat reply names the Studio of the platform the device belongs
+	// to, and an appliance's backend hands off the effective OTA base (see
+	// applyHandedOffUpdateURL for who takes it and who does not). Both are
+	// saved, so the next start has them before it is connected: the update
+	// check uses the local mirror, and the apps the agent then starts from its
+	// stored state get STUDIO_URL. A failed write costs only the persistence,
+	// never the heartbeat, and is retried on the next start because the
+	// on-disk value then still differs.
+	changed := s.agentConfig.Learn(func(cfg *config.ReswarmConfig) bool {
+		// Type-asserted, not fmt.Sprint-ed: an absent key would otherwise
+		// cache the literal "<nil>" as the base URL.
+		studioChanged := false
+		if reswarmBaseURL, ok := args["reswarmBaseURL"].(string); ok && reswarmBaseURL != "" && reswarmBaseURL != cfg.ReswarmBaseURL {
+			cfg.ReswarmBaseURL = reswarmBaseURL
+			studioChanged = true
+		}
+		updateChanged, url := applyHandedOffUpdateURL(cfg, args["agentUpdateURL"])
+		if updateChanged {
+			log.Info().Msgf("agent update base handed off by backend: %s", url)
+		}
+		return studioChanged || updateChanged
+	})
+	if changed {
+		if err := s.agentConfig.Persist(); err != nil {
+			log.Warn().Err(err).Msg("failed to save what the backend handed off to the .flock")
 		}
 	}
 

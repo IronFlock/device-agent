@@ -19,6 +19,9 @@ func (ex *External) requestAppStateHandler(ctx context.Context, response messeng
 		return nil, err
 	}
 
+	// Before the transition, which builds the app's environment from it.
+	ex.learnInstanceKey(response.ArgumentsKw["instance_key"])
+
 	err = ex.AppManager.CreateOrUpdateApp(payload)
 	if err != nil {
 		return nil, err
@@ -33,6 +36,50 @@ func (ex *External) requestAppStateHandler(ctx context.Context, response messeng
 	})
 
 	return &messenger.InvokeResult{}, nil
+}
+
+// learnInstanceKey takes the instance key of an app-state push into the
+// .flock. An appliance's backend names the key in every push and a cloud
+// backend in none, so the .flock follows the last push: the apps' INSTANCE_KEY
+// comes from there (config.Platform), also for an app the agent starts from
+// its stored state before it is connected. A value the agent cannot read
+// changes nothing and must not block the app sync. A failed save costs only
+// the persistence.
+func (ex *External) learnInstanceKey(value interface{}) {
+	instanceKey, ok := instanceKeyOf(value)
+	if !ok {
+		log.Warn().Msgf("app-state push with an instance_key that cannot be read (%T); keeping the one in the .flock", value)
+		return
+	}
+
+	changed := ex.Config.Learn(func(cfg *config.ReswarmConfig) bool {
+		if cfg.InstanceKey == instanceKey {
+			return false
+		}
+		cfg.InstanceKey = instanceKey
+		return true
+	})
+	if !changed {
+		return
+	}
+
+	if err := ex.Config.Persist(); err != nil {
+		log.Warn().Err(err).Msg("failed to save the instance key to the .flock")
+	}
+}
+
+// instanceKeyOf reads instance_key as an app-state push carries it. Absent is
+// 0: the device belongs to no instance. ok is false for a value that cannot be
+// read.
+func instanceKeyOf(value interface{}) (instanceKey uint64, ok bool) {
+	if value == nil {
+		return 0, true
+	}
+	if text, isString := value.(string); isString {
+		parsed, err := strconv.ParseUint(text, 10, 64)
+		return parsed, err == nil
+	}
+	return common.ToUint64(value)
 }
 
 // responseToTransitionPayload parses a Messenger response to a generic common.TransitionPayload struct.
@@ -67,7 +114,6 @@ func responseToTransitionPayload(config *config.Config, result messenger.Result)
 	privilegedKw := kwargs["privileged"]
 	newPrivilegedKw := kwargs["new_privileged"]
 	dockerCredentialsKw := kwargs["docker_credentials"]
-	instanceKeyKw := kwargs["instance_key"]
 	appCredEpochKw := kwargs["app_cred_epoch"]
 
 	var appKey uint64
@@ -76,7 +122,6 @@ func responseToTransitionPayload(config *config.Config, result messenger.Result)
 	var requestorAccountKey uint64
 	var requestorAccountKey2 uint64
 	var deviceOwnerAccountKey uint64
-	var instanceKey uint64
 	var appCredEpoch uint64
 	var appName string
 	var stage string
@@ -208,21 +253,6 @@ func responseToTransitionPayload(config *config.Config, result messenger.Result)
 				return common.TransitionPayload{}, err
 			}
 			deviceOwnerAccountKey = uint64(value)
-		}
-	}
-
-	// instance_key is optional: only instance (appliance) backends send it, and
-	// a value the agent cannot parse must not block app syncs — apps then just
-	// miss the INSTANCE_KEY env until the next valid sync.
-	if instanceKeyKw != nil {
-		instanceKey, ok = instanceKeyKw.(uint64)
-		if !ok {
-			if instanceKeyString, isString := instanceKeyKw.(string); isString {
-				parsedInstanceKey, err := strconv.ParseUint(instanceKeyString, 10, 64)
-				if err == nil {
-					instanceKey = parsedInstanceKey
-				}
-			}
 		}
 	}
 
@@ -419,7 +449,6 @@ func responseToTransitionPayload(config *config.Config, result messenger.Result)
 	)
 
 	payload.DeviceOwnerAccountKey = deviceOwnerAccountKey
-	payload.InstanceKey = instanceKey
 	payload.AppCredEpoch = appCredEpoch
 	payload.RequestUpdate = requestUpdate
 
