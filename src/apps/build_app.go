@@ -313,7 +313,7 @@ func (sm *StateMachine) buildDevComposeApp(payload common.TransitionPayload, app
 
 	err = filesystem.ExtractTarGz(appFilesTar, targetAppDir)
 	if err != nil {
-		return err
+		return fmt.Errorf("could not unpack the app: %w", err)
 	}
 
 	app.ReleaseBuild = releaseBuild
@@ -334,20 +334,11 @@ func (sm *StateMachine) buildDevComposeApp(payload common.TransitionPayload, app
 
 	compose := sm.Container.Compose()
 	if !compose.Supported() {
-		message := "Docker Compose is not supported for this device"
-		writeErr := sm.LogManager.Write(topicForLogStream, message)
-		if writeErr != nil {
-			return writeErr
-		}
 		return errdefs.DockerComposeNotSupported(errors.New("docker compose is not supported"))
 	}
 
 	err = sm.HandleRegistryLoginsWithDefault(payload)
 	if err != nil {
-		writeErr := sm.LogManager.Write(topicForLogStream, err.Error())
-		if writeErr != nil {
-			return writeErr
-		}
 		return err
 	}
 
@@ -403,7 +394,49 @@ func (sm *StateMachine) buildDevComposeApp(payload common.TransitionPayload, app
 	return sm.setState(app, common.BUILT)
 }
 
+// buildDevApp builds a DEV app, or the image a publish pushes (releaseBuild),
+// and writes why a build failed to the build console the developer watches.
+// Without this, a failure before the image build began (unpacking the app,
+// registry login, the compose file) showed only "File transfer has finished,
+// starting build..." followed by FAILED, with no reason anywhere but the
+// agent's journal. The error is returned unchanged: callers classify it with
+// errdefs type assertions.
 func (sm *StateMachine) buildDevApp(payload common.TransitionPayload, app *common.App, releaseBuild bool) error {
+	err := sm.runDevBuild(payload, app, releaseBuild)
+	if err == nil || errdefs.IsDockerStreamCanceled(err) {
+		// a canceled build writes its own notice and is not a failure
+		return err
+	}
+
+	topic := payload.ContainerName.Dev
+	if releaseBuild {
+		topic = payload.PublishContainerName
+	}
+	writeErr := sm.LogManager.Write(topic, buildFailureMessage(err))
+	if writeErr != nil {
+		log.Debug().Err(writeErr).Msg("failed to write the build failure to the app log")
+	}
+
+	return err
+}
+
+// buildFailureMessage is the build console's line for a failed build.
+func buildFailureMessage(err error) string {
+	reason := err.Error()
+	switch {
+	case errdefs.IsDockerfileCannotBeEmpty(err):
+		reason = "the Dockerfile cannot be empty, please fill out your Dockerfile"
+	case errdefs.IsDockerfileIsMissing(err):
+		reason = "could not find a Dockerfile, please create a Dockerfile in the root of your project"
+	case errdefs.IsDockerBuildFilesNotFound(err):
+		reason = "build files for app not found: " + err.Error()
+	case errdefs.IsDockerComposeNotSupported(err):
+		reason = "Docker Compose is not supported on this device"
+	}
+	return "Build failed: " + reason
+}
+
+func (sm *StateMachine) runDevBuild(payload common.TransitionPayload, app *common.App, releaseBuild bool) error {
 	if payload.DockerCompose != nil {
 		return sm.buildDevComposeApp(payload, app, releaseBuild)
 	}
@@ -459,22 +492,6 @@ func (sm *StateMachine) buildDevApp(payload common.TransitionPayload, app *commo
 	// TODO: figure out context for build?
 	reader, err := sm.Container.Build(context.Background(), appFilesTar, buildOptions)
 	if err != nil {
-		errorMessage := err.Error()
-		if errdefs.IsDockerfileCannotBeEmpty(err) {
-			errorMessage = "The Dockerfile cannot be empty, please fill out your Dockerfile"
-		} else if errdefs.IsDockerfileIsMissing(err) {
-			errorMessage = "Could not find a Dockerfile, please create a Dockerfile in the root of your project"
-		} else if errdefs.IsDockerBuildFilesNotFound(err) {
-			errorMessage = "Build files for app not found: " + err.Error()
-		}
-
-		log.Debug().Msgf("building failed sending following message to user %s", errorMessage)
-
-		messageErr := sm.LogManager.Write(topicForLogStream, errorMessage)
-		if messageErr != nil {
-			return messageErr
-		}
-
 		return err
 	}
 
