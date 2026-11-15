@@ -152,7 +152,8 @@ func TestExtractTarGzUnknownType(t *testing.T) {
 	dest := t.TempDir()
 	err := ExtractTarGz(archive, dest)
 	require.Error(t, err, "unsupported entry type should error")
-	assert.Contains(t, err.Error(), "unknown type")
+	// The message reaches the build console: it names the entry and the way out.
+	assert.Equal(t, "link is a symbolic link; only regular files and folders can be sent to the device. Delete it or add it to .dockerignore", err.Error())
 }
 
 func TestExtractTarGzRejectsEntriesOutsideDest(t *testing.T) {

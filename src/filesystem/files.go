@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 )
 
 func ExtractTarGz(source, dest string) error {
@@ -52,11 +53,33 @@ func ExtractTarGz(source, dest string) error {
 				return err
 			}
 		default:
-			return fmt.Errorf("unknown type: %v in %s", header.Typeflag, header.Name)
+			// The archive is the app folder the platform packed, so this is
+			// read by the developer on the build console: name the entry and
+			// say how to get past it (.dockerignore entries are left out of
+			// the archive). A Python virtualenv in the app folder is the
+			// usual source: its bin/python* are symbolic links.
+			return fmt.Errorf("%s is a %s; only regular files and folders can be sent to the device. Delete it or add it to .dockerignore",
+				strings.TrimPrefix(header.Name, "./"), tarEntryKind(header.Typeflag))
 		}
 	}
 
 	return nil
+}
+
+// tarEntryKind names an archive entry type ExtractTarGz does not extract.
+func tarEntryKind(typeflag byte) string {
+	switch typeflag {
+	case tar.TypeSymlink:
+		return "symbolic link"
+	case tar.TypeLink:
+		return "hard link"
+	case tar.TypeChar, tar.TypeBlock:
+		return "device file"
+	case tar.TypeFifo:
+		return "named pipe"
+	default:
+		return fmt.Sprintf("file of unsupported type %q", typeflag)
+	}
 }
 
 // extractFile writes one regular archive entry and closes it right away (a
