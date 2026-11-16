@@ -2,7 +2,8 @@
 //
 // Linux has two layouts:
 //
-//	/opt/ironflock/device-agent   current: written by ironflock-init >= 1.4.0, or
+//	/opt/ironflock/device-agent   current: written by `ironflock agent install`
+//	                              (ironflock-init >= 1.4.0 before it), or
 //	                              moved there in place by `device-agent migrate-layout`
 //	/opt/reagent                  legacy: ironflock-init < 1.4.0, and OS images
 //	                              (IronFlockOS, ReswarmOS, cubic, the Jetson script)

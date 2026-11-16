@@ -15,7 +15,7 @@ var BuildArch string = ""
 
 // Test builds only, set with -ldflags -X (scripts/build.sh EXTRA_LDFLAGS;
 // no release build sets them): versionOverride replaces version.txt, and
-// TestFault makes a deliberately broken agent for device-init's end-to-end
+// TestFault makes a deliberately broken agent for ironflock-cli's end-to-end
 // test of update rollbacks ("crash": exits at start; "offline": never
 // reaches IronFlock).
 var (

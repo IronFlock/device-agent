@@ -70,7 +70,7 @@ else
     echo "Embedded frpc binary at ${embedded_dir}/frpc_binary (size: $(wc -c < "${embedded_dir}/frpc_binary") bytes)"
 fi
 
-# EXTRA_LDFLAGS: test builds only (device-init's e2e: release.versionOverride,
+# EXTRA_LDFLAGS: test builds only (ironflock-cli's e2e: release.versionOverride,
 # release.TestFault).
 prefix="device-agent"
 binary_name="$prefix-$target_os-$target_arch"

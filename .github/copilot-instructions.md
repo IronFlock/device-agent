@@ -67,8 +67,8 @@ How to test:
 - Run the changed agent (`just run`, `just run_mac`), see `Connected!` in the
   log, break the connection (network or router), and see it reconnect.
 - When the change touches the start, the update, the rollback or the
-  migration: device-init's end-to-end tests on fresh cloud VMs (`just e2e` in
-  device-init; `TestBrokenUpdates` uses the `release.TestFault` builds
+  migration: ironflock-cli's end-to-end tests on fresh cloud VMs (`just e2e` in
+  ironflock-cli; `TestBrokenUpdates` uses the `release.TestFault` builds
   `crash` and `offline`).
 
 ## Prerequisites
