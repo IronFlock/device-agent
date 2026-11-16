@@ -17,7 +17,8 @@ import (
 // runServiceCommand handles `device-agent service <verb>` on Linux:
 //
 //	install    put the binary, unit and repair script in place and enable the
-//	           unit (ironflock-init runs it with -config and -start)
+//	           unit (`ironflock agent install` runs it with -config, -agentDir
+//	           and -start)
 //	uninstall  stop and disable the unit and remove its files; the agent's data
 //	           (database, apps, Docker data) stays
 //	start | stop | restart | status   systemctl on the unit

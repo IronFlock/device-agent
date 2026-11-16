@@ -402,8 +402,8 @@ func parseServiceInstallFlags(args []string, programData string, output io.Write
 	agentDir := flags.String("agentDir", "", "agent directory (default: %ProgramData%\\IronFlock\\"+winservice.Folder+")")
 	appsDir := flags.String("appsDir", "", "apps directory (default: <agentDir>\\apps)")
 	proxy := flags.String("proxy", "", "optional HTTP(S) proxy URL, written to the service environment")
-	// The counterpart to ironflock-init's --no-proxy on Linux. Without it the
-	// service environment's bypass list was fixed at localhost,127.0.0.1 and
+	// The counterpart to `ironflock agent install --no-proxy` on Linux. Without
+	// it the service environment's bypass list was fixed at localhost,127.0.0.1 and
 	// every hand-added exemption was wiped by the next `service install`.
 	noProxy := flags.String("no-proxy", "", "comma-separated hosts to reach directly, bypassing -proxy (merged with the device's own appliance and registry hosts)")
 	forceProxy := flags.Bool("force-proxy", false, "overwrite an existing "+proxyEnvFileName+" with the values from -proxy/-no-proxy")

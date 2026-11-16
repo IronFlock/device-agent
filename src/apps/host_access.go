@@ -199,8 +199,8 @@ func addComposeCABundleMount(service map[string]interface{}, hostCADir string) {
 // containerBypassEntries are the destinations an app container reaches without
 // leaving the device, and which must therefore never be sent at a corporate
 // proxy. The device's own NO_PROXY only carries the host's view of that
-// (localhost and friends, per install_ironflock.sh / ironflock-init), which is
-// wrong from inside a bridge-networked container: its loopback is the
+// (localhost and friends, per install_ironflock.sh / `ironflock agent install`),
+// which is wrong from inside a bridge-networked container: its loopback is the
 // container, and its siblings and the device itself sit on a docker bridge.
 //
 // The CIDR entries cover sibling containers and LAN peers addressed by IP.
@@ -235,7 +235,7 @@ type deviceProxy struct {
 
 // resolveDeviceProxy reads the standard proxy variables out of the agent's
 // environment, preferring the upper-case spelling exactly as proxy.Resolve in
-// ironflock-init does.
+// ironflock (ironflock-cli's cli/proxy) does.
 func resolveDeviceProxy() deviceProxy {
 	pick := func(upper, lower string) string {
 		if value := strings.TrimSpace(os.Getenv(upper)); value != "" {

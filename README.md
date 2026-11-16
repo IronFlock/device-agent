@@ -184,14 +184,15 @@ rollback, `stats.layout_error`; the device tries again at a later start (a
 day after the failure at the earliest), without end, or when a user asks.
 
 - Jetson installs have no supervisor that activates agent updates: they never
-  run 1.3.0 by themselves (reinstall them with ironflock-init).
+  run 1.3.0 by themselves (reinstall them: `ironflock agent remove`, then
+  `ironflock agent install`).
 - `device-agent migrate-layout status` prints the journal.
 - `gs://ironflock-downloads/device-agent/migration.json` with
   `{"enabled": false}` stops new migrations fleet-wide (absent: enabled).
   It can only hold devices back, so it is not signed. Every promotion publishes
   it as enabled when it is missing: the bucket is public by object name only,
   so a missing object answers 403, which the agent does not take as "absent".
-- Test hooks (the e2e in device-init): `IRONFLOCK_MIGRATE_FAULT=<step>` fails
+- Test hooks (the e2e in ironflock-cli): `IRONFLOCK_MIGRATE_FAULT=<step>` fails
   at a step, `IRONFLOCK_MIGRATE_PAUSE=<step>` stops after it; set them in a
   `reagent.service.d` drop-in. Steps: `prepare`, `block-docker`,
   `stop-legacy`, `stop-docker`, `rename-database`, `move-folder`,
@@ -407,7 +408,7 @@ gs://ironflock-downloads/device-agent/linux/arm64/<version>/device-agent        
 ...  (every os/arch in `targets`, plus the .sha256, .sig and .cdx.json sidecars for each)
 ```
 
-This exists for the **manual install surface only**. Linux devices resolve the version themselves (ironflock-init reads the manifest), but Windows has no such installer — the user downloads `device-agent.exe` from a link in the docs and the platform UI, so that link must not carry a version. Those links point at:
+This exists for the **manual install surface only**. Linux devices resolve the version themselves (`ironflock agent install` reads the manifest), but Windows has no such installer — the user downloads `device-agent.exe` from a link in the docs and the platform UI, so that link must not carry a version. Those links point at:
 
 ```text
 https://instance-registry.ironflock.com/dl/device-agent/windows/amd64/latest/device-agent.exe

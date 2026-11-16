@@ -107,7 +107,7 @@ const publicKeyPlaceholder = "TODO-AGENT-UPDATE-PUBLIC-KEY"
 // signature is missing or does not verify is installed anyway until then,
 // with a warning each time. It runs out by itself, so a forgotten drop-in
 // does not leave a device accepting unsigned binaries. Any other value, the
-// old "true" included, keeps verification on. device-init's e2e uses it for
+// old "true" included, keeps verification on. ironflock-cli's e2e uses it for
 // its deliberately broken, unsigned test builds.
 const AGENT_UPDATE_ALLOW_UNSIGNED = "AGENT_UPDATE_ALLOW_UNSIGNED"
 

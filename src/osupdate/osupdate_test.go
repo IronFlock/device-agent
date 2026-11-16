@@ -52,7 +52,7 @@ not a line
 
 func TestRunningIsIronFlockOS(t *testing.T) {
 	assert.True(t, Running{ID: "ironflockos", ImageID: "ironflockos-amd64-efi-base", ImageVersion: "1.0.0"}.IsIronFlockOS())
-	assert.False(t, Running{ID: "debian"}.IsIronFlockOS(), "Debian with device-init")
+	assert.False(t, Running{ID: "debian"}.IsIronFlockOS(), "Debian with the agent of ironflock agent install")
 	assert.False(t, Running{ID: "ironflockos", ImageID: "ironflockos-amd64-efi-base"}.IsIronFlockOS(), "no version")
 }
 

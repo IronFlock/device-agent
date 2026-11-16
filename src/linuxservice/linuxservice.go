@@ -1,7 +1,8 @@
 // Package linuxservice holds the systemd unit the agent runs under on Linux
 // and the repair script it starts with, and writes them. `device-agent service
-// install` (used by ironflock-init) and `device-agent migrate-layout` both go
-// through it, so a fresh install and a migrated device run the same unit.
+// install` (used by `ironflock agent install`) and `device-agent migrate-layout`
+// both go through it, so a fresh install and a migrated device run the same
+// unit.
 package linuxservice
 
 import (

@@ -523,8 +523,9 @@ type Stats struct {
 }
 
 // GetStats returns current system resource statistics. dockerAppsPath is
-// Docker's data-root as ironflock-init sets it up (<agentDir>/docker-apps).
-// This function is cross-platform (Linux, macOS, Windows).
+// Docker's data-root as `ironflock agent install` sets it up
+// (<agentDir>/docker-apps). This function is cross-platform (Linux, macOS,
+// Windows).
 func GetStats(dockerAppsPath string) Stats {
 	stats := Stats{}
 
