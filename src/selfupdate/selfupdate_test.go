@@ -528,3 +528,19 @@ func TestActivateAcceptsGoodSignatureWhenEnforced(t *testing.T) {
 	assert.Equal(t, m.versionedPath("1.1.0"), verified, "the downloaded binary is the one verified")
 	assert.Equal(t, "1.1.0", fileContent(t, m.activePath()))
 }
+
+// Pending is the marker for the agent's state file: nil without one, and
+// nil for one the state machine would discard too.
+func TestPendingIsTheMarker(t *testing.T) {
+	m := newTestManager(t)
+	assert.Nil(t, m.Pending())
+
+	require.NoError(t, m.writeMarker(&state{Phase: phaseRolledBack, NewVersion: "1.1.0", OldVersion: "1.0.0", Strikes: 2, Reason: "did not connect"}))
+	p := m.Pending()
+	require.NotNil(t, p)
+	assert.Equal(t, Pending{Phase: "rolledback", NewVersion: "1.1.0", OldVersion: "1.0.0", Reason: "did not connect", UpdatedAt: p.UpdatedAt}, *p)
+	assert.NotEmpty(t, p.UpdatedAt)
+
+	require.NoError(t, os.WriteFile(m.markerPath(), []byte(`{"phase":`), 0o644))
+	assert.Nil(t, m.Pending())
+}

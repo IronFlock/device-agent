@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"reagent/agentstate"
 	"reagent/config"
 	"reagent/lifecycle"
 	"reagent/release"
@@ -32,7 +33,8 @@ const exitCodeRestart = 75
 // readyFile and connectedFile tell `device-agent migrate-layout` that the
 // agent under the new unit finished its local start, and that it is
 // connected to IronFlock ("<pid> <version>"). /run/ironflock-device-agent is
-// the unit's RuntimeDirectory, recreated empty at every start.
+// the unit's RuntimeDirectory, recreated empty at every start. Neither is
+// cleared on a disconnect: local tools read state.json there (agentstate).
 const (
 	readyFile     = "/run/ironflock-device-agent/ready"
 	connectedFile = "/run/ironflock-device-agent/connected"
@@ -91,6 +93,15 @@ func runService(cliArgs *config.CommandLineArguments) {
 		<-ready
 		writeRunFile(readyFile)
 	})
+	// The state file for local tools (docs/AGENT-STATE.md). A write that
+	// fails is logged; the agent goes on without it.
+	stateFile := agentstate.New(agentstate.Config{
+		Version:   release.GetVersion(),
+		PID:       os.Getpid(),
+		Connected: lifecycle.Connected,
+		Update:    func() *agentstate.Update { return pendingUpdate(updateManager) },
+	})
+	safe.Go(func() { stateFile.Run(context.Background()) })
 
 	var agent *Agent
 	shutdown := func() {
@@ -124,6 +135,15 @@ func runService(cliArgs *config.CommandLineArguments) {
 			os.Exit(0)
 		}
 	}
+}
+
+// pendingUpdate is the update in progress for the state file.
+func pendingUpdate(m *selfupdate.Manager) *agentstate.Update {
+	p := m.Pending()
+	if p == nil {
+		return nil
+	}
+	return &agentstate.Update{Phase: p.Phase, NewVersion: p.NewVersion, OldVersion: p.OldVersion, Reason: p.Reason, UpdatedAt: p.UpdatedAt}
 }
 
 // writeRunFile records the running agent's PID and version. Failure only
