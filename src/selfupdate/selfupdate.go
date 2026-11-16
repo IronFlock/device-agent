@@ -741,6 +741,31 @@ func (m *Manager) InProbation(version string) bool {
 	return err == nil && marker != nil && marker.Phase == phaseProbation && marker.NewVersion == version
 }
 
+// Pending is the update in progress as the marker holds it, for the agent's
+// state file (agentstate).
+type Pending struct {
+	Phase      string
+	NewVersion string
+	OldVersion string
+	Reason     string
+	UpdatedAt  string
+}
+
+// Pending returns the update in progress (nil: no marker, or one that
+// cannot be read, which the state machine treats as absent too). It logs
+// nothing: the state file asks every few seconds.
+func (m *Manager) Pending() *Pending {
+	data, err := os.ReadFile(m.markerPath())
+	if err != nil {
+		return nil
+	}
+	var s state
+	if json.Unmarshal(data, &s) != nil {
+		return nil
+	}
+	return &Pending{Phase: string(s.Phase), NewVersion: s.NewVersion, OldVersion: s.OldVersion, Reason: s.Reason, UpdatedAt: s.UpdatedAt}
+}
+
 // RecordConnected stores when the device was last connected to IronFlock.
 func (m *Manager) RecordConnected(at time.Time) {
 	path := filepath.Join(m.agentDir, lastConnectedName)
