@@ -861,7 +861,7 @@ func buildDefaultEnvironmentVariables(config *config.Config, payload common.Tran
 	// on a proxied site has no outbound route at all, and every app author has
 	// to rediscover the site's proxy and wire it up per app. These are
 	// defaults an app can override — see proxyEnvironmentVariables.
-	environmentVariables = append(environmentVariables, proxyEnvironmentVariables(config, lanIP)...)
+	environmentVariables = append(environmentVariables, proxyEnvironmentVariables(config, lanIP, composeServiceNames(payload.DockerCompose)...)...)
 
 	// Per-app WAMP identity: lets the platform authorize THIS app rather than
 	// only its device, which is what makes the app-data-access consent switch

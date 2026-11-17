@@ -126,6 +126,12 @@ func runAgent(cliArgs *config.CommandLineArguments) (*Agent, error) {
 
 	logging.SetupLogger(cliArgs)
 
+	// The Windows service's proxy, from its store, before anything below
+	// uses the network (docs/WINDOWS-PROXY.md). nil elsewhere.
+	if startServiceProxy != nil {
+		startServiceProxy()
+	}
+
 	// Authenticode (Windows): check the agent's own signature once, in the
 	// background, and log the result; it never stops the agent.
 	safe.Go(codesign.ReportSelf)
@@ -203,6 +209,9 @@ func newProfilingServer(port uint) *http.Server {
 		IdleTimeout:       2 * time.Minute,
 	}
 }
+
+// startServiceProxy is set by the Windows service before it runs the agent.
+var startServiceProxy func()
 
 func checkForUpdateAtStart(cfg *config.Config) {
 	updates := system.New(cfg, nil)

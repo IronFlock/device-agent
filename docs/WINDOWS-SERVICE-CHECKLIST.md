@@ -99,7 +99,8 @@ start` from `Reagent\reagent.exe` in an elevated prompt.
     after the next agent restart; the Postgres app still has its data; the
     compose app runs from the new folder (`docker inspect` shows
     `DeviceAgent` bind sources); a WSL-engine `DOCKER_HOST` or a proxy from
-    the `reagent` service's Environment is on the new service.
+    the `reagent` service's Environment is on the new service (the proxy
+    moves from there into `DeviceAgent\proxy.env` at a later start, see 31b).
 18. Rollback: set `IRONFLOCK_MIGRATE_FAULT=health` in the `reagent` service's
     `Environment` (regedit, then `service stop` / `service start`) → the
     journal says `failed_at`, `reagent` runs and reconnects from `Reagent\`
@@ -160,7 +161,25 @@ headless runner, no real console host), so it must be exercised here.
 
 31. Proxy machine: install with `-proxy http://host:port` → OTA download and
     the wss connection both work under LocalSystem; machine-store corporate
-    CA is accepted (Go uses the Windows system store).
+    CA is accepted (Go uses the Windows system store). The proxy is in
+    `<agentDir>\proxy.env` only (docs/WINDOWS-PROXY.md): `icacls` shows SYSTEM
+    and Administrators alone, no `(I)`; the service key's `Environment` holds
+    no `*_PROXY`; `Parameters\ProxyConfigured` is 1; the agent log has
+    `proxy: the agent uses a proxy` with `from=store` and the password left
+    out; a standard user cannot read the file.
+31a. `device-agent.exe service configure -https-proxy http://user@host:port
+    -proxy-password-file -` (password on stdin) → `proxy.changed=true`,
+    `service.restarted=true`, the log shows the new proxy; `service
+    configure -remove-proxy` deletes `proxy.env` and the log says `no proxy
+    configured`; `service proxy` prints the settings without the password;
+    `service capabilities` lists `service-configure`.
+31b. Move from an agent up to 1.6.19: install 1.6.19 with `-proxy` and a
+    password (the proxy lands in the service's `Environment` and in a
+    `proxy.env` with inherited ACL), then let it update itself → after the
+    new version's probation the `Environment` keeps only its other values
+    (a WSL engine's `DOCKER_HOST`), `proxy.env` has its own ACL, the device
+    stays online through the proxy. With the update rolled back during
+    probation, 1.6.19 still finds its proxy in the `Environment`.
 
 ## Tunnels (frp) on Windows
 

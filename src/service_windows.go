@@ -10,6 +10,7 @@ import (
 	"reagent/config"
 	"reagent/lifecycle"
 	"reagent/migrate/winmigrate"
+	"reagent/migratestate"
 	"reagent/release"
 	"reagent/safe"
 	"reagent/selfupdate"
@@ -144,6 +145,10 @@ func (s *agentService) Execute(args []string, requests <-chan svc.ChangeRequest,
 
 	restartRequests := lifecycle.Subscribe()
 
+	// runAgent applies the proxy store once its log is set up, before it
+	// uses the network.
+	startServiceProxy = func() { s.startProxy(ownName, updateManager) }
+
 	agentChan := make(chan *Agent, 1)
 	errChan := make(chan error, 1)
 	safe.Go(func() {
@@ -250,4 +255,42 @@ func (s *agentService) Execute(args []string, requests <-chan svc.ChangeRequest,
 			}
 		}
 	}
+}
+
+// startProxy applies the agent's proxy store at the start of the service
+// (applyProxyAtStart) and, when the service's registry environment still
+// holds an older agent's proxy, takes it out there once this version is past
+// its update probation: until then a rollback to the version before, which
+// reads only the registry, must find it (docs/WINDOWS-PROXY.md). Nothing
+// waits on it, and nothing in it stops the agent.
+func (s *agentService) startProxy(ownName string, updates *selfupdate.Manager) {
+	name := ownName
+	if name == "" {
+		name = serviceName
+	}
+	host := winProxyHost{agentDir: s.cliArgs.AgentDir, service: name}
+	start := applyProxyAtStart(host, func(user string) string {
+		return effectiveNoProxy(gatherNoProxyInputs(user, s.cliArgs.ConfigFileLocation))
+	})
+	if !start.InServiceEnv {
+		return
+	}
+	if ownName != winservice.ServiceName {
+		log.Info().Msgf("proxy: the service's registry environment keeps its proxy while the agent runs as %q (the layout migration moves it)", name)
+		return
+	}
+	version := release.GetVersion()
+	safe.Go(func() {
+		if updates.InProbation(version) {
+			log.Info().Msg("proxy: the proxy stays in the service's registry environment until this version passed its update probation")
+		}
+		for updates.InProbation(version) {
+			time.Sleep(30 * time.Second)
+		}
+		if migratestate.InProgress() {
+			log.Info().Msg("proxy: the layout migration is under way; the proxy stays in the service's registry environment until a later start")
+			return
+		}
+		removeProxyFromServiceEnvironment(host, 3, 10*time.Second, time.Sleep)
+	})
 }

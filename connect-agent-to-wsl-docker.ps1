@@ -23,9 +23,9 @@
 # Safe to re-run: existing certificates are kept, and Docker and the agent are only
 # restarted when their configuration actually changed.
 #
-# Re-run it after every 'device-agent.exe service install': the install recreates the
-# service and, with a proxy, overwrites its environment. A device installed before agent
-# 1.4.0 keeps its environment when the agent moves it to the new service name.
+# Re-run it after every 'device-agent.exe service install': the 'service uninstall' before it
+# removes the service with its environment. A device installed before agent 1.4.0 keeps its
+# environment when the agent moves it to the new service name.
 #
 # Apps need agent 1.2.11 or newer on this engine: older agents pass Windows paths
 # (C:\ProgramData\IronFlock\...) as the bind-mount sources of every app, which a Linux
@@ -334,7 +334,8 @@ $wanted = [ordered]@{
     # services keep the PATH they had at boot; this hands the agent the one with docker.exe now
     PATH              = [Environment]::GetEnvironmentVariable('Path', 'Machine')
 }
-# keep everything else, e.g. the proxy variables 'device-agent.exe service install' wrote
+# keep everything else; an agent up to 1.6.19 kept its proxy here, which a later agent moves
+# into proxy.env in its folder by itself
 $kept    = @($ServiceEnv | Where-Object { $wanted.Keys -notcontains ($_ -split '=', 2)[0] })
 $updated = @($kept) + @($wanted.Keys | ForEach-Object { "$_=$($wanted[$_])" })
 $envChanged = -not (($ServiceEnv -join "`n") -ceq ($updated -join "`n"))
