@@ -328,15 +328,6 @@ func TestRenderProxyEnvNamesDerivedHosts(t *testing.T) {
 	assert.Contains(t, rendered, "NO_PROXY=localhost,127.0.0.1,tls-sf015.corp.trumpf.com")
 }
 
-func writeTestFlock(t *testing.T, dir string, cfg config.ReswarmConfig) string {
-	t.Helper()
-	raw, err := json.Marshal(cfg)
-	require.NoError(t, err)
-	path := filepath.Join(dir, "device.flock")
-	require.NoError(t, os.WriteFile(path, raw, 0600))
-	return path
-}
-
 func TestResolveProxyConfigSeedsFromFlags(t *testing.T) {
 	dir := t.TempDir()
 	envPath := filepath.Join(dir, proxyEnvFileName)

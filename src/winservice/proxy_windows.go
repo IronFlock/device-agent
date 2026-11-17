@@ -108,7 +108,7 @@ func FileProtected(path string) (bool, error) {
 		if ace.Header.AceType != windows.ACCESS_ALLOWED_ACE_TYPE {
 			return false, nil
 		}
-		sid := (*windows.SID)(unsafe.Pointer(&ace.SidStart))
+		sid := (*windows.SID)(unsafe.Pointer(&ace.SidStart)) //nolint:gosec // G103: the SID follows the ACE header (Win32 ACE layout)
 		switch {
 		case sid.IsWellKnown(windows.WinLocalSystemSid):
 			system |= ace.Mask

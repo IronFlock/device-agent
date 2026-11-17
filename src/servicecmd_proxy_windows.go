@@ -7,17 +7,21 @@ package main
 // proxy` and `service capabilities`. The decisions are in serviceproxy.go.
 
 import (
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
 	"io"
+	"net"
 	"os"
 	"path/filepath"
+	"reagent/config"
 	"reagent/migratestate"
 	"reagent/winservice"
 	"time"
 	"unsafe"
 
+	"github.com/rs/zerolog/log"
 	"golang.org/x/sys/windows"
 	"golang.org/x/sys/windows/svc"
 	"golang.org/x/sys/windows/svc/mgr"
@@ -267,7 +271,7 @@ func serviceConfigure(args []string, stdin io.Reader, out, errOut io.Writer) err
 	if restart {
 		inside, err := insideService(status.ProcessId)
 		if err != nil {
-			fmt.Fprintf(errOut, "warning: could not tell whether this runs inside the agent: %v\n", err)
+			_, _ = fmt.Fprintf(errOut, "warning: could not tell whether this runs inside the agent: %v\n", err)
 		}
 		if inside {
 			return preconditionf("this runs inside the agent (the device terminal): restarting the service would end this command before it starts the service again; nothing changed. Run it with -no-restart and restart the agent from IronFlock, or run it in a terminal of this machine")
@@ -294,24 +298,24 @@ func serviceConfigure(args []string, stdin io.Reader, out, errOut io.Writer) err
 			mirrored := to
 			mirrored.NoProxy = effective
 			if err := h.SetServiceEnvironment(winservice.WithProxyVariables(env, mirrored)); err != nil {
-				fmt.Fprintf(errOut, "warning: could not update the proxy in the environment of service %s, which the agent moves to %s: %v\n", name, winservice.ProxyEnvName, err)
+				_, _ = fmt.Fprintf(errOut, "warning: could not update the proxy in the environment of service %s, which the agent moves to %s: %v\n", name, winservice.ProxyEnvName, err)
 			}
 		}
 	}
 	if err := h.SetProxyConfigured(to.Configured()); err != nil {
-		fmt.Fprintf(errOut, "warning: could not record whether a proxy is configured: %v\n", err)
+		_, _ = fmt.Fprintf(errOut, "warning: could not record whether a proxy is configured: %v\n", err)
 	}
 
 	var restartErr error
 	restarted := false
 	if restart {
-		fmt.Fprintf(errOut, "Restarting service %s for the new proxy settings.\n", name)
+		_, _ = fmt.Fprintf(errOut, "Restarting service %s for the new proxy settings.\n", name)
 		restartErr = restartService(service)
 		restarted = restartErr == nil
 	} else if changed && status.State != svc.Stopped {
-		fmt.Fprintf(errOut, "Not restarted (-no-restart): the settings apply at the next start of service %s.\n", name)
+		_, _ = fmt.Fprintf(errOut, "Not restarted (-no-restart): the settings apply at the next start of service %s.\n", name)
 	} else if changed {
-		fmt.Fprintf(errOut, "Service %s is stopped: the settings apply at its next start.\n", name)
+		_, _ = fmt.Fprintf(errOut, "Service %s is stopped: the settings apply at its next start.\n", name)
 	}
 	state := "unknown"
 	if status, err := service.Query(); err == nil {
@@ -412,8 +416,53 @@ func protectExistingStore(path string) {
 	}
 }
 
-func init() {
-	machineHostnames = windowsDNSHostname
+// gatherNoProxyInputs reads what the list (noproxy.go) is computed from on
+// this machine. Nothing here waits on the network; whatever fails is logged
+// and left out.
+func gatherNoProxyInputs(user string, flockPath string) noProxyInputs {
+	in := noProxyInputs{User: user}
+	if name, err := os.Hostname(); err == nil {
+		in.Hostnames = append(in.Hostnames, name)
+	} else {
+		log.Warn().Err(err).Msg("proxy: could not read the host name for NO_PROXY")
+	}
+	in.Hostnames = append(in.Hostnames, windowsDNSHostname()...)
+	interfaces, err := net.Interfaces()
+	if err != nil {
+		log.Warn().Err(err).Msg("proxy: could not list the network interfaces for NO_PROXY")
+	}
+	var found []netInterface
+	for _, iface := range interfaces {
+		addrs, err := iface.Addrs()
+		if err != nil {
+			continue
+		}
+		found = append(found, netInterface{Up: iface.Flags&net.FlagUp != 0, Loopback: iface.Flags&net.FlagLoopback != 0, Addrs: addrs})
+	}
+	in.Networks = interfaceNetworks(found)
+	if flockPath != "" {
+		flock, err := readFlockConfig(flockPath)
+		if err != nil {
+			log.Warn().Err(err).Msg("proxy: could not read the .flock for NO_PROXY")
+		} else {
+			in.Flock = flock
+		}
+	}
+	return in
+}
+
+// readFlockConfig loads and parses a device .flock from disk.
+func readFlockConfig(flockPath string) (*config.ReswarmConfig, error) {
+	raw, err := os.ReadFile(flockPath)
+	if err != nil {
+		return nil, err
+	}
+	var flockCfg config.ReswarmConfig
+	err = json.Unmarshal(raw, &flockCfg)
+	if err != nil {
+		return nil, fmt.Errorf("could not parse %s: %w", flockPath, err)
+	}
+	return &flockCfg, nil
 }
 
 // windowsDNSHostname is the machine's DNS name with its domain, when it has

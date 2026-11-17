@@ -14,11 +14,8 @@ import (
 	"encoding/json"
 	"net"
 	"net/url"
-	"os"
 	"reagent/config"
 	"strings"
-
-	"github.com/rs/zerolog/log"
 )
 
 // loopbackNoProxy is loopback as every list spells it.
@@ -251,44 +248,4 @@ func interfaceNetworks(interfaces []netInterface) []*net.IPNet {
 		}
 	}
 	return networks
-}
-
-// machineHostnames adds names of the machine beyond os.Hostname (Windows:
-// its DNS name with the domain); nil elsewhere.
-var machineHostnames func() []string
-
-// gatherNoProxyInputs reads what the list is computed from on this machine.
-// Nothing here waits on the network; whatever fails is logged and left out.
-func gatherNoProxyInputs(user string, flockPath string) noProxyInputs {
-	in := noProxyInputs{User: user}
-	if name, err := os.Hostname(); err == nil {
-		in.Hostnames = append(in.Hostnames, name)
-	} else {
-		log.Warn().Err(err).Msg("proxy: could not read the host name for NO_PROXY")
-	}
-	if machineHostnames != nil {
-		in.Hostnames = append(in.Hostnames, machineHostnames()...)
-	}
-	interfaces, err := net.Interfaces()
-	if err != nil {
-		log.Warn().Err(err).Msg("proxy: could not list the network interfaces for NO_PROXY")
-	}
-	var found []netInterface
-	for _, iface := range interfaces {
-		addrs, err := iface.Addrs()
-		if err != nil {
-			continue
-		}
-		found = append(found, netInterface{Up: iface.Flags&net.FlagUp != 0, Loopback: iface.Flags&net.FlagLoopback != 0, Addrs: addrs})
-	}
-	in.Networks = interfaceNetworks(found)
-	if flockPath != "" {
-		flock, err := readFlockConfig(flockPath)
-		if err != nil {
-			log.Warn().Err(err).Msg("proxy: could not read the .flock for NO_PROXY")
-		} else {
-			in.Flock = flock
-		}
-	}
-	return in
 }

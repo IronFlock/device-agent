@@ -192,20 +192,6 @@ func resolveProxyConfig(proxyEnvPath string, opts *serviceInstallOptions, passwo
 	return cfg, true, nil
 }
 
-// readFlockConfig loads and parses a device .flock from disk.
-func readFlockConfig(flockPath string) (*config.ReswarmConfig, error) {
-	raw, err := os.ReadFile(flockPath)
-	if err != nil {
-		return nil, err
-	}
-	var flockCfg config.ReswarmConfig
-	err = json.Unmarshal(raw, &flockCfg)
-	if err != nil {
-		return nil, fmt.Errorf("could not parse %s: %w", flockPath, err)
-	}
-	return &flockCfg, nil
-}
-
 // proxyBypassHost reduces a registry reference to the bare host name used in a
 // NO_PROXY entry. The port is dropped on purpose: an entry carrying one
 // exempts only that port, and the same appliance host is dialled on 443, 15001
