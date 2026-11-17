@@ -525,12 +525,13 @@ func NewAgent(generalConfig *config.Config) (agent *Agent) {
 		// daemon does.
 		generalConfig.StartupLogChannel <- "Docker daemon is not reachable yet, continuing startup; container features become available once Docker is up"
 		safe.Go(func() {
+			// WaitForDaemon logs how long the daemon has been away and when
+			// it is back; this loop adds no line of its own.
 			for {
 				err := container.WaitForDaemon(time.Second * 30)
 				if err == nil {
 					break
 				}
-				log.Info().Msg("still waiting for the Docker daemon...")
 			}
 
 			// compose support was probed (and latched negative) while the

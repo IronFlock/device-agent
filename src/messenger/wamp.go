@@ -662,7 +662,9 @@ func (s *WampSession) dial() (NexusClient, error) {
 			// watcher's Done() will fire and trigger another reconnect.
 			log.Debug().Err(regErr).Msg("connection-established Register failed (non-fatal)")
 		}
-		log.Debug().Msgf("Successfully established a connection (duration: %s)", time.Since(requestStart))
+		// At info, so that it is in the log at every level: ironflock-cli's
+		// tests count this line to see the agent connect. Keep the text.
+		log.Info().Msgf("Successfully established a connection (duration: %s)", time.Since(requestStart))
 		return c, nil
 	}
 }

@@ -46,5 +46,7 @@ func SetupLogger(cliArgs *config.CommandLineArguments) {
 		prettyArgs = fmt.Sprintf("%+v", *cliArgs)
 	}
 
-	log.Debug().Msgf("REAgent CLI Arguments: %s", prettyArgs)
+	// The first line of each start, at info so that it is in the log at
+	// every level: ironflock-cli's tests look for it. Keep the text.
+	log.Info().Msgf("REAgent CLI Arguments: %s", prettyArgs)
 }

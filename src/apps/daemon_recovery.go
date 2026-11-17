@@ -20,9 +20,8 @@ import (
 // them RUNNING until the next WAMP reconnect or agent restart.
 var (
 	// daemonProbeInterval/daemonProbeTimeout pace awaitDaemonReturn's pings.
-	// Deliberately NOT WaitForDaemon: that helper pings at 100ms and logs a
-	// debug line per failed attempt — over an hours-long outage (Docker
-	// Desktop stopped at user logout) that is ten log lines per second.
+	// Not WaitForDaemon: its pings have no timeout of their own, and a hung
+	// daemon must not hold the supervisor.
 	daemonProbeInterval = time.Second * 2
 	daemonProbeTimeout  = time.Second * 3
 	// spawnerRestartBackoff spaces consecutive spawner restarts so a daemon
