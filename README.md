@@ -100,6 +100,24 @@ Read more on `.flock` files and how they work here: https://ironflock.com/en/doc
 ./device-agent -config path/to/config.flock -prettyLogging
 ```
 
+### Log level
+
+The agent logs at `debug` unless it is started with `-debug=false`, then at
+`info`. This is the same on every system: neither the Linux unit nor the
+Windows service that `service install` writes passes the flag, so both log at
+`debug`. A remote read of the log (`QueryAgentLog`) shows `info` and worse
+unless the caller asks for less.
+
+Two lines are at `info` because tools find the agent's runs and connections
+by them (ironflock-cli's tests): `REAgent CLI Arguments: …`, the first line
+of each start, and `Successfully established a connection (duration: …)`,
+each time the agent has connected to the platform. Keep their text.
+
+While the Docker daemon is not reachable the agent pings it with a backoff
+up to one ping every 2 s and logs one warning when it goes away, one every
+5 minutes with how long it has been away, and one line at `info` when it is
+back.
+
 ### Linux layout and service
 
 Without `-agentDir`/`-dbFileName`/`-logFile` the agent picks its paths from

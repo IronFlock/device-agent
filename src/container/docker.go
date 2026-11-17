@@ -54,6 +54,7 @@ type Docker struct {
 	paths          *enginePaths
 	activeStreams  map[string]*DockerStream
 	streamMapMutex sync.Mutex
+	daemon         daemonWait
 }
 
 func NewDocker(config *config.Config) (*Docker, error) {
@@ -1198,31 +1199,19 @@ type Ping struct {
 	BuilderVersion string
 }
 
+// WaitForDaemon pings the daemon until it answers or retryTimeout (5 s by
+// default) has passed. The pings back off and the log says when the daemon
+// went away and came back, not each ping (see daemonWait).
 func (docker *Docker) WaitForDaemon(retryTimeoutParam ...time.Duration) error {
-	var retryTimeout time.Duration
-
-	if len(retryTimeoutParam) == 0 {
-		retryTimeout = time.Second * 5
-	} else {
+	retryTimeout := time.Second * 5
+	if len(retryTimeoutParam) > 0 {
 		retryTimeout = retryTimeoutParam[0]
 	}
 
-	timeoutTimer := time.Now()
-	for {
+	return docker.daemon.wait(func() error {
 		_, err := docker.Ping(context.Background())
-		if err != nil {
-			log.Debug().Msg("Ping to Docker Daemon failed, retrying...")
-			time.Sleep(time.Millisecond * 100)
-		} else {
-			break
-		}
-
-		if time.Since(timeoutTimer) > retryTimeout {
-			return errors.New("maxium retry timeout for docker daemon ping was exceeded")
-		}
-	}
-
-	return nil
+		return err
+	}, retryTimeout)
 }
 
 func (docker *Docker) Ping(ctx context.Context) (Ping, error) {
