@@ -267,8 +267,28 @@ What `service install` sets up:
   `device-agent.exe` from `device-agent-prev.exe` if an interrupted update swap
   left the ImagePath vacant — SCM recovery cannot fix a service that fails to
   _start_.
-- Optional `-proxy http://host:port` writes HTTP(S)_PROXY into the service
-  environment (a LocalSystem service only sees machine-wide env).
+- Proxy: `-proxy http://host:port` (both protocols), or `-http-proxy` and
+  `-https-proxy` separately (a user's password then comes from
+  `-proxy-password-file <file>|-`, never the command line), with
+  `-no-proxy` and `-force-proxy`. The settings go into
+  `<agentDir>\proxy.env`, which only SYSTEM and Administrators can read (its
+  own ACL, inheritance off), and which `service uninstall` keeps and a later
+  install takes over. The service's registry environment, which every user
+  can read, holds no proxy: the agent reads `proxy.env` at its start and sets
+  its own environment from it, before it uses the network. `NO_PROXY` there
+  holds your own entries; the agent adds what the device reaches directly at
+  every start (loopback, the machine's names, the networks of its
+  interfaces, the local hosts of its `.flock`). An agent from up
+  to 1.6.19 kept the proxy in the registry environment; the next agent moves
+  it into `proxy.env` by itself after its self-update (once it passed its
+  update probation). Change or remove the proxy without a reinstall:
+  `device-agent.exe service configure -http-proxy URL -https-proxy URL
+  -no-proxy HOSTS -proxy-password-file -` or `-remove-proxy` (restarts the
+  service; `-no-restart` leaves that to you); read it without the password:
+  `device-agent.exe service proxy`. The full contract, for the `ironflock`
+  CLI and other callers: [docs/WINDOWS-PROXY.md](docs/WINDOWS-PROXY.md).
+  Docker keeps its own proxy (Docker Desktop's settings; the WSL engine's
+  from `setup-docker-wsl.ps1`).
 
 Update flow (the same on Linux, see [Linux layout and service](#linux-layout-and-service)
 and `src/selfupdate`): download `device-agent-v<ver>.exe` (SHA-256 and signature
@@ -304,8 +324,8 @@ device to the current names in one journaled migration
   copy of itself in `.migrate\device-agent.exe`, the temporary service
   `ironflock-device-agent-migrate` (automatic start, restarted every 30 s: a
   power cut or a crash resumes the move from the journal) with the `reagent`
-  service's `Environment` (a WSL engine's `DOCKER_HOST`, a proxy), and the
-  journal last. The migrate service then runs the steps `prepare`,
+  service's `Environment` (a WSL engine's `DOCKER_HOST`, a proxy of an agent
+  up to 1.6.19), and the journal last. The migrate service then runs the steps `prepare`,
   `stop-legacy`, `stop-apps`, `rename-files`, `move-folder` (to `DeviceAgent`;
   a custom `-agentDir`, another volume or a Docker Desktop Hyper-V file-sharing
   list that does not cover it keep the folder in place: only the names change),

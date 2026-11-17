@@ -56,12 +56,22 @@ func removeTrustAnchors(agentDir string) {
 	}
 }
 
-const serviceUsage = "usage: device-agent.exe service <install|uninstall|start|stop|status>"
+const serviceUsage = "usage: device-agent.exe service <install|uninstall|start|stop|status|configure|proxy|capabilities>"
 
 func runServiceCommand(args []string) int {
 	if len(args) == 0 {
 		fmt.Fprintln(os.Stderr, serviceUsage)
 		return 2
+	}
+
+	// The proxy commands have exit codes of their own (docs/WINDOWS-PROXY.md).
+	switch args[0] {
+	case "configure":
+		return serviceConfigureCommand(args[1:])
+	case "proxy":
+		return serviceProxyCommand(args[1:])
+	case "capabilities":
+		return serviceCapabilitiesCommand(args[1:])
 	}
 
 	var err error
@@ -229,21 +239,25 @@ func serviceInstall(args []string) error {
 
 	// Proxy settings come from proxy.env when the device already has one, so a
 	// reinstall restores this site's configuration without the operator
-	// remembering any flags. Flags seed that file on a fresh device.
+	// remembering any flags. Flags seed that file on a fresh device. The file
+	// is the agent's store (docs/WINDOWS-PROXY.md): only SYSTEM and
+	// Administrators read it, and the service's registry environment, which
+	// every user reads, gets no proxy value; the agent reads the file at its
+	// start.
 	proxyEnvPath := filepath.Join(opts.AgentDir, proxyEnvFileName)
-	proxyCfg, seeded, err := resolveProxyConfig(proxyEnvPath, opts, installedConfig)
+	protectExistingStore(proxyEnvPath)
+	password, err := installProxyPassword(opts)
 	if err != nil {
 		return err
 	}
-	var env []string
-	if proxyCfg.configured() {
-		env = proxyCfg.environmentEntries()
+	proxyCfg, seeded, err := resolveProxyConfig(proxyEnvPath, opts, password, winservice.WriteProtectedFile)
+	if err != nil {
+		return err
 	}
-
 	// The same helper the layout migration registers the service with: open
 	// or create, then every setting (ImagePath, start type, recovery, the
 	// environment).
-	service, err := winservice.CreateOrUpdateService(m, serviceSpec(opts, env))
+	service, err := winservice.CreateOrUpdateService(m, serviceSpec(opts, nil))
 	if err != nil {
 		return fmt.Errorf("failed to create the service: %w", err)
 	}
@@ -253,13 +267,20 @@ func serviceInstall(args []string) error {
 	// failure is a warning: leaving a freshly registered device offline because a resilience
 	// nicety could not be configured is the worse outcome.
 
-	if proxyCfg.configured() {
+	if err := winservice.SetProxyConfigured(winservice.ServiceName, proxyCfg.Configured()); err != nil {
+		fmt.Fprintf(os.Stderr, "warning: could not record whether a proxy is configured: %v\n", err)
+	}
+	if proxyCfg.Configured() {
 		if seeded {
-			fmt.Printf("Proxy configured, and written to %s — edit that file to change it.\n", proxyEnvPath)
+			fmt.Printf("Proxy configured, and written to %s — change it with 'device-agent.exe service configure'.\n", proxyEnvPath)
 		} else {
 			fmt.Printf("Proxy configured from %s\n", proxyEnvPath)
 		}
-		fmt.Printf("Reached directly (NO_PROXY): %s\n", proxyCfg.NoProxy)
+		fmt.Printf("Proxy: HTTP %s, HTTPS %s\n", redactedProxyURL(proxyCfg.HTTP), redactedProxyURL(proxyCfg.HTTPS))
+		if proxyCfg.NoProxy != "" {
+			fmt.Printf("Your own entries (NO_PROXY in %s): %s\n", proxyEnvFileName, proxyCfg.NoProxy)
+		}
+		fmt.Printf("Reached directly (NO_PROXY of the agent, computed at its every start): %s\n", effectiveNoProxy(gatherNoProxyInputs(proxyCfg.NoProxy, installedConfig)))
 	}
 
 	err = eventlog.InstallAsEventCreate(winservice.ServiceName, eventlog.Error|eventlog.Warning|eventlog.Info)

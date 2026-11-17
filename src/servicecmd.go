@@ -123,139 +123,71 @@ func insecureRegistryEntries(cfg *config.ReswarmConfig) []string {
 	return entries
 }
 
-// proxyEnvFileName is the durable home of a device's proxy configuration.
+// proxyEnvFileName is the durable home of a device's proxy configuration, the
+// store of docs/WINDOWS-PROXY.md.
 //
 // It cannot live in the service's own registry key: `service install` refuses
 // to run while the service exists, so every reinstall goes through
-// `service uninstall`, which deletes the service key and the Environment value
-// with it. Uninstall deliberately keeps the agent directory, so a file here is
-// the only store that survives. This mirrors /opt/ironflock/.env on the
-// appliance: the installer seeds it, the operator owns it afterwards, and it is
-// what gets applied on every install.
+// `service uninstall`, which deletes the service key with it. Uninstall
+// deliberately keeps the agent directory, so a file here is the only store that
+// survives. The agent service reads it at its start (applyProxyAtStart), and
+// only SYSTEM and Administrators can read it: the service's registry
+// environment, where it went before, is readable by every user.
 //
-// Linux needs no equivalent — systemd applies drop-ins in lexical order, so an
-// operator's `systemctl edit reagent` override.conf already wins over the
-// installer's http-proxy.conf and is never rewritten.
-const proxyEnvFileName = "proxy.env"
+// Linux needs no equivalent — the ironflock CLI keeps the Linux agent's proxy
+// in /etc/ironflock/proxy.env.
+const proxyEnvFileName = winservice.ProxyEnvName
 
-// proxyConfig is the content of proxy.env.
-type proxyConfig struct {
-	HTTP    string
-	HTTPS   string
-	NoProxy string
-}
-
-// configured reports whether this device talks to the world through a proxy at
-// all. A device with none writes no service environment and behaves as before.
-func (c proxyConfig) configured() bool {
-	return c.HTTP != "" || c.HTTPS != ""
-}
-
-// environmentEntries renders the REG_MULTI_SZ body for the service key.
-func (c proxyConfig) environmentEntries() []string { //nolint:unused // used by the Windows service installer (servicecmd_windows.go)
-	return []string{
-		"HTTP_PROXY=" + c.HTTP,
-		"HTTPS_PROXY=" + c.HTTPS,
-		"NO_PROXY=" + c.NoProxy,
-	}
-}
-
-// parseProxyEnv reads a proxy.env. Unknown keys and comments are ignored, so an
-// operator can annotate the file without breaking it.
-func parseProxyEnv(data []byte) proxyConfig {
-	var cfg proxyConfig
-	for _, line := range strings.Split(string(data), "\n") {
-		line = strings.TrimSpace(line)
-		if line == "" || strings.HasPrefix(line, "#") {
-			continue
-		}
-		name, value, ok := strings.Cut(line, "=")
-		if !ok {
-			continue
-		}
-		value = strings.Trim(strings.TrimSpace(value), `"`)
-		switch strings.ToUpper(strings.TrimSpace(name)) {
-		case "HTTP_PROXY":
-			cfg.HTTP = value
-		case "HTTPS_PROXY":
-			cfg.HTTPS = value
-		case "NO_PROXY":
-			cfg.NoProxy = value
-		}
-	}
-	return cfg
-}
-
-// renderProxyEnv writes the seed file. The derived bypass entries are written
-// out literally rather than recomputed at apply time, because that is what lets
-// an operator DELETE one: a site whose appliance is reachable only through the
-// proxy removes it from NO_PROXY and nothing puts it back.
-func renderProxyEnv(cfg proxyConfig) string {
-	var b strings.Builder
-	b.WriteString("# IronFlock agent proxy configuration.\n")
-	b.WriteString("#\n")
-	b.WriteString("# This file is the durable source for the device agent service's proxy settings.\n")
-	b.WriteString("# `device-agent.exe service install` seeds it once and applies it to the Windows\n")
-	b.WriteString("# service environment; `service uninstall` leaves it in place, so edits\n")
-	b.WriteString("# survive a reinstall. To change the proxy, edit this file and re-run\n")
-	b.WriteString("# `device-agent.exe service install`.\n")
-	b.WriteString("#\n")
-	b.WriteString("# NO_PROXY matches the host NAME a client dials, never the address that name\n")
-	b.WriteString("# resolves to, so an appliance reached by name has to be listed here. A bare\n")
-	b.WriteString("# domain covers the domain and all of its subdomains.\n")
-	b.WriteString("#\n")
-	b.WriteString("# Remove an entry if this site reaches the appliance THROUGH the proxy rather\n")
-	b.WriteString("# than directly — both deployments exist and the installer cannot tell them\n")
-	b.WriteString("# apart.\n")
-	b.WriteString("#\n")
-	b.WriteString("# This does NOT configure Docker. Image pulls are made by the Docker daemon,\n")
-	b.WriteString("# which reads its own settings (Docker Desktop -> Settings -> Resources ->\n")
-	b.WriteString("# Proxies). A proxy fixed here does not fix `docker pull`.\n")
-	fmt.Fprintf(&b, "\nHTTP_PROXY=%s\n", cfg.HTTP)
-	fmt.Fprintf(&b, "HTTPS_PROXY=%s\n", cfg.HTTPS)
-	fmt.Fprintf(&b, "NO_PROXY=%s\n", cfg.NoProxy)
-	return b.String()
+// proxyFlagsGiven reports whether any proxy URL flag of `service install` is
+// set.
+func (opts *serviceInstallOptions) proxyFlagsGiven() bool {
+	return opts.Proxy != "" || opts.HTTPProxy != "" || opts.HTTPSProxy != ""
 }
 
 // resolveProxyConfig decides what proxy settings this install applies, and
-// reports whether it seeded the file.
+// reports whether it seeded the store. write puts the store in place
+// (atomically, with its ACL, on Windows); password is the content of
+// -proxy-password-file, when given.
 //
 // An existing proxy.env WINS over the flags. That is the point: a reinstall
 // must restore the site's configuration without the operator remembering which
 // flags the last one used, and a site that edited the bypass list must not have
 // that edit silently undone. -force-proxy is the explicit way to replace it.
-func resolveProxyConfig(proxyEnvPath string, opts *serviceInstallOptions, flockPath string) (proxyConfig, bool, error) {
+func resolveProxyConfig(proxyEnvPath string, opts *serviceInstallOptions, password string, write func(path string, data []byte) error) (winservice.ProxySettings, bool, error) {
 	existing, err := os.ReadFile(proxyEnvPath)
 	switch {
 	case err == nil && !opts.ForceProxy:
-		cfg := parseProxyEnv(existing)
-		if opts.Proxy != "" && opts.Proxy != cfg.HTTP && opts.Proxy != cfg.HTTPS {
-			fmt.Fprintf(os.Stderr, "note: -proxy differs from %s, which wins — pass -force-proxy to replace it\n", proxyEnvPath)
+		cfg := winservice.ParseProxyEnv(existing)
+		if opts.proxyFlagsGiven() {
+			fmt.Fprintf(os.Stderr, "note: %s exists and wins over the proxy flags — pass -force-proxy to replace it, or change it with 'device-agent.exe service configure'\n", proxyEnvPath)
 		}
 		return cfg, false, nil
 	case err != nil && !os.IsNotExist(err):
-		return proxyConfig{}, false, fmt.Errorf("could not read %s: %w", proxyEnvPath, err)
+		return winservice.ProxySettings{}, false, fmt.Errorf("could not read %s: %w", proxyEnvPath, err)
 	}
 
-	if opts.Proxy == "" {
-		return proxyConfig{}, false, nil
+	if !opts.proxyFlagsGiven() {
+		return winservice.ProxySettings{}, false, nil
 	}
 
-	flockCfg, err := readFlockConfig(flockPath)
-	if err != nil {
-		return proxyConfig{}, false, fmt.Errorf("could not read the .flock config to build the proxy bypass list: %w", err)
-	}
-
-	cfg := proxyConfig{
+	// NO_PROXY holds the operator's own entries only: the agent adds what
+	// this device reaches directly at every start (effectiveNoProxy).
+	cfg := winservice.ProxySettings{
 		HTTP:    opts.Proxy,
 		HTTPS:   opts.Proxy,
-		NoProxy: strings.Join(serviceNoProxyEntries(flockCfg, opts.NoProxy), ","),
+		NoProxy: userNoProxy(opts.NoProxy),
 	}
-	// 0600 beside the .flock: a proxy URL can carry credentials, and the agent
-	// dir is already restricted to SYSTEM and Administrators.
-	err = os.WriteFile(proxyEnvPath, []byte(renderProxyEnv(cfg)), 0600)
+	if opts.HTTPProxy != "" {
+		cfg.HTTP = withPassword(opts.HTTPProxy, password)
+	}
+	if opts.HTTPSProxy != "" {
+		cfg.HTTPS = withPassword(opts.HTTPSProxy, password)
+	}
+	// Beside the .flock: a proxy URL can carry credentials; only SYSTEM and
+	// Administrators read the store.
+	err = write(proxyEnvPath, []byte(winservice.RenderProxyEnv(cfg)))
 	if err != nil {
-		return proxyConfig{}, false, fmt.Errorf("could not write %s: %w", proxyEnvPath, err)
+		return winservice.ProxySettings{}, false, fmt.Errorf("could not write %s: %w", proxyEnvPath, err)
 	}
 	return cfg, true, nil
 }
@@ -287,57 +219,6 @@ func proxyBypassHost(entry string) string {
 		return host
 	}
 	return entry
-}
-
-// serviceNoProxyEntries derives the bypass list written into the agent
-// service's NO_PROXY, from the device's own .flock plus whatever -no-proxy
-// added.
-//
-// This exists because NO_PROXY matches on the host name a client *dials*,
-// never on the address that name resolves to. An appliance reached by name is
-// therefore not covered by an entry naming its IP, so the agent sends its
-// platform connection out through the corporate proxy — and most proxies
-// refuse to route back into the internal network, leaving the device offline.
-//
-// Go reads a bare domain as covering the domain and all of its subdomains
-// ("foo.com" also matches "ws.foo.com"), which is all the agent itself needs;
-// the leading-dot form is emitted alongside it for the tools that only honour
-// that spelling, matching what app containers already receive.
-//
-// Cloud devices get nothing beyond the loopback defaults and the operator's
-// own entries: their endpoints are public and DO need the proxy.
-func serviceNoProxyEntries(cfg *config.ReswarmConfig, extra string) []string {
-	entries := make([]string, 0, 8)
-	seen := make(map[string]bool)
-	add := func(entry string) {
-		entry = strings.ToLower(strings.TrimSpace(entry))
-		if entry == "" || seen[entry] {
-			return
-		}
-		seen[entry] = true
-		entries = append(entries, entry)
-	}
-
-	add("localhost")
-	add("127.0.0.1")
-
-	if cfg != nil {
-		if domain := strings.TrimSpace(cfg.ApplianceDomain); domain != "" {
-			add(domain)
-			add("." + domain)
-		}
-		// A plain-HTTP registry is a LAN registry by construction, so the host
-		// serving it is never reached through the corporate proxy.
-		for _, registry := range insecureRegistryEntries(cfg) {
-			add(proxyBypassHost(registry))
-		}
-	}
-
-	for _, entry := range strings.Split(extra, ",") {
-		add(entry)
-	}
-
-	return entries
 }
 
 // mergeInsecureRegistries returns daemonJSON with entries merged into its
@@ -382,14 +263,18 @@ func mergeInsecureRegistries(daemonJSON []byte, entries []string) (merged []byte
 }
 
 type serviceInstallOptions struct {
-	ConfigPath  string
-	AgentDir    string
-	AppsDir     string
-	Proxy       string
-	NoProxy     string
-	ForceProxy  bool
-	StartNow    bool
-	AgentDirSet bool
+	ConfigPath string
+	AgentDir   string
+	AppsDir    string
+	Proxy      string
+	HTTPProxy  string
+	HTTPSProxy string
+	NoProxy    string
+	ForceProxy bool
+	// PasswordFile is -proxy-password-file ("-": standard input).
+	PasswordFile string
+	StartNow     bool
+	AgentDirSet  bool
 }
 
 // parseServiceInstallFlags parses `device-agent.exe service install` flags.
@@ -401,12 +286,15 @@ func parseServiceInstallFlags(args []string, programData string, output io.Write
 	configPath := flags.String("config", "", "path to the device's .flock configuration file (required)")
 	agentDir := flags.String("agentDir", "", "agent directory (default: %ProgramData%\\IronFlock\\"+winservice.Folder+")")
 	appsDir := flags.String("appsDir", "", "apps directory (default: <agentDir>\\apps)")
-	proxy := flags.String("proxy", "", "optional HTTP(S) proxy URL, written to the service environment")
+	proxy := flags.String("proxy", "", "optional proxy URL for HTTP and HTTPS, kept in "+proxyEnvFileName+" in the agent directory")
+	httpProxy := flags.String("http-proxy", "", "optional HTTP proxy, such as http://proxy:3128, or http://user@proxy:3128 with the password in -proxy-password-file (not with -proxy)")
+	httpsProxy := flags.String("https-proxy", "", "optional HTTPS proxy, such as http://proxy:3128, or http://user@proxy:3128 with the password in -proxy-password-file (not with -proxy)")
+	passwordFile := flags.String("proxy-password-file", "", "a file whose first line is the password of the user in -http-proxy/-https-proxy, or - for standard input")
 	// The counterpart to `ironflock agent install --no-proxy` on Linux. Without
 	// it the service environment's bypass list was fixed at localhost,127.0.0.1 and
 	// every hand-added exemption was wiped by the next `service install`.
-	noProxy := flags.String("no-proxy", "", "comma-separated hosts to reach directly, bypassing -proxy (merged with the device's own appliance and registry hosts)")
-	forceProxy := flags.Bool("force-proxy", false, "overwrite an existing "+proxyEnvFileName+" with the values from -proxy/-no-proxy")
+	noProxy := flags.String("no-proxy", "", "comma-separated hosts to reach directly, bypassing the proxy (merged with the device's own appliance and registry hosts)")
+	forceProxy := flags.Bool("force-proxy", false, "overwrite an existing "+proxyEnvFileName+" with the values from the proxy flags")
 	// Installing the agent and leaving it stopped is never what an operator wants — a device
 	// that was just registered should come online — so installing starts the service. `-start`
 	// stays accepted because every published doc and provisioning script passes it, but it is
@@ -423,20 +311,51 @@ func parseServiceInstallFlags(args []string, programData string, output io.Write
 		return nil, fmt.Errorf("-config <path-to-.flock> is required")
 	}
 
-	if *noProxy != "" && *proxy == "" {
-		return nil, fmt.Errorf("-no-proxy has no effect without -proxy")
+	anyProxy := *proxy != "" || *httpProxy != "" || *httpsProxy != ""
+	if *proxy != "" && (*httpProxy != "" || *httpsProxy != "") {
+		return nil, fmt.Errorf("-proxy sets both protocols; give it alone, or -http-proxy and -https-proxy")
 	}
-	if *forceProxy && *proxy == "" {
-		return nil, fmt.Errorf("-force-proxy has no effect without -proxy")
+	if *noProxy != "" && !anyProxy {
+		return nil, fmt.Errorf("-no-proxy has no effect without -proxy, -http-proxy or -https-proxy")
+	}
+	if *forceProxy && !anyProxy {
+		return nil, fmt.Errorf("-force-proxy has no effect without -proxy, -http-proxy or -https-proxy")
+	}
+	if *noProxy != "" {
+		if err := checkNoProxy(*noProxy); err != nil {
+			return nil, fmt.Errorf("-no-proxy %w", err)
+		}
+	}
+	users := 0
+	for _, s := range []struct{ name, value string }{{"http-proxy", *httpProxy}, {"https-proxy", *httpsProxy}} {
+		if s.value == "" {
+			continue
+		}
+		needs, err := checkProxyURLFlag(s.name, s.value)
+		if err != nil {
+			return nil, err
+		}
+		if needs {
+			users++
+			if *passwordFile == "" {
+				return nil, fmt.Errorf("-%s names a user: give the password with -proxy-password-file (a file, or - for standard input), or an empty password in the URL (http://user:@proxy:3128)", s.name)
+			}
+		}
+	}
+	if *passwordFile != "" && users == 0 {
+		return nil, fmt.Errorf("-proxy-password-file needs -http-proxy or -https-proxy with a user and no password part (http://user@proxy:3128)")
 	}
 
 	opts := serviceInstallOptions{
-		ConfigPath:  *configPath,
-		AgentDirSet: *agentDir != "",
-		Proxy:       *proxy,
-		NoProxy:     *noProxy,
-		ForceProxy:  *forceProxy,
-		StartNow:    !*noStart,
+		ConfigPath:   *configPath,
+		AgentDirSet:  *agentDir != "",
+		Proxy:        *proxy,
+		HTTPProxy:    *httpProxy,
+		HTTPSProxy:   *httpsProxy,
+		NoProxy:      *noProxy,
+		ForceProxy:   *forceProxy,
+		PasswordFile: *passwordFile,
+		StartNow:     !*noStart,
 	}
 
 	opts.AgentDir = *agentDir
@@ -472,7 +391,8 @@ func installCliArgs(opts *serviceInstallOptions) *config.CommandLineArguments {
 // serviceSpec is the service as `service install` registers it (ImagePath
 // with every path explicit, so the os.UserHomeDir-based defaults —
 // meaningless under LocalSystem — never apply at service runtime; recovery;
-// the proxy environment, nil to leave an existing value alone).
+// the environment, nil to leave an existing value alone; it never holds the
+// proxy, which the agent reads from its store).
 func serviceSpec(opts *serviceInstallOptions, env []string) winservice.Spec {
 	return winservice.AgentSpec(opts.AgentDir, opts.AppsDir, nil, env)
 }

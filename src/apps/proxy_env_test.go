@@ -292,3 +292,45 @@ func TestRedactProxyURL(t *testing.T) {
 		assert.Empty(t, redactProxyURL(""))
 	})
 }
+
+// The device's NO_PROXY may carry the IPv6 networks of its interfaces (the
+// Windows agent computes them); a container gets none of them, and no
+// bracketed address: Python's httpx 0.28 raises on both when it builds a
+// client. Plain ::1 and the IPv4 ranges stay.
+func TestContainerNoProxyFiltersIPv6RangesAndBrackets(t *testing.T) {
+	proxy := deviceProxy{HTTPS: "http://proxy.corp:3128", NoProxy: "localhost,127.0.0.1,::1,[::1],fd00:1::/64,2001:db8::/32,10.1.0.0/16,fe80::1,[fd00::5]"}
+
+	got := strings.Split(proxy.containerNoProxy(proxyTestConfig(""), ""), ",")
+
+	assert.Contains(t, got, "::1")
+	assert.Contains(t, got, "fe80::1", "a plain address is no range")
+	assert.Contains(t, got, "10.1.0.0/16")
+	assert.Contains(t, got, "192.168.0.0/16", "the private IPv4 ranges stay")
+	for _, entry := range got {
+		assert.False(t, strings.HasPrefix(entry, "["), entry)
+		if prefix, _, ok := strings.Cut(entry, "/"); ok {
+			assert.NotContains(t, prefix, ":", entry)
+		}
+	}
+}
+
+func TestContainerNoProxyNamesTheComposeServices(t *testing.T) {
+	proxy := deviceProxy{HTTPS: "http://proxy.corp:3128"}
+
+	got := strings.Split(proxy.containerNoProxy(proxyTestConfig(""), "", "db", "Web"), ",")
+
+	assert.Contains(t, got, "db")
+	assert.Contains(t, got, ".db")
+	assert.Contains(t, got, "web")
+	assert.Contains(t, got, ".web")
+
+	names := composeServiceNames(map[string]interface{}{"services": map[string]interface{}{"web": nil, "db": nil}})
+	assert.Equal(t, []string{"db", "web"}, names)
+	assert.Empty(t, composeServiceNames(nil))
+
+	clearProxyEnv(t)
+	t.Setenv("HTTPS_PROXY", "http://proxy.corp:3128")
+	envs := envMap(proxyEnvironmentVariables(proxyTestConfig(""), "", "db"))
+	assert.Contains(t, strings.Split(envs["NO_PROXY"], ","), ".db")
+	assert.Equal(t, envs["NO_PROXY"], envs["IRONFLOCK_NO_PROXY"])
+}

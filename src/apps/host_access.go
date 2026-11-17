@@ -8,6 +8,7 @@ import (
 	"reagent/config"
 	"reagent/trust"
 	"reagent/tunnel"
+	"sort"
 	"strings"
 
 	"github.com/rs/zerolog/log"
@@ -204,11 +205,16 @@ func addComposeCABundleMount(service map[string]interface{}, hostCADir string) {
 // container, and its siblings and the device itself sit on a docker bridge.
 //
 // The CIDR entries cover sibling containers and LAN peers addressed by IP.
-// They are honoured by the stacks that implement CIDR matching (Go, Node,
-// urllib3) and inertly ignored by the ones that only do hostname suffix
-// matching (curl, requests' own matcher). Sibling compose services addressed
-// by SERVICE NAME are single-label hostnames; most clients leave those alone,
-// but an app that needs certainty should extend NO_PROXY itself.
+// Only some stacks match an address against a range: Go, Python's requests
+// and curl (since 7.86) do; Node's built-in fetch (undici) and http module do
+// not, nor does Python's urllib, and those ignore the entries. Sibling compose
+// services addressed by SERVICE NAME are added by name (containerNoProxy).
+//
+// No IPv6 range and no bracketed address ([::1]) goes into a container's
+// list (containerNoProxyEntry): Python's httpx 0.28, which the Anthropic SDK
+// among others uses, raises an error on either when a client is built, which
+// would break the app. The three private IPv4 ranges stay: existing apps may
+// rely on them.
 var containerBypassEntries = []string{
 	"localhost",
 	"127.0.0.1",
@@ -260,12 +266,15 @@ func (p deviceProxy) enabled() bool {
 // containerNoProxy widens the device's NO_PROXY list to the container's
 // vantage point. The device's own entries come first: a site that exempted an
 // internal host from the proxy meant that for every process on the device.
-func (p deviceProxy) containerNoProxy(cfg *config.Config, lanIP string) string {
+//
+// services are the names of the app's own compose services, which its
+// containers reach each other by: each as name and .name.
+func (p deviceProxy) containerNoProxy(cfg *config.Config, lanIP string, services ...string) string {
 	var entries []string
 	seen := map[string]bool{}
 	add := func(entry string) {
 		entry = strings.TrimSpace(entry)
-		if entry == "" || seen[entry] {
+		if entry == "" || seen[entry] || !containerNoProxyEntry(entry) {
 			return
 		}
 		seen[entry] = true
@@ -293,7 +302,42 @@ func (p deviceProxy) containerNoProxy(cfg *config.Config, lanIP string) string {
 		add("." + cfg.ReswarmConfig.ApplianceDomain)
 	}
 
+	for _, service := range services {
+		service = strings.ToLower(strings.TrimSpace(service))
+		if service == "" {
+			continue
+		}
+		add(service)
+		add("." + service)
+	}
+
 	return strings.Join(entries, ",")
+}
+
+// containerNoProxyEntry reports whether entry may go into a container's
+// NO_PROXY: not a bracketed address ([::1]) and not an IPv6 range
+// (fd00::/8), which Python's httpx 0.28 refuses when it builds a client. A
+// plain IPv6 address (::1) stays.
+func containerNoProxyEntry(entry string) bool {
+	if strings.HasPrefix(entry, "[") || strings.HasSuffix(entry, "]") {
+		return false
+	}
+	if prefix, _, ok := strings.Cut(entry, "/"); ok && strings.Contains(prefix, ":") {
+		return false
+	}
+	return true
+}
+
+// composeServiceNames are the service names of a compose definition, sorted;
+// none for an app that is not a compose app.
+func composeServiceNames(dockerCompose map[string]interface{}) []string {
+	services, _ := dockerCompose["services"].(map[string]interface{})
+	names := make([]string, 0, len(services))
+	for name := range services {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names
 }
 
 // proxyEnvironmentVariables hands the device's corporate proxy to app
@@ -316,7 +360,7 @@ func (p deviceProxy) containerNoProxy(cfg *config.Config, lanIP string) string {
 // These are defaults: buildProdEnvironmentVariables appends app-supplied
 // variables after them, so an app that sets its own HTTPS_PROXY or NO_PROXY
 // still wins.
-func proxyEnvironmentVariables(cfg *config.Config, lanIP string) []string {
+func proxyEnvironmentVariables(cfg *config.Config, lanIP string, services ...string) []string {
 	proxy := resolveDeviceProxy()
 	if !proxy.enabled() {
 		return nil
@@ -334,7 +378,7 @@ func proxyEnvironmentVariables(cfg *config.Config, lanIP string) []string {
 		)
 	}
 
-	noProxy := proxy.containerNoProxy(cfg, lanIP)
+	noProxy := proxy.containerNoProxy(cfg, lanIP, services...)
 
 	add("HTTP_PROXY", proxy.HTTP)
 	add("HTTPS_PROXY", proxy.HTTPS)

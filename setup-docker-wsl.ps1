@@ -19,8 +19,10 @@
 #
 # Corporate certificates: Windows' trusted root certificates are imported into Ubuntu, so
 # corporate CAs (TLS-inspecting proxies, appliance registries) work for image pulls. The
-# agent's proxy (HTTP_PROXY/HTTPS_PROXY/NO_PROXY of the agent service) is set on dockerd.
-# Re-run the install after the Windows certificate store or the proxy changed.
+# agent's proxy (HTTP_PROXY/HTTPS_PROXY/NO_PROXY: proxy.env in the agent's folder, which only
+# administrators read, or the agent service's environment of an agent before the store) is set
+# on dockerd. Re-run the install after the Windows certificate store or the proxy changed.
+# The download run in a normal window cannot read proxy.env: it uses Windows' proxy settings.
 #
 # Refuses to install while Docker Desktop is installed: this would be a second engine next to it.
 # Then run connect-agent-to-wsl-docker.ps1 to connect the IronFlock agent.
@@ -91,7 +93,7 @@ $Files = @(
 function Step($t) { Write-Host "`n== $t" -ForegroundColor Cyan }
 function Show($lines) { $lines | ForEach-Object { Write-Host "   $_" } }
 
-# Proxy: $Proxy above, else what 'device-agent.exe service install' put on the agent service.
+# Proxy: $Proxy above, else the agent's (its proxy.env, or the service environment of an older agent).
 # Values may hold credentials - they are never printed.
 $proxyVars = [ordered]@{}
 if ($Proxy) {
@@ -111,6 +113,36 @@ if ($Proxy) {
         if ($value -and $name -in 'HTTP_PROXY', 'HTTPS_PROXY', 'NO_PROXY') { $proxyVars[$name.ToUpper()] = $value }
     }
     $proxySource = 'the agent service'
+    # Agents after 1.6.19 keep the proxy in proxy.env in their folder, which only SYSTEM and
+    # Administrators read (docs/WINDOWS-PROXY.md), and take it out of the service's environment.
+    if (-not $proxyVars.Count) {
+        $agentSvc = $null
+        foreach ($agentSvcName in 'ironflock-device-agent', 'reagent') {
+            $agentSvc = Get-CimInstance Win32_Service -Filter "Name='$agentSvcName'" -ErrorAction SilentlyContinue
+            if ($agentSvc) { break }
+        }
+        $agentDir = Join-Path $env:ProgramData 'IronFlock\DeviceAgent'
+        if ($agentSvc -and $agentSvc.PathName -match '(?:^|\s)-agentDir\s+(?:"([^"]+)"|(\S+))') {
+            $agentDir = if ($Matches[1]) { $Matches[1] } else { $Matches[2] }
+        }
+        $store = Join-Path $agentDir 'proxy.env'
+        try {
+            foreach ($line in [IO.File]::ReadAllLines($store)) {
+                $line = $line.Trim()
+                if (-not $line -or $line.StartsWith('#')) { continue }
+                $name, $value = $line -split '=', 2
+                $name  = $name.Trim().ToUpper()
+                $value = "$value".Trim()
+                if ($value.Length -ge 2 -and ($value[0] -eq '"' -or $value[0] -eq "'") -and $value[-1] -eq $value[0]) {
+                    $value = $value.Substring(1, $value.Length - 2)
+                }
+                if ($value -and $name -in 'HTTP_PROXY', 'HTTPS_PROXY', 'NO_PROXY') { $proxyVars[$name] = $value }
+            }
+            $proxySource = "the agent's $store"
+        } catch {
+            # missing, or not readable in a normal window: Windows' proxy settings below
+        }
+    }
 }
 function Get-ProxyUrl([string]$Value) {
     if ($Value -and $Value -notmatch '^\w+://') { return "http://$Value" }
