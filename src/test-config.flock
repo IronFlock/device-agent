@@ -29,5 +29,7 @@
  "device_endpoint_url": "ws://localhost:8080/ws-re-dev",
  "environment": "production",
  "docker_registry_url": "localhost:5001/",
- "docker_main_repository": "apps/"
+ "docker_main_repository": "apps/",
+ "studio_url": "http://host.docker.internal:8086",
+ "instance_key": 45
 }
