@@ -128,6 +128,11 @@ func (ex *External) DeviceReport() common.Dict {
 	if imageID, ok := osupdate.ImageIDReport(readRunning()); ok {
 		payload["os_image_id"] = imageID
 	}
+	// The Docker engine that runs the apps, as far as it is known: read in
+	// the background, never here.
+	if ex.Engine != nil {
+		ex.Engine.addTo(payload)
+	}
 	return payload
 }
 
@@ -142,9 +147,7 @@ func (ex *External) ReportOSRelease() {
 	if !ok {
 		return
 	}
-	payload := ex.DeviceReport()
-	payload["os_release"] = osRelease
-	if _, err := ex.Messenger.Call(ctx, topics.UpdateDeviceArchitecture, []interface{}{payload}, nil, nil, nil); err != nil {
+	if err := ex.sendBackgroundReport(osReleaseReportTimeout, common.Dict{"os_release": osRelease}); err != nil {
 		log.Error().Err(err).Msg("failed to report the OS release to the backend")
 	}
 }

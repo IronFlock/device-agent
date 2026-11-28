@@ -110,7 +110,7 @@ func TestComposeServicesWithMissingImagesHonoursPins(t *testing.T) {
 
 	t.Run("present: an image holds the pinned digest", func(t *testing.T) {
 		local := []containerpkg.ImageResult{{RepoDigests: []string{"registry.test/apps/x_1@" + pinDigestA}}}
-		missing, err := composeServicesWithMissingImages(compose, local)
+		missing, err := composeServicesWithMissingImages(nil, 0, "", compose, local)
 		require.NoError(t, err)
 		assert.Empty(t, missing)
 	})
@@ -120,14 +120,14 @@ func TestComposeServicesWithMissingImagesHonoursPins(t *testing.T) {
 			RepoTags:    []string{"registry.test/apps/x_1:1.0.0"},
 			RepoDigests: []string{"registry.test/apps/x_1@" + pinDigestB},
 		}}
-		missing, err := composeServicesWithMissingImages(compose, local)
+		missing, err := composeServicesWithMissingImages(nil, 0, "", compose, local)
 		require.NoError(t, err)
 		assert.Equal(t, []string{"app"}, missing)
 	})
 
 	t.Run("missing: the digest belongs to another repository", func(t *testing.T) {
 		local := []containerpkg.ImageResult{{RepoDigests: []string{"registry.test/apps/x_2@" + pinDigestA}}}
-		missing, err := composeServicesWithMissingImages(compose, local)
+		missing, err := composeServicesWithMissingImages(nil, 0, "", compose, local)
 		require.NoError(t, err)
 		assert.Equal(t, []string{"app"}, missing)
 	})

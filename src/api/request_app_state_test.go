@@ -630,3 +630,41 @@ func TestResponseToTransitionPayload_Privileged(t *testing.T) {
 		require.Error(t, err)
 	})
 }
+
+// The platform's names of the app's image; a value that is not a string is
+// left out and never refuses the request.
+func TestResponseToTransitionPayloadImageNames(t *testing.T) {
+	cfg := testConfig()
+
+	response := createBasicWAMPResponse(42, "my-app", "PROD", "RUNNING")
+	response.ArgumentsKw["present_image_name"] = "prod_amd64_42_my-app:1.0.0"
+	response.ArgumentsKw["new_image_name"] = "prod_42_my-app:2.0.0"
+	payload, err := responseToTransitionPayload(cfg, response)
+	require.NoError(t, err)
+	assert.Equal(t, "prod_amd64_42_my-app:1.0.0", payload.PresentImageName)
+	assert.Equal(t, "prod_42_my-app:2.0.0", payload.NewImageName)
+
+	response = createBasicWAMPResponse(42, "my-app", "PROD", "RUNNING")
+	response.ArgumentsKw["present_image_name"] = uint64(7)
+	response.ArgumentsKw["new_image_name"] = nil
+	payload, err = responseToTransitionPayload(cfg, response)
+	require.NoError(t, err)
+	assert.Empty(t, payload.PresentImageName)
+	assert.Empty(t, payload.NewImageName)
+
+	payload, err = responseToTransitionPayload(cfg, createBasicWAMPResponse(42, "my-app", "PROD", "RUNNING"))
+	require.NoError(t, err)
+	assert.Empty(t, payload.PresentImageName, "an older backend names none")
+	assert.Empty(t, payload.Architecture)
+
+	// the device's architecture as the platform stores it: what a build is for
+	response = createBasicWAMPResponse(42, "my-app", "DEV", "PUBLISHED")
+	response.ArgumentsKw["architecture"] = "armv7"
+	payload, err = responseToTransitionPayload(cfg, response)
+	require.NoError(t, err)
+	assert.Equal(t, "armv7", payload.Architecture)
+	response.ArgumentsKw["architecture"] = 7
+	payload, err = responseToTransitionPayload(cfg, response)
+	require.NoError(t, err)
+	assert.Empty(t, payload.Architecture)
+}

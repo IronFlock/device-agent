@@ -27,24 +27,20 @@ func (sm *StateMachine) recoverFailToPresentHandler(payload common.TransitionPay
 		return sm.buildApp(payload, app)
 	}
 
-	// Check if the image exists
-	var fullImageName string
-	if payload.Stage == common.DEV {
-		fullImageName = payload.RegistryImageName.Dev
-	} else if payload.Stage == common.PROD {
-		fullImageName = payload.RegistryImageName.Prod
-	}
+	// Check if the image exists: any tag under the agent's own name or a name
+	// the platform gave (prodImageRepositories).
+	withInstalled := sm.withInstalledImage(payload)
+	for _, fullImageName := range prodImageRepositories(sm.reswarmConfigFor(withInstalled), withInstalled) {
+		getImagesContext, cancel := context.WithTimeout(context.Background(), time.Second*30)
+		images, err := sm.Container.GetImages(getImagesContext, fullImageName)
+		cancel()
+		if err != nil {
+			return err
+		}
 
-	getImagesContext, cancel := context.WithTimeout(context.Background(), time.Second*30)
-	defer cancel()
-
-	images, err := sm.Container.GetImages(getImagesContext, fullImageName)
-	if err != nil {
-		return err
-	}
-
-	if len(images) != 0 {
-		return sm.setState(app, common.PRESENT)
+		if len(images) != 0 {
+			return sm.setState(app, common.PRESENT)
+		}
 	}
 
 	return sm.pullApp(payload, app)
@@ -64,7 +60,7 @@ func (sm *StateMachine) recoverFailedComposeToPresent(payload common.TransitionP
 	cancel()
 
 	if err == nil {
-		missing, missingErr := composeServicesWithMissingImages(payload.DockerCompose, images)
+		missing, missingErr := composeServicesWithMissingImages(sm.reswarmConfig(), payload.AppKey, payload.AppName, payload.DockerCompose, images)
 		if missingErr == nil && len(missing) == 0 {
 			dockerComposePath, setupErr := sm.SetupComposeFiles(payload, app, false)
 			if setupErr != nil {

@@ -44,3 +44,16 @@ request_update=excluded.request_update`
 
 const QueryDeleteAppStateByAppKeyAndStage = `DELETE FROM AppStates WHERE app_key = ? AND stage = ?`
 const QueryDeleteRequestedStateByAppKeyAndStage = `DELETE FROM RequestedAppStates WHERE app_key = ? AND stage = ?`
+
+// The image names of a requested state (present_image_name, new_image_name),
+// read and written on their own, after the row: where the columns are missing
+// (their single- script failed, e.g. on a full disk) the row is read and
+// written as before and the names are left out.
+const QuerySelectRequestedStateImageNames = `SELECT app_key, stage, present_image_name, new_image_name FROM RequestedAppStates`
+const QueryUpdateRequestedStateImageNames = `UPDATE RequestedAppStates SET present_image_name = ?, new_image_name = ? WHERE app_name = ? AND app_key = ? AND stage = ?`
+
+// The image the device really pulled or ran an app's version under
+// (installed_image, installed_image_version): written by the agent alone,
+// never by a sync. Read and written on their own as the names above.
+const QuerySelectRequestedStateInstalledImages = `SELECT app_key, stage, installed_image, installed_image_version FROM RequestedAppStates`
+const QueryUpdateRequestedStateInstalledImage = `UPDATE RequestedAppStates SET installed_image = ?, installed_image_version = ? WHERE app_key = ? AND stage = ?`

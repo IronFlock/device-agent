@@ -4,12 +4,9 @@ import (
 	"context"
 	"fmt"
 	"reagent/common"
-	"reagent/container"
 	"reagent/errdefs"
-	"time"
 
 	"github.com/pkg/errors"
-	"github.com/rs/zerolog/log"
 )
 
 func (sm *StateMachine) getUpdateTransition(payload common.TransitionPayload, app *common.App) TransitionFunc {
@@ -91,21 +88,10 @@ func (sm *StateMachine) updateLegacyApp(payload common.TransitionPayload, app *c
 		return err
 	}
 
-	fullImageNameWithVersion := fmt.Sprintf("%s:%s", payload.RegistryImageName.Prod, payload.NewestVersion)
-	pullOptions := container.PullOptions{
-		AuthConfig: sm.authConfigForImage(payload, fullImageNameWithVersion, payload.ContainerName.Prod),
-		PullID:     common.BuildDockerPullID(payload.AppKey, payload.AppName),
-	}
-
-	log.Debug().Msgf("PULLING IMAGE: %s", fullImageNameWithVersion)
-	reader, err := sm.Container.Pull(context.Background(), fullImageNameWithVersion, pullOptions)
-	if err != nil {
-		errorMessage := fmt.Sprintf("Error occured while trying to pull the image: %s", err.Error())
-		_ = sm.LogManager.Write(payload.ContainerName.Prod, errorMessage)
-		return err
-	}
-
-	streamErr := sm.LogManager.StreamBlocking(payload.ContainerName.Prod, common.PULL, reader)
+	// The new version's name can differ from the present one's: an app
+	// installed under a name with the architecture updates to a version under
+	// the name without, and back on a downgrade (pullProdImage).
+	fullImageNameWithVersion, streamErr := sm.pullProdImage(payload, payload.NewestVersion, nil)
 	if streamErr != nil {
 		if errdefs.IsDockerStreamCanceled(streamErr) {
 			pullMessage := "The update was canceled"
@@ -163,12 +149,9 @@ func (sm *StateMachine) updateLegacyApp(payload common.TransitionPayload, app *c
 	// image under this name, and tearDownComposeInstall already reclaimed its
 	// service images.
 	if payload.DockerCompose == nil {
-		removeImageByNameContext, cancel := context.WithTimeout(context.Background(), time.Second*30)
-		defer cancel()
-
-		log.Debug().Msgf("Removing Old Image %s:%s", payload.RegistryImageName.Prod, payload.PresentVersion)
-		_ = sm.Container.RemoveImageByName(removeImageByNameContext, payload.RegistryImageName.Prod, payload.PresentVersion, map[string]interface{}{"force": true})
+		sm.removeSupersededProdImage(payload, fullImageNameWithVersion)
 	}
+	sm.rememberInstalledImage(payload, payload.NewestVersion, fullImageNameWithVersion)
 
 	// The state validation will ensure it will reach it's requestedState again
 	return sm.persistPostUpdateRequestedState(payload, app)
@@ -192,6 +175,9 @@ func (sm *StateMachine) persistPostUpdateRequestedState(payload common.Transitio
 	payload.NewestVersion = app.Version
 	payload.PresentVersion = app.Version
 	payload.Version = app.Version
+	// The installed version's image name goes with it: the app starts with it,
+	// also offline, until the next sync names it again.
+	payload.PresentImageName = payload.NewImageName
 
 	// Promote the installed release's definition to the active one. This is the
 	// flow marker every later transition routes on (run/stop/remove, and the

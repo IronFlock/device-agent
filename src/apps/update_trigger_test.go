@@ -79,7 +79,7 @@ func updExpectPull(mc *mocks.Container, payload common.TransitionPayload, supers
 		Return(fwdDockerStream(), nil).
 		Once()
 	mc.EXPECT().
-		RemoveImageByName(mock.Anything, payload.RegistryImageName.Prod, supersededVersion, mock.Anything).
+		RemoveImage(mock.Anything, payload.RegistryImageName.Prod+":"+supersededVersion, map[string]interface{}{"force": false, "pruneChildren": true}).
 		Return(nil).
 		Once()
 

@@ -1,0 +1,1 @@
+ALTER TABLE RequestedAppStates ADD COLUMN installed_image_version TEXT

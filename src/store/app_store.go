@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"reagent/common"
 	"reagent/errdefs"
@@ -151,6 +152,19 @@ func (am *AppStore) UpdateLocalRequestedState(payload common.TransitionPayload) 
 	return am.database.UpsertRequestedStateChange(payload)
 }
 
+// SetInstalledImage records the reference the device really pulled or ran
+// version of the app under (TransitionPayload.InstalledImage). Best effort: a
+// database that cannot record it leaves the agent with the other names.
+func (am *AppStore) SetInstalledImage(appKey uint64, stage common.Stage, version string, ref string) error {
+	recorder, ok := am.database.(interface {
+		SetInstalledImage(appKey uint64, stage common.Stage, version string, ref string) error
+	})
+	if !ok {
+		return errors.New("the database records no installed image")
+	}
+	return recorder.SetInstalledImage(appKey, stage, version, ref)
+}
+
 func (am *AppStore) GetRegistryToken(callerID uint64) (string, error) {
 	ctx := context.Background()
 	args := []interface{}{common.Dict{"callerID": callerID}}
@@ -236,6 +250,19 @@ func (am *AppStore) UpdateRemoteAppState(ctx context.Context, app *common.App, s
 		"release_build":         app.ReleaseBuild,
 		"updateStatus":          app.UpdateStatus,
 	}}
+	// A release build's report names what it pushed, where that is known;
+	// a backend that does not read it ignores the key.
+	if stateToSet == common.PUBLISHED {
+		app.StateLock.Lock()
+		if len(app.PushedDigests) > 0 {
+			pushed := make(map[string]string, len(app.PushedDigests))
+			for ref, digest := range app.PushedDigests {
+				pushed[ref] = digest
+			}
+			payload[0].(common.Dict)["pushed_digests"] = pushed
+		}
+		app.StateLock.Unlock()
+	}
 
 	_, err := am.Messenger.Call(ctx, topics.SetActualAppOnDeviceState, payload, nil, nil, nil)
 	if err != nil {
@@ -302,6 +329,9 @@ func (am *AppStore) FetchRequestedAppStates() ([]common.TransitionPayload, error
 		payload.DeviceOwnerAccountKey = uint64(deviceSyncState.DeviceOwnerAccountKey)
 		payload.RequestUpdate = deviceSyncState.RequestUpdate
 		payload.PresentVersion = deviceSyncState.PresentVersion
+		payload.Architecture = deviceSyncState.Architecture
+		payload.PresentImageName = deviceSyncState.PresentImageName
+		payload.NewImageName = deviceSyncState.NewImageName
 		payload.DockerCompose = deviceSyncState.DockerCompose
 		payload.NewDockerCompose = deviceSyncState.NewDockerCompose
 		payload.Privileged = deviceSyncState.Privileged

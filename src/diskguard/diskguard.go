@@ -184,8 +184,9 @@ type Config struct {
 	AppImageRegistry string
 	// WantedAppImages returns every image reference (repo:tag) the device still
 	// needs: for each locally known app, its present and newest version in both
-	// stages. Anything else under AppImageRegistry is a superseded leftover. An
-	// error means the wanted set is unknown — no app image is then touched.
+	// stages, and the images of its Compose definitions. Anything else under
+	// AppImageRegistry is a superseded leftover. An error means the wanted set
+	// is unknown — no app image is then touched.
 	WantedAppImages func() (map[string]bool, error)
 	// OnRecover is called once when the device leaves EMERGENCY (every
 	// filesystem apps can fill back at its warn floor), to reinstate the

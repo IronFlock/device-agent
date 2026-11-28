@@ -132,11 +132,7 @@ func (ex *External) reportFirmware() (firmware.Inventory, error) {
 	if err != nil {
 		return firmware.Inventory{}, err
 	}
-	payload := ex.DeviceReport()
-	payload["firmware_inventory"] = fitFirmwareReport(firmwareReport(inventory))
-	callCtx, cancelCall := context.WithTimeout(context.Background(), firmwareReportCallTimeout)
-	defer cancelCall()
-	_, err = ex.Messenger.Call(callCtx, topics.UpdateDeviceArchitecture, []interface{}{payload}, nil, nil, nil)
+	err = ex.sendBackgroundReport(firmwareReportCallTimeout, common.Dict{"firmware_inventory": fitFirmwareReport(firmwareReport(inventory))})
 	return inventory, err
 }
 

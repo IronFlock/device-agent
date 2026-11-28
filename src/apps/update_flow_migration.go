@@ -158,10 +158,7 @@ func (sm *StateMachine) removeLegacyProdInstall(payload common.TransitionPayload
 		return err
 	}
 
-	removeImagesByNameContext, cancel := context.WithTimeout(context.Background(), time.Second*30)
-	defer cancel()
-
-	err = sm.Container.RemoveImagesByName(removeImagesByNameContext, payload.RegistryImageName.Prod, map[string]interface{}{"force": true})
+	err = sm.removeProdImageRepositories(payload, map[string]interface{}{"force": true})
 	if err != nil && !errdefs.IsImageNotFound(err) {
 		log.Warn().Err(err).Str("app", payload.AppName).Str("image", payload.RegistryImageName.Prod).Msg("Could not remove the superseded legacy image; leaving it for a later prune")
 	}

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"reagent/common"
+	"reagent/config"
 	"reagent/container"
 	"reagent/errdefs"
 	"reagent/logging"
@@ -253,8 +254,8 @@ func (so *StateObserver) addObserver(stage common.Stage, appKey uint64, appName 
 }
 
 // composeServicesWithMissingImages returns the (sorted) names of the compose
-// services whose image does not exist locally, matching loosely against the
-// RepoTags of the given image list. A service its release pins to a digest
+// services whose image does not exist locally, matching each reference
+// exactly against the RepoTags of the given image list. A service its release pins to a digest
 // (x-image-digest) is present only when an image holds that very digest
 // (pinnedImagePresent): a tag of the same name proves nothing about the
 // content. Services without an image field are
@@ -262,7 +263,14 @@ func (so *StateObserver) addObserver(stage common.Stage, appKey uint64, appName 
 // the install path (runProdComposeApp) uses the result both to decide whether
 // a real DOWNLOADING phase is needed and to pull only what is actually missing,
 // so the two stay consistent.
-func composeServicesWithMissingImages(dockerCompose map[string]interface{}, images []container.ImageResult) ([]string, error) {
+//
+// An image of the app's own is looked for also under the name the agent pulls
+// it by (resolveStoreImageRef, on this device's registry; reswarmConfig nil:
+// only as the release names it): where the release names another host for
+// the device's registry (an appliance's own agent reads it on localhost), the
+// image is on the device under that name only, and was otherwise judged
+// missing on every check.
+func composeServicesWithMissingImages(reswarmConfig *config.ReswarmConfig, appKey uint64, appName string, dockerCompose map[string]interface{}, images []container.ImageResult) ([]string, error) {
 	services, ok := (dockerCompose["services"]).(map[string]interface{})
 	if !ok {
 		return nil, errors.New("failed to infer services")
@@ -280,9 +288,23 @@ func composeServicesWithMissingImages(dockerCompose map[string]interface{}, imag
 		}
 
 		imageName := fmt.Sprint(service["image"])
+		imageNames := []string{imageName}
+		if reswarmConfig != nil {
+			registryBase := strings.TrimSuffix(strings.TrimSpace(reswarmConfig.DockerRegistryURL), "/")
+			if resolved := resolveStoreImageRef(reswarmConfig.DockerMainRepository, registryBase, appKey, appName, imageName); resolved != imageName {
+				imageNames = append(imageNames, resolved)
+			}
+		}
 
 		if digest, pinned := service[composeImageDigestField].(string); pinned {
-			if !pinnedImagePresent(imageName, digest, images) {
+			foundPinned := false
+			for _, name := range imageNames {
+				if pinnedImagePresent(name, digest, images) {
+					foundPinned = true
+					break
+				}
+			}
+			if !foundPinned {
 				missing = append(missing, serviceName)
 			}
 			continue
@@ -291,8 +313,15 @@ func composeServicesWithMissingImages(dockerCompose map[string]interface{}, imag
 		foundImage := false
 		for _, image := range images {
 			for _, repoTag := range image.RepoTags {
-				if strings.Contains(repoTag, imageName) {
-					foundImage = true
+				for _, name := range imageNames {
+					// exactly the reference, as Docker lists it: :latest
+					// where it names no tag (x:1.0 is not x:1.0.1)
+					if tagged := imageTag(name); tagged != "" && repoTag == tagged {
+						foundImage = true
+						break
+					}
+				}
+				if foundImage {
 					break
 				}
 			}
@@ -339,7 +368,11 @@ func (so *StateObserver) CorrectComposeAppState(requestedState common.Transition
 		currentAppState := app.CurrentState
 		app.StateLock.Unlock()
 
-		missingImageServices, err := composeServicesWithMissingImages(requestedState.DockerCompose, images)
+		var reswarmConfig *config.ReswarmConfig
+		if cfg := so.Container.GetConfig(); cfg != nil {
+			reswarmConfig = cfg.ReswarmConfig
+		}
+		missingImageServices, err := composeServicesWithMissingImages(reswarmConfig, requestedState.AppKey, requestedState.AppName, requestedState.DockerCompose, images)
 		if err != nil {
 			return err
 		}
@@ -480,21 +513,13 @@ func (so *StateObserver) CorrectAppStates(updateRemote bool) error {
 			// Since the error is a container not found error (which is expected), we set the err to nil again
 			err = nil
 
-			// we should check if the image exists, if it does not, we should set the state to 'REMOVED', else to 'STOPPED'
-			var fullImageName string
-			if rState.Stage == common.DEV {
-				fullImageName = rState.RegistryImageName.Dev
-			} else if rState.Stage == common.PROD {
-				fullImageName = rState.RegistryImageName.Prod
+			// we should check if the image exists, if it does not, we should set the state to 'REMOVED', else to 'STOPPED':
+			// a tag of the app's image under the agent's own name or a name the platform gave
+			var reswarmConfig *config.ReswarmConfig
+			if cfg := so.Container.GetConfig(); cfg != nil {
+				reswarmConfig = cfg.ReswarmConfig
 			}
-
-			foundImage := false
-			for _, image := range allImages {
-				if len(image.RepoTags) > 0 && strings.Contains(image.RepoTags[0], fullImageName) {
-					foundImage = true
-					break
-				}
-			}
+			foundImage := hasImageInRepositories(allImages, appImageRepositories(reswarmConfig, rState))
 
 			app.StateLock.Lock()
 			currentAppState := app.CurrentState

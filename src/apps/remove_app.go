@@ -245,10 +245,9 @@ func (sm *StateMachine) removeProdApp(payload common.TransitionPayload, app *com
 		}
 	}
 
-	removeImagesByNameContext, cancel := context.WithTimeout(context.Background(), time.Second*30)
-	defer cancel()
-
-	err = sm.Container.RemoveImagesByName(removeImagesByNameContext, payload.RegistryImageName.Prod, options)
+	// Every tag of the app's image: under the agent's own name and under the
+	// names the platform gave (prodImageRepositories).
+	err = sm.removeProdImageRepositories(payload, options)
 	if err != nil {
 		return err
 	}

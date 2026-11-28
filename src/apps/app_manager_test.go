@@ -2,7 +2,9 @@ package apps
 
 import (
 	"errors"
+	"fmt"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -11,8 +13,10 @@ import (
 
 	"reagent/common"
 	"reagent/config"
+	containerpkg "reagent/container"
 	"reagent/logging"
 	"reagent/persistence"
+	"reagent/release"
 	"reagent/store"
 	"reagent/testutil/builders"
 	"reagent/testutil/fakes"
@@ -439,7 +443,9 @@ func TestCleanupOrphanedAppsFromDatabase(t *testing.T) {
 	})
 
 	t.Run("removes a stale dev app with a live container and its image", func(t *testing.T) {
-		am, mc, _, st, _, _ := amHarness(t)
+		am, mc, _, st, _, cfg := amHarness(t)
+		cfg.ReswarmConfig.DockerRegistryURL = "registry.test/"
+		cfg.ReswarmConfig.DockerMainRepository = "apps/"
 
 		amSeed(t, st, 8, "stale-dev", common.RUNNING, common.DEV)
 
@@ -458,9 +464,13 @@ func TestCleanupOrphanedAppsFromDatabase(t *testing.T) {
 			GetContainer(mock.Anything, common.BuildComposeContainerName(common.DEV, 8, "stale-dev")).
 			Return(container.Summary{}, notFoundErr()).
 			Once()
-		// DEV apps get their image removed.
+		// DEV apps get their image removed: the one its build tagged.
+		devImage := amDevImage(8, "stale-dev")
+		mc.EXPECT().ListContainers(mock.Anything, common.Dict{"all": true}).Return(nil, nil).Once()
+		mc.EXPECT().ListImages(mock.Anything, map[string]interface{}{}).
+			Return([]containerpkg.ImageResult{{ID: "sha256:dev", RepoTags: []string{devImage + ":latest"}}}, nil).Once()
 		mc.EXPECT().
-			RemoveImagesByName(mock.Anything, common.BuildImageName(common.DEV, "amd64", 8, "stale-dev"), map[string]interface{}{"force": true}).
+			RemoveImage(mock.Anything, devImage+":latest", map[string]interface{}{"force": false, "pruneChildren": true}).
 			Return(nil).
 			Once()
 
@@ -470,6 +480,101 @@ func TestCleanupOrphanedAppsFromDatabase(t *testing.T) {
 		_, reqErr := st.GetRequestedState(8, common.DEV)
 		assert.Error(t, reqErr, "requested state row should have been deleted")
 	})
+}
+
+// amDevImage is the repository a DEV build of the app tags on this agent: the
+// registry, the main repository, and the architecture the agent was built
+// for (registry.test/apps/dev_arm64_8_stale-dev on an arm64 agent).
+func amDevImage(key uint64, name string) string {
+	sysInfo := release.GetSystemInfo()
+	return fmt.Sprintf("registry.test/apps/dev_%s%s_%d_%s", sysInfo.Arch, sysInfo.Variant, key, name)
+}
+
+// amOrphanedDevApp seeds a DEV app the backend no longer lists, with neither
+// of its containers left.
+func amOrphanedDevApp(t *testing.T) (*AppManager, *mocks.Container, *store.AppStore) {
+	t.Helper()
+	am, mc, _, st, _, cfg := amHarness(t)
+	cfg.ReswarmConfig.DockerRegistryURL = "registry.test/"
+	cfg.ReswarmConfig.DockerMainRepository = "apps/"
+	amSeed(t, st, 8, "stale-dev", common.PRESENT, common.DEV)
+	mc.EXPECT().GetContainer(mock.Anything, common.BuildContainerName(common.DEV, 8, "stale-dev")).
+		Return(container.Summary{}, notFoundErr()).Once()
+	mc.EXPECT().GetContainer(mock.Anything, common.BuildComposeContainerName(common.DEV, 8, "stale-dev")).
+		Return(container.Summary{}, notFoundErr()).Once()
+	return am, mc, st
+}
+
+// The cleanup of a DEV app that left the device removes exactly the image its
+// build tagged: before, it looked for dev_amd64_<key>_<name> without the
+// registry, which no image is called, on any architecture.
+func TestCleanupRemovesTheOrphanedDevImage(t *testing.T) {
+	devImage := amDevImage(8, "stale-dev")
+	// another agent build: an architecture that is not this one's
+	sysInfo := release.GetSystemInfo()
+	otherArch := "armv6"
+	if sysInfo.Arch+sysInfo.Variant == otherArch {
+		otherArch = "amd64"
+	}
+	others := []string{
+		strings.Replace(devImage, "_8_", "_18_", 1), // another app's key
+		devImage + "-two", // another app's name
+		strings.Replace(devImage, "/dev_", "/prod_", 1) + ":1.0.0",     // the app's release
+		"registry.test/apps/dev_" + otherArch + "_8_stale-dev:latest",  // another agent build
+		"dev_amd64_8_stale-dev:latest",                                 // the name the old cleanup used
+		"registry.other/apps/" + devImage[len("registry.test/apps/"):], // another registry
+	}
+
+	t.Run("removes only its tags", func(t *testing.T) {
+		am, mc, st := amOrphanedDevApp(t)
+		mc.EXPECT().ListContainers(mock.Anything, common.Dict{"all": true}).
+			Return([]containerpkg.ContainerResult{{ImageID: "sha256:other"}}, nil).Once()
+		images := []containerpkg.ImageResult{
+			{ID: "sha256:dev", RepoTags: []string{devImage + ":latest", devImage + ":old"}},
+			{ID: "sha256:other", RepoTags: []string{devImage + ":in-use"}},
+		}
+		for i, ref := range others {
+			images = append(images, containerpkg.ImageResult{ID: fmt.Sprintf("sha256:%d", i), RepoTags: []string{amTagged(ref)}})
+		}
+		mc.EXPECT().ListImages(mock.Anything, map[string]interface{}{}).Return(images, nil).Once()
+		for _, tag := range []string{devImage + ":latest", devImage + ":old"} {
+			mc.EXPECT().RemoveImage(mock.Anything, tag, map[string]interface{}{"force": false, "pruneChildren": true}).Return(nil).Once()
+		}
+
+		require.NoError(t, am.CleanupOrphanedAppsFromDatabase(nil))
+
+		_, reqErr := st.GetRequestedState(8, common.DEV)
+		assert.Error(t, reqErr)
+	})
+
+	t.Run("leaves every image when the containers cannot be listed", func(t *testing.T) {
+		am, mc, st := amOrphanedDevApp(t)
+		mc.EXPECT().ListContainers(mock.Anything, common.Dict{"all": true}).Return(nil, errors.New("daemon gone")).Once()
+
+		require.NoError(t, am.CleanupOrphanedAppsFromDatabase(nil))
+
+		_, reqErr := st.GetRequestedState(8, common.DEV)
+		assert.Error(t, reqErr, "the app is removed all the same")
+	})
+
+	t.Run("a refused removal is logged", func(t *testing.T) {
+		am, mc, _ := amOrphanedDevApp(t)
+		mc.EXPECT().ListContainers(mock.Anything, common.Dict{"all": true}).Return(nil, nil).Once()
+		mc.EXPECT().ListImages(mock.Anything, map[string]interface{}{}).
+			Return([]containerpkg.ImageResult{{ID: "sha256:dev", RepoTags: []string{devImage + ":latest"}}}, nil).Once()
+		mc.EXPECT().RemoveImage(mock.Anything, devImage+":latest", map[string]interface{}{"force": false, "pruneChildren": true}).
+			Return(errors.New("conflict: unable to remove repository reference")).Once()
+
+		require.NoError(t, am.CleanupOrphanedAppsFromDatabase(nil))
+	})
+}
+
+// amTagged is ref with :latest where it names no tag.
+func amTagged(ref string) string {
+	if strings.LastIndex(ref, ":") > strings.LastIndex(ref, "/") {
+		return ref
+	}
+	return ref + ":latest"
 }
 
 // =============================================================================

@@ -15,6 +15,9 @@ func (sm *StateMachine) publishApp(payload common.TransitionPayload, app *common
 		return sm.publishComposeApp(payload, app)
 	}
 
+	// nothing of an earlier build is reported for this one
+	setPushedDigests(app, nil)
+
 	err := sm.LogManager.Write(payload.PublishContainerName, fmt.Sprintf("Initializing publish process for %s...", app.AppName))
 	if err != nil {
 		return err
@@ -30,6 +33,10 @@ func (sm *StateMachine) publishApp(payload common.TransitionPayload, app *common
 		return err
 	}
 
+	// Pushed under the agent's own name, prod_<build architecture>_<app
+	// key>_<name>:<version>: the backend computes exactly this from the
+	// device's agent_architecture. The platform's names (PresentImageName,
+	// NewImageName) are for pulling and never used here.
 	prodImage := fmt.Sprintf("%s:%s", payload.RegistryImageName.Prod, payload.Version)
 	tagContext, cancel := context.WithTimeout(context.Background(), time.Second*30)
 	defer cancel()
@@ -65,6 +72,7 @@ func (sm *StateMachine) publishApp(payload common.TransitionPayload, app *common
 	if err != nil {
 		return err
 	}
+	reader, pushed := capturePushDigest(reader)
 
 	streamErr := sm.LogManager.StreamBlocking(payload.PublishContainerName, common.PUSH, reader)
 	if streamErr != nil {
@@ -81,6 +89,10 @@ func (sm *StateMachine) publishApp(payload common.TransitionPayload, app *common
 		return streamErr
 	}
 
+	if digest, ok := pushedDigestOf(prodImage, pushed); ok {
+		setPushedDigests(app, map[string]string{prodImage: digest})
+	}
+
 	err = sm.setState(app, common.PUBLISHED)
 	if err != nil {
 		return err
@@ -95,6 +107,9 @@ func (sm *StateMachine) publishApp(payload common.TransitionPayload, app *common
 }
 
 func (sm *StateMachine) publishComposeApp(payload common.TransitionPayload, app *common.App) error {
+	// nothing of an earlier build is reported for this one
+	setPushedDigests(app, nil)
+
 	err := sm.LogManager.Write(payload.PublishContainerName, fmt.Sprintf("Initializing publish process for %s...", app.AppName))
 	if err != nil {
 		return err
@@ -131,7 +146,7 @@ func (sm *StateMachine) publishComposeApp(payload common.TransitionPayload, app 
 		return err
 	}
 
-	err = sm.rehostSourceImages(payload)
+	pushedDigests, err := sm.rehostSourceImages(payload)
 	if err != nil {
 		if errdefs.IsDockerStreamCanceled(err) {
 			// like a canceled push below: no failed state, handled upstream
@@ -159,6 +174,15 @@ func (sm *StateMachine) publishComposeApp(payload common.TransitionPayload, app 
 		return err
 	}
 
+	// The images compose pushed, under the names of the compose file (as it
+	// pushed them), with the digests their repositories now carry.
+	for _, ref := range composePushedImages(dockerComposePath) {
+		if digest, ok := sm.repoDigestOf(ref); ok {
+			pushedDigests[ref] = digest
+		}
+	}
+	setPushedDigests(app, pushedDigests)
+
 	err = sm.setState(app, common.PUBLISHED)
 	if err != nil {
 		return err
@@ -181,10 +205,13 @@ func (sm *StateMachine) publishComposeApp(payload common.TransitionPayload, app 
 // the store name and pushed explicitly. After this, installs never touch the
 // external registry or need the app's credentials. Releases created before
 // the rewrite carry no x-source-image fields, making this a no-op for them.
-func (sm *StateMachine) rehostSourceImages(payload common.TransitionPayload) error {
+// It answers the digest each push answered, where its stream named one
+// (pushed_digests of the PUBLISHED report).
+func (sm *StateMachine) rehostSourceImages(payload common.TransitionPayload) (map[string]string, error) {
+	pushedDigests := map[string]string{}
 	services, ok := (payload.DockerCompose["services"]).(map[string]interface{})
 	if !ok {
-		return errors.New("failed to infer services")
+		return pushedDigests, errors.New("failed to infer services")
 	}
 
 	config := sm.Container.GetConfig()
@@ -192,7 +219,7 @@ func (sm *StateMachine) rehostSourceImages(payload common.TransitionPayload) err
 	for serviceName, serviceInterface := range services {
 		service, ok := (serviceInterface).(map[string]interface{})
 		if !ok {
-			return errors.New("failed to infer service")
+			return pushedDigests, errors.New("failed to infer service")
 		}
 
 		sourceImage, _ := service["x-source-image"].(string)
@@ -202,12 +229,12 @@ func (sm *StateMachine) rehostSourceImages(payload common.TransitionPayload) err
 
 		targetImage, _ := service["image"].(string)
 		if targetImage == "" {
-			return fmt.Errorf("service %s declares x-source-image but no image", serviceName)
+			return pushedDigests, fmt.Errorf("service %s declares x-source-image but no image", serviceName)
 		}
 
 		err := sm.LogManager.Write(payload.PublishContainerName, fmt.Sprintf("Re-hosting image %s of service %s as %s...", sourceImage, serviceName, targetImage))
 		if err != nil {
-			return err
+			return pushedDigests, err
 		}
 
 		sourceHost := registryHostOfImage(sourceImage)
@@ -215,7 +242,7 @@ func (sm *StateMachine) rehostSourceImages(payload common.TransitionPayload) err
 		if !credentialFound {
 			err = sm.LogManager.Write(payload.PublishContainerName, registryCredentialMissMessage(sourceHost))
 			if err != nil {
-				return err
+				return pushedDigests, err
 			}
 		}
 
@@ -228,23 +255,23 @@ func (sm *StateMachine) rehostSourceImages(payload common.TransitionPayload) err
 		if err != nil {
 			if isRegistryAuthError(err) {
 				if !credentialFound {
-					return fmt.Errorf("registry %s rejected the pull of %s: %w — the registry requires credentials and none are stored for it; add them for host %q under App Settings → Docker Registry Credentials, then publish again", sourceHost, sourceImage, err, common.NormalizeRegistryHost(sourceHost))
+					return pushedDigests, fmt.Errorf("registry %s rejected the pull of %s: %w — the registry requires credentials and none are stored for it; add them for host %q under App Settings → Docker Registry Credentials, then publish again", sourceHost, sourceImage, err, common.NormalizeRegistryHost(sourceHost))
 				}
-				return fmt.Errorf("registry %s rejected the stored credentials while pulling %s: %w — check the username/password under App Settings → Docker Registry Credentials, then publish again", sourceHost, sourceImage, err)
+				return pushedDigests, fmt.Errorf("registry %s rejected the stored credentials while pulling %s: %w — check the username/password under App Settings → Docker Registry Credentials, then publish again", sourceHost, sourceImage, err)
 			}
-			return err
+			return pushedDigests, err
 		}
 
 		streamErr := sm.LogManager.StreamBlocking(payload.PublishContainerName, common.PULL, pullReader)
 		if streamErr != nil {
-			return streamErr
+			return pushedDigests, streamErr
 		}
 
 		tagContext, cancelTag := context.WithTimeout(context.Background(), time.Second*30)
 		err = sm.Container.Tag(tagContext, sourceImage, targetImage)
 		cancelTag()
 		if err != nil {
-			return err
+			return pushedDigests, err
 		}
 
 		pushOptions := container.PushOptions{
@@ -257,14 +284,18 @@ func (sm *StateMachine) rehostSourceImages(payload common.TransitionPayload) err
 
 		pushReader, err := sm.Container.Push(context.Background(), targetImage, pushOptions)
 		if err != nil {
-			return err
+			return pushedDigests, err
 		}
+		pushReader, pushed := capturePushDigest(pushReader)
 
 		streamErr = sm.LogManager.StreamBlocking(payload.PublishContainerName, common.PUSH, pushReader)
 		if streamErr != nil {
-			return streamErr
+			return pushedDigests, streamErr
+		}
+		if digest, ok := pushedDigestOf(targetImage, pushed); ok {
+			pushedDigests[targetImage] = digest
 		}
 	}
 
-	return nil
+	return pushedDigests, nil
 }

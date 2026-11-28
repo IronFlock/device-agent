@@ -43,9 +43,14 @@ type App struct {
 	RequestUpdate       bool
 	ReleaseBuild        bool
 	Version             string
-	LastUpdated         Timestamp
-	TransitionLock      *semaphore.Weighted
-	StateLock           sync.Mutex
+	// PushedDigests is what the last release build pushed: the image
+	// reference as pushed and the manifest digest the registry answered for
+	// it. Sent with the PUBLISHED report (pushed_digests); nil when nothing is
+	// known. Kept in memory only.
+	PushedDigests  map[string]string
+	LastUpdated    Timestamp
+	TransitionLock *semaphore.Weighted
+	StateLock      sync.Mutex
 }
 
 func (app *App) SecureTransition() bool {
@@ -127,11 +132,38 @@ type TransitionPayload struct {
 	// this epoch and the backend verifies against it; bumping it server-side
 	// rotates the credential. 0 == absent == epoch 1, so an un-migrated
 	// backend needs no special handling.
-	AppCredEpoch         uint64
-	CallerAuthID         int
-	AppName              string
-	ImageName            StageBasedResult
-	PresentImageName     string
+	AppCredEpoch uint64
+	CallerAuthID int
+	AppName      string
+	ImageName    StageBasedResult
+	// PresentImageName / NewImageName are the platform's names of the image
+	// of a single-image app for PresentVersion / NewestVersion
+	// (present_image_name / new_image_name of the sync answer,
+	// app.f_image_name): <repository>:<tag> below the registry's main
+	// repository, prod_<app_key>_<name>:<version> for a release with one
+	// image per platform, prod_<architecture>_<app_key>_<name>:<version> for
+	// one from before. Empty where the platform names none (an older backend
+	// or appliance). Stored with the requested state, so that an app starts
+	// with them offline. apps.prodImageFor decides which name is used.
+	PresentImageName string
+	NewImageName     string
+	// InstalledImage is the reference (registry, repository, tag) the device
+	// really pulled or ran InstalledImageVersion under: the platform's name,
+	// or the agent's own where the pull under the platform's name failed.
+	// Written by the agent only, stored with the requested state and never
+	// replaced by a sync, so that a start (offline too), the observer, the
+	// cleanup and the uninstall find the image after the platform renamed
+	// the version. Empty: not known (an app installed before this agent).
+	InstalledImage        string
+	InstalledImageVersion string
+	// Architecture is the device's architecture as the platform stores it
+	// (architecture of the sync answer): what a release build is registered
+	// and pushed for. Empty from an older backend or a stored state.
+	Architecture string
+	// RegistryImageName is the name the agent forms itself, from the
+	// architecture it was built for: what a release build pushes (the
+	// backend expects exactly that), and for an app's image where the
+	// platform names none.
 	RegistryImageName    StageBasedResult
 	ContainerName        StageBasedResult
 	DockerCredentials    map[string]DockerCredential

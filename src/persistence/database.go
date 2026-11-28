@@ -450,6 +450,18 @@ func (ast *AppStateDatabase) GetRequestedStates() ([]common.TransitionPayload, e
 
 		payloads = append(payloads, payload)
 	}
+	// done with the rows before the next query: one connection
+	_ = rows.Close()
+
+	names := ast.requestedImageNames()
+	installed := ast.installedImages()
+	for i := range payloads {
+		key := imageNamesKey{payloads[i].AppKey, payloads[i].Stage}
+		payloads[i].PresentImageName = names[key][0]
+		payloads[i].NewImageName = names[key][1]
+		payloads[i].InstalledImage = installed[key][0]
+		payloads[i].InstalledImageVersion = installed[key][1]
+	}
 
 	return payloads, nil
 }
@@ -569,6 +581,12 @@ func (ast *AppStateDatabase) GetRequestedState(aKey uint64, aStage common.Stage)
 		return common.TransitionPayload{}, err
 	}
 
+	key := imageNamesKey{payload.AppKey, payload.Stage}
+	names := ast.requestedImageNames()[key]
+	payload.PresentImageName, payload.NewImageName = names[0], names[1]
+	installed := ast.installedImages()[key]
+	payload.InstalledImage, payload.InstalledImageVersion = installed[0], installed[1]
+
 	return payload, nil
 }
 
@@ -634,6 +652,8 @@ func (ast *AppStateDatabase) BulkUpsertRequestedStateChanges(payloads []common.T
 			_ = tx.Rollback()
 			return err
 		}
+
+		writeImageNames(tx, payload)
 	}
 
 	return tx.Commit()
@@ -701,6 +721,8 @@ func (ast *AppStateDatabase) UpsertRequestedStateChange(payload common.Transitio
 	if err != nil {
 		return err
 	}
+
+	writeImageNames(ast.db, payload)
 
 	return nil
 }
@@ -960,4 +982,92 @@ func (ast *AppStateDatabase) execute(fileName string) error {
 	}
 
 	return nil
+}
+
+// stringOrEmpty is a nullable TEXT column's value, "" for NULL.
+func stringOrEmpty(value *string) string {
+	if value == nil {
+		return ""
+	}
+	return *value
+}
+
+// nullIfEmpty stores "" as NULL.
+func nullIfEmpty(value string) interface{} {
+	if value == "" {
+		return nil
+	}
+	return value
+}
+
+// imageNamesKey identifies a requested state (app_key and stage are unique
+// together in practice; the row's name is part of its key only for the
+// upsert).
+type imageNamesKey struct {
+	appKey uint64
+	stage  common.Stage
+}
+
+// requestedImageNames reads the platform's image names of every requested
+// state (present_image_name, new_image_name). Best effort: where they cannot
+// be read (their columns are missing because the single- script failed, e.g.
+// on a full disk), none is known, and the agent forms the names itself, as
+// before. Read on their own so that the requested states never fail on them.
+func (ast *AppStateDatabase) requestedImageNames() map[imageNamesKey][2]string {
+	return ast.readImageColumns(QuerySelectRequestedStateImageNames)
+}
+
+// installedImages reads, best effort as requestedImageNames, the image each
+// requested state's version was really pulled or run under, and its version.
+func (ast *AppStateDatabase) installedImages() map[imageNamesKey][2]string {
+	return ast.readImageColumns(QuerySelectRequestedStateInstalledImages)
+}
+
+// readImageColumns reads app_key, stage and two nullable text columns of the
+// requested states; nothing where they cannot be read.
+func (ast *AppStateDatabase) readImageColumns(query string) map[imageNamesKey][2]string {
+	names := map[imageNamesKey][2]string{}
+	rows, err := ast.db.Query(query)
+	if err != nil {
+		log.Debug().Err(err).Msg("could not read the stored image names; the agent forms them itself")
+		return names
+	}
+	defer func() { _ = rows.Close() }()
+	for rows.Next() {
+		var appKey uint64
+		var stage common.Stage
+		var first, second *string
+		if err := rows.Scan(&appKey, &stage, &first, &second); err != nil {
+			log.Debug().Err(err).Msg("could not read the stored image names; the agent forms them itself")
+			return map[imageNamesKey][2]string{}
+		}
+		names[imageNamesKey{appKey, stage}] = [2]string{stringOrEmpty(first), stringOrEmpty(second)}
+	}
+	return names
+}
+
+// SetInstalledImage records the reference the device really pulled or ran
+// version of the app under. Only the agent writes it; a sync never replaces
+// it. An error means it is not recorded, and the agent finds the image by the
+// other names, as before.
+func (ast *AppStateDatabase) SetInstalledImage(appKey uint64, stage common.Stage, version string, ref string) error {
+	_, err := ast.db.Exec(QueryUpdateRequestedStateInstalledImage, nullIfEmpty(ref), nullIfEmpty(version), appKey, stage)
+	return err
+}
+
+// execer is a database or a transaction.
+type execer interface {
+	Exec(query string, args ...any) (sql.Result, error)
+}
+
+// writeImageNames stores the platform's image names of a requested state just
+// written. Best effort, as requestedImageNames: a failure leaves the names out
+// and the requested state as it was written.
+func writeImageNames(db execer, payload common.TransitionPayload) {
+	_, err := db.Exec(QueryUpdateRequestedStateImageNames,
+		nullIfEmpty(payload.PresentImageName), nullIfEmpty(payload.NewImageName),
+		payload.AppName, payload.AppKey, payload.Stage)
+	if err != nil {
+		log.Debug().Err(err).Str("app", payload.AppName).Msg("could not store the image names; the agent forms them itself")
+	}
 }
