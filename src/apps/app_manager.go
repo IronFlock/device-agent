@@ -1356,13 +1356,7 @@ func (am *AppManager) CleanupOrphanedAppsFromDatabase(remotePayloads []common.Tr
 
 			// Remove images
 			if app.Stage == common.DEV {
-				imageName := common.BuildImageName(app.Stage, "amd64", app.AppKey, app.AppName) // Simplified - should get actual arch
-				removeImageCtx, cancel := context.WithTimeout(ctx, time.Second*30)
-				err = am.StateMachine.Container.RemoveImagesByName(removeImageCtx, imageName, map[string]interface{}{"force": true})
-				cancel()
-				if err != nil {
-					log.Debug().Err(err).Str("image", imageName).Msg("Could not remove image (might not exist)")
-				}
+				am.removeOrphanedDevImage(app)
 			} else {
 				// For PROD, try to remove versioned images
 				log.Debug().Str("app", app.AppName).Msg("Skipping image removal for PROD app (versioned images)")
@@ -1389,6 +1383,65 @@ func (am *AppManager) CleanupOrphanedAppsFromDatabase(remotePayloads []common.Tr
 
 	log.Info().Msg("✨ Database cleanup complete")
 	return nil
+}
+
+// removeOrphanedDevImage removes the image a DEV build made for an app that
+// left the device: the repository its build tags
+// (TransitionPayload.RegistryImageName.Dev: the registry, the main repository
+// and dev_<architecture>_<app key>_<app name>, the architecture the agent was
+// built for). Only tags of exactly that repository are removed, and none of
+// an image a container uses, running or stopped. Without force: an image that
+// carries another tag too (a release published from it) only loses this one.
+// Best effort, logged; the app's removal goes on either way.
+func (am *AppManager) removeOrphanedDevImage(app *common.App) {
+	ctr := am.StateMachine.Container
+	repository := common.BuildTransitionPayload(app.AppKey, app.AppName, 0, common.DEV, "", "", 0, 0, ctr.GetConfig()).RegistryImageName.Dev
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second*30)
+	defer cancel()
+
+	containers, err := ctr.ListContainers(ctx, common.Dict{"all": true})
+	if err != nil {
+		log.Debug().Err(err).Str("image", repository).Msg("Could not list containers; leaving the development image")
+		return
+	}
+	inUse := make(map[string]bool, len(containers))
+	for _, c := range containers {
+		inUse[c.ImageID] = true
+	}
+
+	images, err := ctr.ListImages(ctx, map[string]interface{}{})
+	if err != nil {
+		log.Debug().Err(err).Str("image", repository).Msg("Could not list images; leaving the development image")
+		return
+	}
+	for _, image := range images {
+		if inUse[image.ID] {
+			continue
+		}
+		for _, tag := range image.RepoTags {
+			if imageRepository(tag) != repository {
+				continue
+			}
+			err := ctr.RemoveImage(ctx, tag, map[string]interface{}{"force": false, "pruneChildren": true})
+			if err != nil && !errdefs.IsImageNotFound(err) {
+				log.Debug().Err(err).Str("image", tag).Msg("Could not remove the development image")
+				continue
+			}
+			log.Info().Str("image", tag).Msg("Removed the development image of a removed app")
+		}
+	}
+}
+
+// imageRepository is an image reference without its tag and digest.
+func imageRepository(ref string) string {
+	if at := strings.Index(ref, "@"); at != -1 {
+		ref = ref[:at]
+	}
+	if colon := strings.LastIndex(ref, ":"); colon > strings.LastIndex(ref, "/") {
+		ref = ref[:colon]
+	}
+	return ref
 }
 
 func (am *AppManager) EnsureLocalRequestedStates() error {

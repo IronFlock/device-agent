@@ -1,0 +1,1 @@
+ALTER TABLE RequestedAppStates ADD COLUMN present_image_name TEXT

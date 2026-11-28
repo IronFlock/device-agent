@@ -457,8 +457,7 @@ func (sm *StateMachine) runDevBuild(payload common.TransitionPayload, app *commo
 	appFilesTar := buildsDir + "/" + fileName
 
 	dockerFileName := "Dockerfile"
-	buildArch := release.GetBuildArch()
-	archSpecificDockerfile := fmt.Sprintf("Dockerfile.%s", buildArch)
+	archSpecificDockerfile := fmt.Sprintf("Dockerfile.%s", dockerfileArch(payload))
 	_, err = filesystem.ReadFileInTgz(appFilesTar, archSpecificDockerfile)
 	if err == nil {
 		dockerFileName = archSpecificDockerfile
@@ -518,4 +517,22 @@ func (sm *StateMachine) runDevBuild(payload common.TransitionPayload, app *commo
 	}
 
 	return sm.setState(app, common.BUILT)
+}
+
+// dockerfileArch is the architecture whose Dockerfile.<arch> a build uses:
+// the one the build is for, the device's architecture as the platform stores
+// it (TransitionPayload.Architecture, the sync answer's architecture), where it
+// is one apps are built for; else, from an older backend or for a value such
+// as ARM, the one the agent was built for, as before. A release build is
+// pushed and registered for the platform's value, and the registry refuses an
+// image of another platform, so the engine that builds it does not decide:
+// an armv7 agent on a 64-bit engine still builds Dockerfile.armv7 while the
+// platform says armv7. An app without that file builds its Dockerfile.
+func dockerfileArch(payload common.TransitionPayload) string {
+	switch payload.Architecture {
+	case "amd64", "arm64", "armv7", "armv6", "armv5":
+		return payload.Architecture
+	default:
+		return release.GetBuildArch()
+	}
 }

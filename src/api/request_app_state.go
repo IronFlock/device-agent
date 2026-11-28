@@ -115,6 +115,8 @@ func responseToTransitionPayload(config *config.Config, result messenger.Result)
 	newPrivilegedKw := kwargs["new_privileged"]
 	dockerCredentialsKw := kwargs["docker_credentials"]
 	appCredEpochKw := kwargs["app_cred_epoch"]
+	presentImageNameKw := kwargs["present_image_name"]
+	newImageNameKw := kwargs["new_image_name"]
 
 	var appKey uint64
 	var releaseKey uint64
@@ -474,6 +476,29 @@ func responseToTransitionPayload(config *config.Config, result messenger.Result)
 
 	payload.DockerCredentials = dockerCredentials
 
+	// The platform's names of the app's image (absent from an older backend
+	// or appliance). A value that is not a string is left out, never a reason
+	// to refuse the request: the agent then forms the name as before.
+	payload.PresentImageName = imageNameOf("present_image_name", presentImageNameKw)
+	payload.NewImageName = imageNameOf("new_image_name", newImageNameKw)
+	// The device's architecture as the platform stores it: what a release
+	// build is for. A value that is not a string is left out.
+	payload.Architecture, _ = kwargs["architecture"].(string)
+
 	// registryToken is added before we transition state and is not part of the response payload
 	return payload, nil
+}
+
+// imageNameOf reads an image name of a sync answer: a string, "" for absent,
+// null or anything else.
+func imageNameOf(key string, value interface{}) string {
+	if value == nil {
+		return ""
+	}
+	name, ok := value.(string)
+	if !ok {
+		log.Warn().Msgf("app-state push with a %s that is not a string (%T); using the agent's own image name", key, value)
+		return ""
+	}
+	return name
 }

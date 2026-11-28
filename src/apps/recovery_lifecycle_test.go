@@ -480,7 +480,7 @@ func TestUpdateApp(t *testing.T) {
 			Once()
 		// Old image cleanup (best-effort; return is ignored by the handler).
 		mc.EXPECT().
-			RemoveImageByName(mock.Anything, payload.RegistryImageName.Prod, "1.0.0", mock.Anything).
+			RemoveImage(mock.Anything, payload.RegistryImageName.Prod+":1.0.0", map[string]interface{}{"force": false, "pruneChildren": true}).
 			Return(nil).
 			Once()
 

@@ -42,6 +42,9 @@ type External struct {
 	TerminalManager *terminal.TerminalManager
 	LogManager      *logging.LogManager
 	Config          *config.Config
+	// Engine is what the device report says about the Docker engine; nil
+	// leaves it out.
+	Engine *EngineReport
 }
 
 // RegistrationHandler is the handler that gets executed whenever a registered topic gets called.

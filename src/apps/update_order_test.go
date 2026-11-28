@@ -76,8 +76,8 @@ func TestUpdateAppPullsBeforeTeardown(t *testing.T) {
 	mc.EXPECT().PollContainerState(mock.Anything, "old-ctr", mock.Anything).
 		Return(stateC, pollErrC).Once()
 
-	mc.EXPECT().RemoveImageByName(mock.Anything, payload.RegistryImageName.Prod, "1.0.0", mock.Anything).
-		Run(func(context.Context, string, string, map[string]interface{}) { seq = append(seq, "remove-old-image") }).
+	mc.EXPECT().RemoveImage(mock.Anything, payload.RegistryImageName.Prod+":1.0.0", map[string]interface{}{"force": false, "pruneChildren": true}).
+		Run(func(context.Context, string, map[string]interface{}) { seq = append(seq, "remove-old-image") }).
 		Return(nil).Once()
 
 	fwdAllowLogs(mc)

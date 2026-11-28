@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"reagent/common"
-	"reagent/container"
 	"reagent/errdefs"
 )
 
@@ -153,25 +152,17 @@ func (sm *StateMachine) pullApp(payload common.TransitionPayload, app *common.Ap
 		return err
 	}
 
-	fullImageNameWithVersion := fmt.Sprintf("%s:%s", payload.RegistryImageName.Prod, payload.NewestVersion)
-	pullOptions := container.PullOptions{
-		AuthConfig: sm.authConfigForImage(payload, fullImageNameWithVersion, payload.ContainerName.Prod),
-		PullID:     common.BuildDockerPullID(payload.AppKey, payload.AppName),
-	}
-
-	reader, err := sm.Container.Pull(context.Background(), fullImageNameWithVersion, pullOptions)
-	if err != nil {
-		errorMessage := fmt.Sprintf("Error occured while trying to pull the image: %s", err.Error())
-		_ = sm.LogManager.Write(payload.ContainerName.Prod, errorMessage)
-		return err
-	}
-
-	err = sm.setState(app, common.DOWNLOADING)
-	if err != nil {
-		return err
-	}
-
-	streamErr := sm.LogManager.StreamBlocking(payload.ContainerName.Prod, common.PULL, reader)
+	// Pulled by tag, with no platform named: where the name is an image
+	// index, Docker chooses the image of its own platform. DOWNLOADING once
+	// the first pull has started.
+	downloading := false
+	pulled, streamErr := sm.pullProdImage(payload, payload.NewestVersion, func() error {
+		if downloading {
+			return nil
+		}
+		downloading = true
+		return sm.setState(app, common.DOWNLOADING)
+	})
 	if streamErr != nil {
 		if errdefs.IsDockerStreamCanceled(streamErr) {
 			pullMessage := "The app download was canceled"
@@ -185,6 +176,7 @@ func (sm *StateMachine) pullApp(payload common.TransitionPayload, app *common.Ap
 
 		return streamErr
 	}
+	sm.rememberInstalledImage(payload, payload.NewestVersion, pulled)
 
 	pullMessage := fmt.Sprintf("Succesfully installed the app: %s (Version: %s)", payload.AppName, payload.NewestVersion)
 	writeErr := sm.LogManager.Write(payload.ContainerName.Prod, pullMessage)

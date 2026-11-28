@@ -279,9 +279,11 @@ func (agent *Agent) OnConnect(reconnect bool) error {
 	return err
 }
 
+// updateRemoteDevice sends the connect's device report. It waits for nothing
+// but its own call; the Docker engine is read again in the background after
+// it (api.External.SendConnectReport).
 func (agent *Agent) updateRemoteDevice() error {
-	_, err := agent.Messenger.Call(context.Background(), topics.UpdateDeviceArchitecture, []interface{}{agent.External.DeviceReport()}, nil, nil, nil)
-	return err
+	return agent.External.SendConnectReport()
 }
 
 // ensureAppCABundle refreshes the CA bundle app containers verify TLS against.
@@ -336,6 +338,11 @@ func NewAgent(generalConfig *config.Config) (agent *Agent) {
 	if err != nil {
 		log.Fatal().Stack().Err(err).Msg("failed to setup docker")
 	}
+	// The Docker engine's platform and version for the device report, read in
+	// the background and bounded: an absent or hung daemon holds up nothing,
+	// and the report then goes without them.
+	engineReport := api.NewEngineReport(container.EngineInfo)
+	safe.Go(engineReport.Refresh)
 
 	filesystem := filesystem.New()
 	tunnelManager, err := tunnel.NewFrpTunnelManager(dummyMessenger, generalConfig)
@@ -423,26 +430,14 @@ func NewAgent(generalConfig *config.Config) (agent *Agent) {
 			AppImageRegistry: generalConfig.ReswarmConfig.DockerRegistryURL,
 			// Every image reference the device still needs: present AND newest
 			// version per stage, so a reclaim that races an in-flight update
-			// cannot delete the version being pulled or the one still running.
+			// cannot delete the version being pulled or the one still running,
+			// and the images of the apps' Compose definitions.
 			WantedAppImages: func() (map[string]bool, error) {
 				payloads, err := appStore.GetRequestedStates()
 				if err != nil {
 					return nil, err
 				}
-				wanted := make(map[string]bool, len(payloads)*4)
-				for _, p := range payloads {
-					for _, repo := range []string{p.RegistryImageName.Prod, p.RegistryImageName.Dev} {
-						if repo == "" {
-							continue
-						}
-						for _, version := range []string{p.PresentVersion, p.NewestVersion, p.Version} {
-							if version != "" {
-								wanted[repo+":"+version] = true
-							}
-						}
-					}
-				}
-				return wanted, nil
+				return apps.WantedAppImages(generalConfig.ReswarmConfig, payloads), nil
 			},
 			// On recovery, reinstate the apps' requested states (which were
 			// stopped/blocked during the emergency), and reconcile every app's
@@ -534,6 +529,7 @@ func NewAgent(generalConfig *config.Config) (agent *Agent) {
 				}
 			}
 
+			safe.Go(engineReport.Refresh)
 			// compose support was probed (and latched negative) while the
 			// daemon was down
 			container.Compose().RefreshSupport()
@@ -624,12 +620,15 @@ func NewAgent(generalConfig *config.Config) (agent *Agent) {
 	// On daemon-availability transitions (event stream lost / daemon back) the
 	// recovery supervisor pokes an immediate status push so the badge flips
 	// right away instead of on the next heartbeat.
+	// A daemon that comes back may be another engine (Docker Desktop
+	// restarted with another one): read it again.
 	stateObserver.SetDaemonTransitionFunc(func() {
 		safe.Go(func() {
 			if err := mainSession.UpdateRemoteDeviceStatus(messenger.CONNECTED); err != nil {
 				log.Debug().Err(err).Msg("failed to push device status on a docker daemon transition")
 			}
 		})
+		safe.Go(engineReport.Refresh)
 	})
 	privilege := privilege.NewPrivilege(mainSession, generalConfig)
 
@@ -647,7 +646,9 @@ func NewAgent(generalConfig *config.Config) (agent *Agent) {
 		TerminalManager: &terminalManager,
 		LogManager:      &logManager,
 		Config:          generalConfig,
+		Engine:          engineReport,
 	}
+	engineReport.SetResend(external.ResendDeviceReport)
 
 	agent = &Agent{
 		Config:          generalConfig,

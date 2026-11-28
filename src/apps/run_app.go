@@ -429,7 +429,7 @@ func (sm *StateMachine) runProdComposeApp(payload common.TransitionPayload, app 
 		if imagesErr != nil {
 			log.Warn().Err(imagesErr).Msgf("failed to list local images for %s; deferring the download to compose up", payload.AppName)
 		} else {
-			missingImageServices, err = composeServicesWithMissingImages(payload.DockerCompose, localImages)
+			missingImageServices, err = composeServicesWithMissingImages(sm.reswarmConfig(), payload.AppKey, payload.AppName, payload.DockerCompose, localImages)
 			if err != nil {
 				log.Warn().Err(err).Msgf("failed to check compose images for %s; deferring the download to compose up", payload.AppName)
 				missingImageServices = nil
@@ -1000,18 +1000,32 @@ func (sm *StateMachine) computeContainerConfigs(payload common.TransitionPayload
 		}
 	} else {
 
-		fullImageNameWithTag := fmt.Sprintf("%s:%s", payload.RegistryImageName.Prod, app.Version)
-		getImageContext, cancel := context.WithTimeout(context.Background(), time.Second*30)
-		defer cancel()
-
-		_, err := sm.Container.GetImage(getImageContext, payload.RegistryImageName.Prod, payload.PresentVersion)
-		if err != nil {
-			if errdefs.IsImageNotFound(err) {
-				log.Error().Msgf("Image %s:%s was not found, pulling......", payload.RegistryImageName.Prod, payload.PresentVersion)
-				pullErr := sm.pullApp(payload, app)
-				if pullErr != nil {
-					return nil, nil, pullErr
-				}
+		// The image the installed version is on the device under: the name
+		// the platform gave for it, stored with the requested state, or the
+		// agent's own where the device has it only under that (an app
+		// installed before the platform named its images). Read from the
+		// device, never re-derived, so that an app starts offline with the
+		// image it has.
+		version := app.Version
+		if version == "" {
+			version = payload.PresentVersion
+		}
+		fullImageNameWithTag, imageFound, err := sm.localProdImage(payload, version)
+		switch {
+		case err != nil:
+			// as before: Docker could not say, and the start goes on with
+			// the name recorded for the version, else the agent's own
+			log.Debug().Err(err).Msgf("could not look for the image %s", fullImageNameWithTag)
+		case !imageFound:
+			log.Error().Msgf("Image %s was not found, pulling......", fullImageNameWithTag)
+			pullErr := sm.pullApp(payload, app)
+			if pullErr != nil {
+				return nil, nil, pullErr
+			}
+			// the name the pull got the version under (pullProdImage can
+			// fall back to the agent's own)
+			if pulled := installedProdImage(sm.withInstalledImage(payload), version); pulled != "" {
+				fullImageNameWithTag = pulled
 			}
 		}
 

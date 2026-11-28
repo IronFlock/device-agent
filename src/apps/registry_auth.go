@@ -157,8 +157,10 @@ func composeReferencesRegistryHost(compose map[string]interface{}, host string) 
 // isOwnStoreImageRepository reports whether a repository path names one of THIS
 // app's store images. app.f_create_release mints one per compose service as
 //
-//	<docker_main_repository>prod_<arch>_<appKey>_<appName>_<n>:<version>
+//	<docker_main_repository>prod_<appKey>_<appName>_<n>:<version>
 //
+// (the version's image index, one image per platform; releases from before it
+// carry prod_<arch>_<appKey>_<appName>_<n>, which a release build still pushes),
 // lowercased, for every service of a release — image-only services included,
 // whose authored reference is preserved beside it in x-source-image. The
 // "prod" is a literal there, not the stage. Matching on the app's own key and
@@ -231,12 +233,7 @@ func resolveComposeStoreImages(reswarmConfig *config.ReswarmConfig, appKey uint6
 			continue
 		}
 
-		_, repository := splitRegistryHost(imageRef)
-		if !isOwnStoreImageRepository(reswarmConfig.DockerMainRepository, appKey, appName, repository) {
-			continue
-		}
-
-		resolvedRef := registryBase + "/" + repository
+		resolvedRef := resolveStoreImageRef(reswarmConfig.DockerMainRepository, registryBase, appKey, appName, imageRef)
 		if resolvedRef == imageRef {
 			continue
 		}
@@ -246,6 +243,18 @@ func resolveComposeStoreImages(reswarmConfig *config.ReswarmConfig, appKey uint6
 	}
 
 	return resolved
+}
+
+// resolveStoreImageRef is one image reference as resolveComposeStoreImages
+// resolves it: one of this app's own store images on registryBase (the
+// device's registry URL without its trailing slash), any other reference as
+// it is.
+func resolveStoreImageRef(mainRepository string, registryBase string, appKey uint64, appName string, imageRef string) string {
+	_, repository := splitRegistryHost(imageRef)
+	if registryBase == "" || !isOwnStoreImageRepository(mainRepository, appKey, appName, repository) {
+		return imageRef
+	}
+	return registryBase + "/" + repository
 }
 
 // authConfigForImage picks pull credentials by the image's registry host: the
