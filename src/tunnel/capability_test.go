@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math/rand/v2"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -249,12 +250,25 @@ func plainProbe(m *FrpTunnelManager) {
 
 // unreachableFrps points the manager at a port nothing is listening on, standing
 // in for the appliance tunnel profile being switched off.
+//
+// The port lies below every system's ephemeral range (Linux from 32768,
+// macOS and Windows from 49152): a port freed from a ":0" listener goes back
+// to that range, where a listener of a test running in parallel (go test
+// ./... runs packages at once) can take it and make the probe succeed.
 func unreachableFrps(t *testing.T, m *FrpTunnelManager) {
 	t.Helper()
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
-	require.NoError(t, err)
-	port := ln.Addr().(*net.TCPAddr).Port
-	require.NoError(t, ln.Close()) // hand the port back before anyone can use it
+	port := 0
+	for range 50 {
+		candidate := 20000 + rand.IntN(10000)
+		ln, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", candidate))
+		if err != nil {
+			continue // in use
+		}
+		require.NoError(t, ln.Close())
+		port = candidate
+		break
+	}
+	require.NotZero(t, port, "no free loopback port below the ephemeral range")
 
 	m.configBuilder.yamlConfig.ServerAddr = "127.0.0.1"
 	m.configBuilder.yamlConfig.ServerPort = port
