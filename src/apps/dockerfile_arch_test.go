@@ -2,7 +2,6 @@ package apps
 
 import (
 	"context"
-	"path/filepath"
 	"testing"
 
 	dockerbuild "github.com/docker/docker/api/types/build"
@@ -44,7 +43,8 @@ func TestBuildUsesTheDockerfileOfThePlatformsArchitecture(t *testing.T) {
 		app := seedApp(t, st, "archapp", common.REMOVED, common.DEV)
 		payload := execPayload("archapp", common.BUILT, common.DEV)
 		payload.Architecture = architecture
-		tarPath := filepath.Join(cfg.CommandLineArguments.AppsBuildDir, payload.AppName+"."+cfg.CommandLineArguments.CompressedBuildExtension)
+		// the build joins with "/" (build_app.go), on Windows too
+		tarPath := cfg.CommandLineArguments.AppsBuildDir + "/" + payload.AppName + "." + cfg.CommandLineArguments.CompressedBuildExtension
 		imgWriteTgz(t, tarPath, files)
 
 		var used string

@@ -550,7 +550,8 @@ func TestReleaseBuildPushesTheAgentsOwnName(t *testing.T) {
 		pushed := "registry.test/apps/prod_" + imgOwnArch() + "_1953_myapp:3.0.0"
 		require.Equal(t, "registry.test/apps/dev_"+imgOwnArch()+"_1953_myapp", payload.RegistryImageName.Dev)
 
-		tarPath := filepath.Join(cfg.CommandLineArguments.AppsBuildDir, payload.AppName+"."+cfg.CommandLineArguments.CompressedBuildExtension)
+		// the build joins with "/" (build_app.go), on Windows too
+		tarPath := cfg.CommandLineArguments.AppsBuildDir + "/" + payload.AppName + "." + cfg.CommandLineArguments.CompressedBuildExtension
 		imgWriteTgz(t, tarPath, map[string]string{"Dockerfile": "FROM scratch\n"})
 
 		mc.EXPECT().Build(mock.Anything, tarPath, mock.Anything).Return(fwdDockerStream(), nil).Once()
