@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"reagent/common"
+	"reagent/config"
 	"reagent/container"
 	"reagent/errdefs"
 	"time"
@@ -33,11 +34,11 @@ func (sm *StateMachine) publishApp(payload common.TransitionPayload, app *common
 		return err
 	}
 
-	// Pushed under the agent's own name, prod_<build architecture>_<app
-	// key>_<name>:<version>: the backend computes exactly this from the
-	// device's agent_architecture. The platform's names (PresentImageName,
-	// NewImageName) are for pulling and never used here.
-	prodImage := fmt.Sprintf("%s:%s", payload.RegistryImageName.Prod, payload.Version)
+	// Pushed under the per-architecture name of the platform the build is
+	// for (releaseBuildRepository): the backend expects exactly that name,
+	// and the registry's token allows no other. The platform's names
+	// (PresentImageName, NewImageName) are for pulling and never used here.
+	prodImage := fmt.Sprintf("%s:%s", releaseBuildRepository(sm.reswarmConfig(), payload), payload.Version)
 	tagContext, cancel := context.WithTimeout(context.Background(), time.Second*30)
 	defer cancel()
 
@@ -298,4 +299,33 @@ func (sm *StateMachine) rehostSourceImages(payload common.TransitionPayload) (ma
 	}
 
 	return pushedDigests, nil
+}
+
+// releaseBuildRepository is the repository a release build's single image is
+// pushed under: prod_<architecture>_<app key>_<name> in the device's
+// registry and main repository, for the architecture the build is for. That
+// is the device's architecture as the platform stores it
+// (TransitionPayload.Architecture, the sync answer's architecture: what
+// dockerfileArch builds for, and what the platform registers the build as),
+// where the platform names one that apps are built for. It is the
+// architecture the agent was built for on every device whose apps are
+// matched by it, so the name is the agent's own (RegistryImageName.Prod),
+// as it always was. It differs where the platform matches the device's apps
+// by its Docker engine: an arm64 agent next to a 32-bit engine builds armv7
+// images, and pushed under the agent's own name they would replace the
+// arm64 image of the same version under the tag arm64 devices pull, while
+// armv7 devices would find none under theirs. From an older backend, a
+// stored state or for a value such as ARM (no architecture named), and
+// without a configuration to form the name with: the agent's own name.
+// (A Compose build pushes the names its Compose file carries, which the
+// platform wrote for the same architecture.)
+func releaseBuildRepository(rc *config.ReswarmConfig, payload common.TransitionPayload) string {
+	switch payload.Architecture {
+	case "amd64", "arm64", "armv7", "armv6", "armv5":
+		if rc != nil {
+			return common.BuildRegistryImageName(rc.DockerRegistryURL, rc.DockerMainRepository,
+				common.BuildImageName(common.PROD, payload.Architecture, payload.AppKey, payload.AppName))
+		}
+	}
+	return payload.RegistryImageName.Prod
 }
